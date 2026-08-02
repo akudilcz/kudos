@@ -1,0 +1,32 @@
+--- a/src/nouveau/drm-shim/nouveau_noop.c
++++ b/src/nouveau/drm-shim/nouveau_noop.c
+@@ -257,6 +257,9 @@
+       idx++;
+       if (device_info.chip_id >= 0xe0) {
+          switch (device_info.chip_id & ~0xf) {
++         case 0x190: /* kudos: Ada (AD10x) */
++            sclass->sclass.oclass[idx].oclass = 0xc7b5; /* AMPERE_DMA_COPY_B */
++            break;
+          case 0x170:
+             sclass->sclass.oclass[idx].oclass = AMPERE_DMA_COPY_A;
+             break;
+@@ -296,6 +299,9 @@
+       }
+       /* 3d */
+       switch (device_info.chip_id & ~0xf) {
++      case 0x190: /* kudos: Ada (AD10x) */
++         sclass->sclass.oclass[idx].oclass = 0xc997; /* ADA_A */
++         break;
+       case 0x170:
+          sclass->sclass.oclass[idx].oclass = GA102_3D_CLASS;
+          break;
+@@ -358,6 +364,9 @@
+       sclass->sclass.oclass[idx].maxver = -1;
+       idx++;
+       switch (device_info.chip_id & ~0xf) {
++      case 0x190: /* kudos: Ada (AD10x) */
++         sclass->sclass.oclass[idx].oclass = 0xc9c0; /* ADA_COMPUTE_A */
++         break;
+       case 0x170:
+          sclass->sclass.oclass[idx].oclass = GA102_COMPUTE_CLASS;
+          break;

@@ -1,0 +1,22 @@
+	.headerflags	@"EF_CUDA_64BIT_ADDRESS EF_CUDA_SM89 EF_CUDA_VIRTUAL_SM(EF_CUDA_SM89)"
+        /*0000*/                   ALD.96 R0, a[0x80] ;
+        /*0010*/                   ALD.64 R4, a[0x90] ;
+        /*0020*/                   MOV R3, c[0x0][0x58] ;
+        /*0030*/                   FFMA.FTZ R3, R2, c[0x0][0x48], R3 ;
+        /*0040*/                   FFMA.FTZ R3, R1, c[0x0][0x38], R3 ;
+        /*0050*/                   AST.64 a[0x80], R4 ;
+        /*0060*/                   FFMA.FTZ R4, R0, c[0x0][0x28], R3 ;
+        /*0070*/                   MOV R3, c[0x0][0x5c] ;
+        /*0080*/                   FFMA.FTZ R3, R2, c[0x0][0x4c], R3 ;
+        /*0090*/                   FFMA.FTZ R3, R1, c[0x0][0x3c], R3 ;
+        /*00a0*/                   FFMA.FTZ R5, R0, c[0x0][0x2c], R3 ;
+        /*00b0*/                   MOV R3, c[0x0][0x60] ;
+        /*00c0*/                   FFMA.FTZ R3, R2, c[0x0][0x50], R3 ;
+        /*00d0*/                   FFMA.FTZ R3, R1, c[0x0][0x40], R3 ;
+        /*00e0*/                   FFMA.FTZ R6, R0, c[0x0][0x30], R3 ;
+        /*00f0*/                   MOV R3, c[0x0][0x64] ;
+        /*0100*/                   FFMA.FTZ R2, R2, c[0x0][0x54], R3 ;
+        /*0110*/                   FFMA.FTZ R1, R1, c[0x0][0x44], R2 ;
+        /*0120*/                   FFMA.FTZ R7, R0, c[0x0][0x34], R1 ;
+        /*0130*/                   AST.128 a[0x70], R4 ;
+        /*0140*/                   EXIT ;

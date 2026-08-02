@@ -1,0 +1,53 @@
+--- a/src/nouveau/vulkan/nvk_shader.c
++++ b/src/nouveau/vulkan/nvk_shader.c
+@@ -582,6 +582,50 @@
+       nvk_shader_dump(shader);
+ #endif
+ 
++   /* kudos shader factory: dump the exact upload-image pieces to files.
++    * NVK_SHADER_DUMP_DIR must be an existing directory; NVK_SHADER_DUMP_NAME
++    * names the variant (set per vkCreateShadersEXT call by the harness). */
++   const char *kudos_dump_dir = getenv("NVK_SHADER_DUMP_DIR");
++   if (kudos_dump_dir != NULL && shader->info.stage != MESA_SHADER_COMPUTE) {
++      const char *kudos_name = getenv("NVK_SHADER_DUMP_NAME");
++      if (kudos_name == NULL)
++         kudos_name = "shader";
++      char kudos_path[1024];
++      FILE *kf;
++      snprintf(kudos_path, sizeof(kudos_path), "%s/%s.sph",
++               kudos_dump_dir, kudos_name);
++      kf = fopen(kudos_path, "wb");
++      if (kf != NULL) {
++         fwrite(data + hdr_offset, 1, hdr_size, kf);
++         fclose(kf);
++      }
++      snprintf(kudos_path, sizeof(kudos_path), "%s/%s.bin",
++               kudos_dump_dir, kudos_name);
++      kf = fopen(kudos_path, "wb");
++      if (kf != NULL) {
++         fwrite(data + code_offset, 1, shader->code_size, kf);
++         fclose(kf);
++      }
++      snprintf(kudos_path, sizeof(kudos_path), "%s/%s.meta.json",
++               kudos_dump_dir, kudos_name);
++      kf = fopen(kudos_path, "w");
++      if (kf != NULL) {
++         fprintf(kf, "{ \"stage\": %u, \"num_gprs\": %u, \"slm_size\": %u,"
++                     " \"code_size\": %u, \"data_size\": %u,\n  \"cbuf_map\": [",
++                 (unsigned)shader->info.stage, (unsigned)shader->info.num_gprs,
++                 (unsigned)shader->info.slm_size, shader->code_size,
++                 (unsigned)shader->data_size);
++         for (uint32_t kci = 0; kci < shader->cbuf_map.cbuf_count; kci++) {
++            const struct nvk_cbuf *kcb = &shader->cbuf_map.cbufs[kci];
++            fprintf(kf, "%s{ \"type\": %u, \"desc_set\": %u, \"desc_offset\": %u }",
++                    kci ? ", " : "", (unsigned)kcb->type, (unsigned)kcb->desc_set,
++                    kcb->desc_offset);
++         }
++         fprintf(kf, "] }\n");
++         fclose(kf);
++      }
++   }
++
+    VkResult result = nvk_heap_upload(dev, &dev->shader_heap, data,
+                                      total_size, alignment,
+                                      &shader->upload_addr);

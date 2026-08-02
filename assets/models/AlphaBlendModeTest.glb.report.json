@@ -1,0 +1,132 @@
+{
+    "uri": "assets/models/AlphaBlendModeTest.glb",
+    "mimeType": "model/gltf-binary",
+    "validatorVersion": "2.0.0-dev.3.10",
+    "issues": {
+        "numErrors": 0,
+        "numWarnings": 0,
+        "numInfos": 8,
+        "numHints": 0,
+        "messages": [
+            {
+                "code": "UNUSED_MESH_TANGENT",
+                "message": "Tangents are not used because the material has no normal texture.",
+                "severity": 2,
+                "pointer": "/meshes/0/primitives/0/attributes/TANGENT"
+            },
+            {
+                "code": "UNUSED_MESH_TANGENT",
+                "message": "Tangents are not used because the material has no normal texture.",
+                "severity": 2,
+                "pointer": "/meshes/1/primitives/0/attributes/TANGENT"
+            },
+            {
+                "code": "UNUSED_MESH_TANGENT",
+                "message": "Tangents are not used because the material has no normal texture.",
+                "severity": 2,
+                "pointer": "/meshes/3/primitives/0/attributes/TANGENT"
+            },
+            {
+                "code": "UNUSED_MESH_TANGENT",
+                "message": "Tangents are not used because the material has no normal texture.",
+                "severity": 2,
+                "pointer": "/meshes/4/primitives/0/attributes/TANGENT"
+            },
+            {
+                "code": "UNUSED_MESH_TANGENT",
+                "message": "Tangents are not used because the material has no normal texture.",
+                "severity": 2,
+                "pointer": "/meshes/5/primitives/0/attributes/TANGENT"
+            },
+            {
+                "code": "UNUSED_MESH_TANGENT",
+                "message": "Tangents are not used because the material has no normal texture.",
+                "severity": 2,
+                "pointer": "/meshes/6/primitives/0/attributes/TANGENT"
+            },
+            {
+                "code": "UNUSED_MESH_TANGENT",
+                "message": "Tangents are not used because the material has no normal texture.",
+                "severity": 2,
+                "pointer": "/meshes/7/primitives/0/attributes/TANGENT"
+            },
+            {
+                "code": "UNUSED_MESH_TANGENT",
+                "message": "Tangents are not used because the material has no normal texture.",
+                "severity": 2,
+                "pointer": "/meshes/8/primitives/0/attributes/TANGENT"
+            }
+        ],
+        "truncated": false
+    },
+    "info": {
+        "version": "2.0",
+        "generator": "Khronos Blender glTF 2.0 exporter, with hand-edits for alpha blend/cutoff modes",
+        "resources": [
+            {
+                "pointer": "/buffers/0",
+                "mimeType": "application/gltf-buffer",
+                "storage": "glb",
+                "byteLength": 2966636
+            },
+            {
+                "pointer": "/images/0",
+                "mimeType": "image/jpeg",
+                "storage": "buffer-view",
+                "image": {
+                    "width": 2048,
+                    "height": 2048,
+                    "format": "rgb",
+                    "bits": 8
+                }
+            },
+            {
+                "pointer": "/images/1",
+                "mimeType": "image/jpeg",
+                "storage": "buffer-view",
+                "image": {
+                    "width": 2048,
+                    "height": 2048,
+                    "format": "rgb",
+                    "bits": 8
+                }
+            },
+            {
+                "pointer": "/images/2",
+                "mimeType": "image/jpeg",
+                "storage": "buffer-view",
+                "image": {
+                    "width": 2048,
+                    "height": 2048,
+                    "format": "rgb",
+                    "bits": 8
+                }
+            },
+            {
+                "pointer": "/images/3",
+                "mimeType": "image/png",
+                "storage": "buffer-view",
+                "image": {
+                    "width": 1024,
+                    "height": 1024,
+                    "format": "rgba",
+                    "primaries": "srgb",
+                    "transfer": "srgb",
+                    "bits": 8
+                }
+            }
+        ],
+        "animationCount": 0,
+        "materialCount": 6,
+        "hasMorphTargets": false,
+        "hasSkins": false,
+        "hasTextures": true,
+        "hasDefaultScene": true,
+        "drawCallCount": 9,
+        "totalVertexCount": 137,
+        "totalTriangleCount": 61,
+        "maxUVs": 1,
+        "maxInfluences": 0,
+        "maxAttributes": 4
+    }
+}

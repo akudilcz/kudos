@@ -1,0 +1,408 @@
+//! The desktop PUMP: both cooperative loops that drive the desktop, and the
+//! input routing they share. `systemLoop` is the no-GPU loop (single-core
+//! main loop; SMP core 0's system task on an emulated boot); `desktopPump` +
+//! `pollInputOnly` are the GPU session's callbacks (iaccel.compositor). Split
+//! from main_root.zig along the boot/steady-state seam: main decides how the
+//! machine comes up, this file is what it does every iteration after that.
+
+const std = @import("std");
+const buildinfo = @import("buildinfo");
+const klog = @import("../kernel/debug/klog.zig");
+const timer = @import("../kernel/timer/timer.zig");
+const tsc = @import("../kernel/cpu/tsc.zig");
+const counter = @import("../kernel/debug/counter.zig");
+const keyboard = @import("../drivers/input/keyboard.zig");
+const imouse = @import("imouse");
+const xhci = @import("../drivers/usb/xhci.zig");
+const bootlog = @import("../drivers/storage/bootlog.zig");
+const net = @import("../drivers/net/stack/net.zig");
+const netdebug = @import("../drivers/net/debug/netdebug.zig");
+const fileserv = @import("../drivers/net/debug/fileserv.zig");
+const jobs = @import("../kernel/sched/jobs.zig");
+const smp = @import("../kernel/smp/smp.zig");
+const virt = @import("../kernel/virt/virt.zig");
+const ivirt = @import("ivirt");
+const power = @import("../kernel/power/reboot.zig");
+const framebuffer = @import("../ui/screen/framebuffer.zig");
+const hud = @import("../ui/desktop/hud.zig");
+const prof = @import("../drivers/gpu/prof.zig");
+const iaccel = @import("iaccel");
+const Desktop = @import("../ui/desktop/desktop.zig").Desktop;
+
+/// The desktop the pumps drive. Created inside main's run(); the no-arg
+/// callback pumps and the SMP system task reach it through this global.
+/// Single global owner.
+pub var desktop: *Desktop = undefined;
+
+// Display-backend workaround: how often the system loop forces a full present
+// (~20 Hz) so QEMU's VNC/GTK scanout surface stays live when nothing changed.
+// See systemLoop.
+const REPAINT_PERIOD_MS: u64 = 50;
+const REPAINT_PERIOD_TICKS: u64 = REPAINT_PERIOD_MS * timer.TICK_HZ / 1000;
+
+// Boot-log drain cadence: a USB write a few times a second at most, keeping the
+// flight recorder off the hot path (bootlog.service only writes whole
+// accumulated sectors, no sync).
+const BOOTLOG_PERIOD_MS: u64 = 250;
+const BOOTLOG_PERIOD_TICKS: u64 = BOOTLOG_PERIOD_MS * timer.TICK_HZ / 1000;
+
+/// Open an application window by name — the desktop-side of the agent's
+/// application tool (AGT-006). Unknown names are an error the caller traces.
+fn spawnByName(d: *Desktop, name: []const u8) !void {
+    const eql = std.mem.eql;
+    if (eql(u8, name, "ai")) return d.spawnAgent();
+    if (eql(u8, name, "term")) return d.spawnApp(.term);
+    if (eql(u8, name, "system")) return d.spawnApp(.system);
+    if (eql(u8, name, "clock")) return d.spawnApp(.clock);
+    if (eql(u8, name, "calc")) return d.spawnApp(.calc);
+    return error.UnknownApp;
+}
+
+/// Drain the keyboard + mouse rings into the desktop; returns true when
+/// something changed that needs a recomposite. The ONE owner of the global
+/// hotkeys and key/mouse routing — shared by systemLoop and desktopPump so the
+/// two loops' input behavior cannot drift.
+///
+/// Mouse: with the HW cursor active, pure pointer motion returns false — the
+/// cursor plane already moved (inside onMouse, unconditionally); nothing to
+/// render. A drag/click returns true → content must recomposite. The cursor
+/// plane is updated here PER EVENT, before any (blocking) render, so pointer
+/// motion tracks input at loop rate even while a drag's content render is gated
+/// behind vblank ("Session update cycle").
+fn dispatchInput(d: *Desktop) bool {
+    var changed = false;
+    var msg: [64]u8 = undefined; // scratch for the hotkey failure traces
+    // The agent's application tool (AGT-006) parks an app-spawn request in the
+    // remote-request inbox; the desktop opens it here, on its own core, the same
+    // place the F10/F12 hotkeys spawn windows.
+    if (fileserv.takeSpawnRequest()) |name| {
+        spawnByName(d, name) catch |e|
+            klog.puts(std.fmt.bufPrint(&msg, "agent open_app '{s}' failed: {s}\n", .{ name, @errorName(e) }) catch "agent open_app failed\n");
+        changed = true;
+    }
+    while (keyboard.poll()) |ev| {
+        // PERF-008: this event's visible effect (echo, spawned window) rides the
+        // next present — latch its receipt stamp for the input→present latency
+        // counters. An empty event (no ascii, no named key) changes nothing on
+        // screen and is not latched.
+        if (ev.ascii != 0 or ev.key != .none) iaccel.input_latch.consumed(ev.t_tsc);
+        if (ev.key == .f1) {
+            // Global hotkey: show or hide the heads-up display (spec HUD-002),
+            // independent of focus — a machine in trouble is exactly when the
+            // focused window is the wrong place to have to click. Both
+            // directions repaint everything: showing draws over the whole
+            // screen, hiding must restore what was underneath.
+            hud.toggle();
+            d.markFullRepaint();
+            changed = true;
+        } else if (ev.key == .f10) {
+            // Global hotkey: open the dedicated AI agent window (spec AGT-002),
+            // independent of focus. OOM / no-free-cores must not bring down the
+            // kernel, but the reason is traced, never silently swallowed.
+            d.spawnAgent() catch |e|
+                klog.puts(std.fmt.bufPrint(&msg, "F10: spawn AI agent failed: {s}\n", .{@errorName(e)}) catch "F10: spawn AI agent failed\n");
+            changed = true;
+        } else if (ev.key == .f12) {
+            // Global hotkey: open a new terminal, independent of focus — the
+            // recovery path when every terminal has been closed
+            // OOM / no-free-cores must not bring down the
+            // kernel, but the reason is traced, never silently swallowed.
+            d.spawnApp(.term) catch |e|
+                klog.puts(std.fmt.bufPrint(&msg, "F12: spawn term failed: {s}\n", .{@errorName(e)}) catch "F12: spawn term failed\n");
+            changed = true;
+        } else if (ev.ascii != 0) {
+            // While it is up, the display takes the keys it owns (freeze,
+            // acknowledge) before the focused window sees them.
+            if (!hud.onKey(ev.ascii)) d.onKey(ev.ascii);
+            changed = true;
+        }
+    }
+    while (imouse.poll()) |ev| {
+        if (d.onMouse(ev)) {
+            changed = true;
+            // PERF-008: latch only content-changing pointer input (click, drag) —
+            // pure motion under the HW cursor is already on glass via the cursor
+            // plane and needs no present.
+            iaccel.input_latch.consumed(ev.t_tsc);
+        }
+    }
+    return changed;
+}
+
+/// The system loop: poll input + USB, route keys, drain terminal rings, render.
+/// In the single-core build this is the kernel's main loop; in the SMP build it
+/// is core 0's system task, time-shared with the #0> terminal task. Never returns.
+/// Soft-display render-loop counters (emitted as `dbg: ui.*` on the trace
+/// heartbeat): how often the CPU compositor rendered, what each frame cost,
+/// and which trigger asked for it — the profile that says where an unusably
+/// slow soft desktop spends its time.
+var cnt_soft_frames = counter.Counter{ .mod = .ui, .name = "soft.frames" };
+var cnt_soft_frame_us = counter.Counter{ .mod = .ui, .name = "soft.frame_us" };
+var cnt_soft_frame_us_peak = counter.Counter{ .mod = .ui, .name = "soft.frame_us_peak" };
+var cnt_soft_render_input = counter.Counter{ .mod = .ui, .name = "soft.render.input" };
+var cnt_soft_render_tick = counter.Counter{ .mod = .ui, .name = "soft.render.tick" };
+var cnt_soft_render_forced = counter.Counter{ .mod = .ui, .name = "soft.render.forced" };
+
+/// Uses the module's `desktop` (set by main before either loop starts).
+pub fn systemLoop() noreturn {
+    counter.register(&cnt_soft_frames);
+    counter.register(&cnt_soft_frame_us);
+    counter.register(&cnt_soft_frame_us_peak);
+    counter.register(&cnt_soft_render_input);
+    counter.register(&cnt_soft_render_tick);
+    counter.register(&cnt_soft_render_forced);
+    // Paint once on entry so the desktop is on screen immediately. In the SMP
+    // build the desktop was already rendered once on the boot stack (consuming
+    // the compositor's initial full-present), so force a fresh full present here
+    // from the system task's context — otherwise nothing is dirty and the screen
+    // stays whatever the boot-stack present left (which QEMU may not have scanned).
+    if (buildinfo.smp) desktop.markFullRepaint();
+    desktop.render();
+    var loop_n: u64 = 0;
+    var last_repaint: u64 = timer.now();
+    var last_bootlog: u64 = timer.now();
+    while (true) {
+        loop_n += 1;
+
+        // Netdebug metered drain: ship a bounded batch of queued log lines per
+        // tick once the link/lease proves the LAN path delivers. Net + USB are
+        // already up (brought up on the
+        // boot stack before the GPU session, which never returns on native).
+        netdebug.drain();
+        // netdebug servicing: RX is otherwise
+        // drained only inside blocking DHCP/DNS/TCP waits — pump here so host
+        // pull requests are seen, then answer any pending one.
+        net.pump();
+        jobs.pump(); // advance any backgrounded long task one bounded step (job.zig)
+        fileserv.service();
+        // Drain the boot-log RAM buffer to the stick in bulk, THROTTLED so a USB
+        // write happens at most a few times a second (not per frame): the write
+        // is off the trace hot path (feed only fills RAM) and rides the device
+        // cache (no per-write sync), so it never lags the loop.
+        const nowb = timer.now();
+        if (nowb -% last_bootlog >= BOOTLOG_PERIOD_TICKS) {
+            last_bootlog = nowb;
+            bootlog.service();
+        }
+        var changed = false;
+
+        if (power.shutdown_requested) power.poweroff();
+
+        xhci.poll(); // drain USB HID reports into the keyboard/mouse rings
+
+        if (dispatchInput(desktop)) {
+            changed = true;
+            cnt_soft_render_input.inc();
+        }
+        if (desktop.tick()) {
+            changed = true;
+            cnt_soft_render_tick.inc();
+        }
+
+        // PERIODIC FORCED REPAINT: QEMU's VNC/GTK scanout surface
+        // goes stale if the guest stops presenting (it only re-samples on a
+        // present), so a pure render-on-change loop would leave the host display
+        // black between changes even though the framebuffer is correct. Real
+        // hardware scans the framebuffer out continuously and needs no such
+        // repaint. Force a full present at most every REPAINT_PERIOD_TICKS timer
+        // ticks (wall-clock, NOT loop iterations — the loop spins arbitrarily
+        // fast), keeping the emulated display live at a bounded ~20 Hz. A
+        // display-backend workaround, NOT the steady-state render path; otherwise
+        // we render ONLY when something changed (an unchanged frame would still
+        // recomposite for nothing).
+        //
+        // The soft-display path is EXEMPT: it writes the VGA framebuffer memory
+        // directly, which QEMU dirty-tracks and re-samples on its own — and a
+        // forced full frame there would cost a whole-screen CPU re-raster.
+        const now = timer.now();
+        if (framebuffer.linearTarget() == null and now -% last_repaint >= REPAINT_PERIOD_TICKS) {
+            last_repaint = now;
+            desktop.markFullRepaint();
+            changed = true;
+            cnt_soft_render_forced.inc();
+        }
+        if (changed) {
+            const t0 = tsc.rdtsc();
+            desktop.render();
+            const us = tsc.elapsedUs(t0);
+            cnt_soft_frames.inc();
+            cnt_soft_frame_us.add(us);
+            cnt_soft_frame_us_peak.peak(us);
+        }
+
+        // Single-core build: advance every live guest by one bounded slice, AFTER
+        // this pass's input, tick and render, so a guest can never push a present
+        // past its deadline (PERF-003) — it runs in what is left of the pass.
+        // A no-op on SMP, where each guest's vCPU is a scheduled task of its own.
+        virt.pumpAll();
+
+        // Boot requests (VIRT-019): a terminal's `vm boot [n]` posted one — the
+        // system task (the one owner of windows and VM slots) creates the guest
+        // and its console window here. The staged built-in (image 1) builds
+        // synchronously; a catalog image starts its HTTP fetch (a job this same
+        // loop pumps) and its window opens on `.fetching`. The guest's vCPU is
+        // spawned as an ordinary task and placed on whichever core is free
+        // (VIRT-021), so no core is named anywhere on this path.
+        if (ivirt.takeBootRequest()) |req| {
+            if (req.image <= 1) {
+                desktop.spawnApp(.vm) catch |e| {
+                    virt.setStartError(@errorName(e));
+                    klog.puts("virt: vm boot failed: ");
+                    klog.puts(@errorName(e));
+                    klog.puts("\n");
+                };
+            } else if (virt.netbootBegin(req.image)) |id| {
+                desktop.spawnVmWindow(id) catch |e| {
+                    virt.windowClosed(id);
+                    klog.puts("virt: vm image window failed: ");
+                    klog.puts(@errorName(e));
+                    klog.puts("\n");
+                };
+            } else |e| {
+                virt.setStartError(@errorName(e));
+                klog.puts("virt: vm image boot failed: ");
+                klog.puts(@errorName(e));
+                klog.puts("\n");
+            }
+        }
+        virt.pumpNetboot();
+
+        // The only per-variant difference: an SMP core 0 yields so its other tasks
+        // (terminals, cmd-worker) run; single-core has nothing else to run, so it
+        // halts until the next IRQ — unless a guest has work this instant, which
+        // is exactly what this core would otherwise be sleeping through. A guest
+        // parked in HLT does not count: see virt.mayHaltCore.
+        if (buildinfo.smp) smp.yieldCpu() else if (virt.mayHaltCore()) asm volatile ("hlt");
+    }
+}
+
+// Set when any pump iteration saw a change (input, tick, command output) that
+// has not been rendered yet. The pump renders only when this is set AND the
+// GPU flip gate is open, so one render fires per opened gate no matter how
+// many kHz-rate input iterations accumulated changes meanwhile
+// ("Session update cycle + vsync pacing").
+var g_render_pending: bool = false;
+
+/// Wall time of the last d.render() in the GPU pump (µs): the CPU scene build
+/// plus the wait for that frame's own de-tile to land. The pipelined-start
+/// decision compares it against the panel refresh (see desktopPump).
+var g_last_render_us: u64 = 0;
+/// Slack subtracted from the refresh budget when deciding a frame is too slow
+/// to also wait out the previous flip's latch: covers the flip-arm cost and
+/// one input-sampling pass, so a frame within a hair of the budget still takes
+/// the pipelined start instead of slipping to the second vblank.
+const RENDER_START_SLACK_US: u64 = 2_000;
+
+/// The pre-reset flush behind power.flush_hook (STO-007): the two BUFFERED
+/// paths, emptied before the machine goes. File-system writes are not among
+/// them and need no hook — every FAT mutation ends in its own durability
+/// epilogue (fat.syncMeta), so a volume is already Linux-mountable at the
+/// instant each operation returns, power cut or not.
+pub fn orderlyFlush() void {
+    netdebug.flushNow();
+    bootlog.flushNow();
+}
+
+/// Poll USB + input WITHOUT rendering (iaccel.compositor.poll_input). The GPU
+/// bring-up calls this in a bounded settle before the first present, so a slow
+/// device that finishes coming up during GSP boot (the keyboard) is enumerated
+/// while the desktop is not yet shown — its blocking bring-up lands before the
+/// cadence window instead of dropping a frame inside it. xhci.poll() drains the
+/// event ring and enumerates any newly-connected port; dispatchInput keeps the
+/// input rings from backing up. No render, no present.
+pub fn pollInputOnly() void {
+    xhci.poll();
+    // Re-attempt a connected-but-not-yet-ready leaf device (the keyboard): its one
+    // connect-time attempt can fail while its interface is still coming up, and no
+    // fresh PSCE follows. Safe in-place retry (no reset). Settle-only.
+    xhci.retryLatePorts();
+    _ = dispatchInput(desktop);
+}
+
+/// One iteration of the GPU session/bring-up pump (`iaccel.Compositor.pump`):
+/// poll USB HID + drain the input rings into the desktop (this is the ~kHz
+/// input-sampling path — the caller loops fast), then render IF something
+/// changed AND the previous flip has latched (`iaccel.Accel.flip_ready`).
+/// `force_full_present` marks the whole screen dirty and skips the gate — the
+/// warm-up path uses it to seed the double buffers.
+pub fn desktopPump(force_full_present: bool) void {
+    const d = desktop;
+    prof.frameBegin();
+    prof.section(.xhci);
+    xhci.poll(); // drain USB HID into the keyboard/mouse rings
+    prof.section(.input);
+    var changed = force_full_present;
+    if (force_full_present) d.markFullRepaint();
+    if (dispatchInput(d)) changed = true;
+    prof.section(.tick);
+    if (d.tick()) changed = true;
+    // Typed commands run on the cmd-worker task ONLY — never dispatched from
+    // this pump. The claim in claimPendingCommand is consume-once (see
+    // console/cmdtoken.zig) and this loop stays out of it entirely.
+    prof.section(.cmd);
+    if (changed) g_render_pending = true;
+    // Render only when the previous flip has latched (gate open) — otherwise
+    // keep sampling input; dirty rects accumulate in the compositor meanwhile.
+    // Renders only the DIRTY regions: a full repaint every frame would CE-copy
+    // the whole 19 MB frame at 60 Hz for nothing.
+    //
+    // render() is SYNCHRONOUS (composite + CE copy) and during a window drag its
+    // dirty rects are large, so it blocks the pump for its whole duration — no
+    // xhci.poll() runs meanwhile, and the cursor would advance only at the render
+    // rate, in coarse steps. To keep the pointer smooth THROUGH the render, we
+    // re-drain HID and re-move the HW cursor to the latest position immediately
+    // AFTER the render returns, before yielding — so a queued burst of motion that
+    // arrived during the render is applied to the cursor plane at once instead of
+    // waiting for the next full pump iteration.
+    prof.section(.render);
+    // PIPELINED START on a heavy scene: the render's own duration spans the CPU
+    // scene build PLUS the wait for its de-tile to land (gles.finish), so when it
+    // approaches the panel's refresh period there is no time left to ALSO sit out
+    // the previous flip's latch before starting — doing so pushes every present to
+    // the SECOND vblank and hard-locks the desktop at half rate. The tri-ring is
+    // triple-buffered exactly so the next build may begin once the previous flip
+    // is merely ARMED: the compose buffer it draws into left scanout when the flip
+    // BEFORE that latched, which presentDesktopFrame's one-flip-ahead guard
+    // (waitFlipLatched) already guaranteed. On a light scene the latched gate is
+    // kept — waiting here, where input still gets sampled, beats waiting inside
+    // the present with the pointer frozen.
+    const latched = if (iaccel.accel.flip_ready) |ready| ready() else true;
+    const heavy = iaccel.accel.refresh_us != 0 and
+        g_last_render_us + RENDER_START_SLACK_US >= iaccel.accel.refresh_us;
+    const gate_open = latched or heavy;
+    if (g_render_pending and (gate_open or force_full_present)) {
+        // LATE-LATCH ("Session update cycle"): drain HID one final
+        // time right before compositing, so a drag/motion frame reflects the NEWEST
+        // pointer position — not one sampled at the top of this pump iteration (a
+        // flip-interval ago). The gate may have been closed for most of a refresh
+        // while input kept arriving; latching here shrinks the input→photon latency
+        // to ~the composite time instead of ~a full frame.
+        xhci.poll();
+        while (imouse.poll()) |ev| {
+            // Apply latest motion to win pos + cursor; content-changing input
+            // rides the render below — latch its receipt (PERF-008).
+            if (d.onMouse(ev)) iaccel.input_latch.consumed(ev.t_tsc);
+        }
+        g_render_pending = false;
+        const t_render = tsc.rdtsc();
+        d.render();
+        g_last_render_us = tsc.elapsedUs(t_render);
+        // Catch the cursor up to any motion that queued during the blocking render.
+        xhci.poll();
+        while (imouse.poll()) |ev| {
+            if (d.onMouse(ev)) {
+                g_render_pending = true; // more content to draw next iter
+                iaccel.input_latch.consumed(ev.t_tsc); // …judged at that present (PERF-008)
+            }
+        }
+    }
+    // SMP: this pump is driven by the GPU session loop, which (unlike systemLoop)
+    // is core 0's ONLY loop on a native boot. Yield to the scheduler each iteration
+    // so core 0's #0> terminal task and the cmd-worker time-share the core — without
+    // this the session loop monopolizes core 0 and its terminal never drains the
+    // keystrokes routed to it. Single-core has no other
+    // task to run, so it never yields.
+    prof.section(.yield);
+    if (buildinfo.smp) smp.yieldCpu();
+    prof.frameEnd();
+}

@@ -1,0 +1,76 @@
+{
+    "uri": "assets/models/VertexColorTest.glb",
+    "mimeType": "model/gltf-binary",
+    "validatorVersion": "2.0.0-dev.3.10",
+    "issues": {
+        "numErrors": 0,
+        "numWarnings": 0,
+        "numInfos": 2,
+        "numHints": 0,
+        "messages": [
+            {
+                "code": "UNUSED_MESH_TANGENT",
+                "message": "Tangents are not used because the material has no normal texture.",
+                "severity": 2,
+                "pointer": "/meshes/0/primitives/0/attributes/TANGENT"
+            },
+            {
+                "code": "UNUSED_MESH_TANGENT",
+                "message": "Tangents are not used because the material has no normal texture.",
+                "severity": 2,
+                "pointer": "/meshes/1/primitives/0/attributes/TANGENT"
+            }
+        ],
+        "truncated": false
+    },
+    "info": {
+        "version": "2.0",
+        "generator": "Khronos Blender glTF 2.0 exporter",
+        "resources": [
+            {
+                "pointer": "/buffers/0",
+                "mimeType": "application/gltf-buffer",
+                "storage": "glb",
+                "byteLength": 22668
+            },
+            {
+                "pointer": "/images/0",
+                "mimeType": "image/png",
+                "storage": "buffer-view",
+                "image": {
+                    "width": 256,
+                    "height": 256,
+                    "format": "rgba",
+                    "primaries": "srgb",
+                    "transfer": "srgb",
+                    "bits": 8
+                }
+            },
+            {
+                "pointer": "/images/1",
+                "mimeType": "image/png",
+                "storage": "buffer-view",
+                "image": {
+                    "width": 256,
+                    "height": 256,
+                    "format": "rgba",
+                    "primaries": "srgb",
+                    "transfer": "srgb",
+                    "bits": 8
+                }
+            }
+        ],
+        "animationCount": 0,
+        "materialCount": 2,
+        "hasMorphTargets": false,
+        "hasSkins": false,
+        "hasTextures": true,
+        "hasDefaultScene": true,
+        "drawCallCount": 2,
+        "totalVertexCount": 72,
+        "totalTriangleCount": 36,
+        "maxUVs": 1,
+        "maxInfluences": 0,
+        "maxAttributes": 5
+    }
+}

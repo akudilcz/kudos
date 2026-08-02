@@ -1,0 +1,16 @@
+welcome to kudos
+-------------------
+a real-time x86-64 operating system written from scratch in zig.
+microseconds matter: the desktop renders on the GPU at a smooth 60 Hz.
+
+boot:    grub multiboot2 (netboot or ISO) -> long mode -> zig kernel
+display: native-resolution desktop through OpenGL ES 1.1 on the RTX 4090
+input:   USB keyboard + mouse (hubs and absolute tablets too)
+storage: /ramdisk lives in RAM; a FAT32 USB stick mounts at /usbdisk
+
+the dock (bottom) launches: terminal, system monitor, clock,
+calculator, and the web browser.
+
+shortcuts: F12 opens a terminal, F10 the AI agent - anywhere, anytime.
+
+try:  help, ls, cat welcome.txt, net fetch URL, show duck.glb, ai

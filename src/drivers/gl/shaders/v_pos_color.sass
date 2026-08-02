@@ -1,0 +1,7 @@
+	.headerflags	@"EF_CUDA_64BIT_ADDRESS EF_CUDA_SM89 EF_CUDA_VIRTUAL_SM(EF_CUDA_SM89)"
+        /*0000*/                   ALD.96 R0, a[0x80] ;
+        /*0010*/                   ALD.96 R4, a[0x90] ;
+        /*0020*/                   MOV R3, 0x3f800000 ;
+        /*0030*/                   AST.96 a[0x80], R4 ;
+        /*0040*/                   AST.128 a[0x70], R0 ;
+        /*0050*/                   EXIT ;

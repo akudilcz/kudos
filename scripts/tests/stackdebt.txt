@@ -1,0 +1,30 @@
+# Known over-budget kernel stack frames — the burn-down list for
+# scripts/tests/stackframes.sh (which owns the budget and the rule: entries
+# may only shrink, never grow, and a fixed entry must be deleted).
+#
+# Every entry is a live stack-overflow hazard on a 128 KiB task stack and a
+# candidate for the same fix that removed the machine.Vm and pngenc frames:
+# no huge locals or by-value giants — initialize in place through the owning
+# pointer, or heap the object where the contract already allows it.
+#
+# <normalized function name> <ceiling bytes>
+# The TLS handshake. Upstream keeps its record staging in this frame; the vendor
+# script (scripts/build/vendor-tls.py) already moves that to caller-owned memory
+# and calls the key-share generation out of line. What is left is the handshake's
+# own live state — key shares, cipher state, transcript — which cannot be hoisted
+# without restructuring upstream's control flow. It REPLACES two larger entries
+# (init__anon 53248 + KeyShare.init 54272) that the previous vendored client
+# carried, so the deepest TLS frame and the count of them both went down.
+drivers.net.stack.tlsclient.init 51688
+# The hybrid key-share generation (ML-KEM768 + P-256 + P-384 + X25519 keypairs in
+# one frame). Called out of line by the vendor script precisely so this scratch
+# pops before certificate verification runs beneath it, instead of coexisting
+# with it. Was 54272 under the previous vendored client.
+drivers.net.stack.tlsclient.KeyShare.init 53176
+drivers.gpu.base.pngenc.initCompressInto 99328
+ui.desktop.render.renderGles 52224
+ui.desktop.render.GlesComp.init 49152
+crypto.ml_kem.Kyber(...).SecretKey.decaps 45056
+main_root.run 41984
+crypto.ff.Modulus(...).powPublic 32768
+drivers.gpu.gpu.bringUp 23552

@@ -1,0 +1,109 @@
+//! Console — the contract a shell command runs against: the terminal grid it
+//! writes to, its working directory, and the hosting desktop's window/app
+//! services. The console group OWNS this surface; the terminal
+//! (apps/terminal.zig) and the desktop (ui/desktop/desktop.zig) sit above the
+//! console in the layering and implement it, so no command module ever imports
+//! upward into the apps or ui groups. Same shape as the local commands' `Out`
+//! (out.zig): opaque context plus function pointers, wrapped in plain methods.
+
+const std = @import("std");
+const png = @import("modelcache").png;
+
+/// The application kinds the desktop can open directly — the vocabulary of
+/// `spawnApp`. This is the one home of the list; the apps group re-exports it
+/// as `app.Kind` (apps/app.zig), so the union of hosted apps and the commands
+/// that spawn them share exactly one definition.
+pub const AppKind = enum { term, system, clock, calc, vm };
+
+/// The hosting desktop's window/app services, as a console sees them —
+/// implemented by ui/desktop/desktop.zig, which constructs one of these per
+/// terminal at spawn. Both contexts are opaque here: the desktop sits above
+/// the console group, which holds only this contract.
+pub const Desktop = struct {
+    ctx: *anyopaque,
+    /// Open a new app window of `kind`, cascaded. A `term` spawn reports
+    /// error.NoFreeSessions when the session table is full.
+    spawnAppFn: *const fn (ctx: *anyopaque, kind: AppKind) anyerror!void,
+    /// Open a model-viewer window on the ABSOLUTE VFS path `path`;
+    /// `maximized` opens it maximised.
+    spawnModelFn: *const fn (ctx: *anyopaque, path: []const u8, maximized: bool) anyerror!void,
+    /// Hand the desktop a decoded background image (spec R24). Returns false
+    /// while a previous hand-off is still pending — the caller keeps
+    /// ownership of the pixels and reports "busy".
+    setBackgroundFn: *const fn (ctx: *anyopaque, img: png.Image) bool,
+    /// Queue a console's hosting window (opaque handle) for close; teardown is
+    /// deferred so a window is never freed while a command still runs in it.
+    closeFn: *const fn (ctx: *anyopaque, win: *anyopaque) void,
+};
+
+/// One console: what `shell.execute` hands every command. Built by the
+/// terminal per dispatched line — the grid half's `ctx` is the hosting
+/// terminal, the desktop half is the contract that terminal was given at
+/// spawn. A command that outlives its invocation (a backgrounded completion)
+/// stores the Console BY VALUE; the contexts stay valid for the window's life.
+pub const Console = struct {
+    /// The hosting terminal (the grid the five functions below run against).
+    ctx: *anyopaque,
+    /// Write one character at the cursor ('\n' starts a new line).
+    putFn: *const fn (ctx: *anyopaque, ch: u8) void,
+    /// Blank the whole grid and home the cursor.
+    clearFn: *const fn (ctx: *anyopaque) void,
+    /// This console's cwd (normalized absolute VFS path — vfs.zig).
+    cwdFn: *const fn (ctx: *anyopaque) []const u8,
+    /// Set the cwd (callers pass a normalized absolute path ≤ vfs.MAX_PATH).
+    setCwdFn: *const fn (ctx: *anyopaque, path: []const u8) void,
+    /// Print the shell prompt — a backgrounded command re-prompts when its
+    /// completion lands after the synchronous part already returned.
+    promptFn: *const fn (ctx: *anyopaque) void,
+    /// The hosting desktop's services and this console's window within it.
+    desktop: Desktop,
+    win: *anyopaque,
+    /// The desktop's allocator: pixels handed over via `setBackground` and
+    /// buffers a backgrounded fetch retains are owned by it.
+    a: std.mem.Allocator,
+    /// Whether this console is the dedicated AI agent window (spec AGT-002),
+    /// where every committed line is a turn for the agent. A plain value —
+    /// fixed for the window's life.
+    ai_mode: bool,
+
+    /// Write one character to the grid.
+    pub fn put(self: Console, ch: u8) void {
+        self.putFn(self.ctx, ch);
+    }
+    /// Write a string to the grid (each byte via put).
+    pub fn write(self: Console, s: []const u8) void {
+        for (s) |ch| self.putFn(self.ctx, ch);
+    }
+    /// Blank the whole grid and home the cursor.
+    pub fn clear(self: Console) void {
+        self.clearFn(self.ctx);
+    }
+    /// This console's cwd (normalized absolute VFS path).
+    pub fn cwd(self: Console) []const u8 {
+        return self.cwdFn(self.ctx);
+    }
+    /// Set the cwd to a normalized absolute path.
+    pub fn setCwd(self: Console, path: []const u8) void {
+        self.setCwdFn(self.ctx, path);
+    }
+    /// Print the shell prompt (backgrounded-completion path).
+    pub fn prompt(self: Console) void {
+        self.promptFn(self.ctx);
+    }
+    /// Open a new app window of `kind` (see Desktop.spawnAppFn).
+    pub fn spawnApp(self: Console, kind: AppKind) anyerror!void {
+        return self.desktop.spawnAppFn(self.desktop.ctx, kind);
+    }
+    /// Open a model-viewer window (see Desktop.spawnModelFn).
+    pub fn spawnModel(self: Console, path: []const u8, maximized: bool) anyerror!void {
+        return self.desktop.spawnModelFn(self.desktop.ctx, path, maximized);
+    }
+    /// Hand the desktop a decoded background image (see Desktop.setBackgroundFn).
+    pub fn setBackground(self: Console, img: png.Image) bool {
+        return self.desktop.setBackgroundFn(self.desktop.ctx, img);
+    }
+    /// Close this console's own window (`exit`, the agent's `/quit`).
+    pub fn close(self: Console) void {
+        self.desktop.closeFn(self.desktop.ctx, self.win);
+    }
+};

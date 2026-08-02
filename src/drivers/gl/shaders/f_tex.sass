@@ -1,0 +1,13 @@
+	.headerflags	@"EF_CUDA_64BIT_ADDRESS EF_CUDA_SM89 EF_CUDA_VIRTUAL_SM(EF_CUDA_SM89)"
+        /*0000*/                   IPA.PASS R0, a[0x7c] ;
+        /*0010*/                   IPA.PASS R1, a[0x80] ;
+        /*0020*/                   MUFU.RCP R0, R0 ;
+        /*0030*/                   FMUL.FTZ R2, R1, R0 ;
+        /*0040*/                   IPA.PASS R1, a[0x84] ;
+        /*0050*/                   FMUL.FTZ R3, R1, R0 ;
+        /*0060*/                   TEX.NODEP R0, R4, R2, 0x1, 0x0, 2D ;
+        /*0070*/                   MOV R3, R1 ;
+        /*0080*/                   MOV R1, R5 ;
+        /*0090*/                   MOV R2, R0 ;
+        /*00a0*/                   MOV R0, R4 ;
+        /*00b0*/                   EXIT ;

@@ -1,0 +1,4 @@
+# Guest artifacts are built by scripts/virt/build_guest.sh, not committed.
+bzImage
+initramfs.cpio.gz
+build/

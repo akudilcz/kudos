@@ -1,0 +1,123 @@
+Linux version 6.6.52 (andrew@orange) (gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0, GNU ld (GNU Binutils for Ubun
+Command line: console=ttyS0,115200 earlyprintk=serial,ttyS0,115200
+unchecked MSR access error: WRMSR to 0x8b (tried to write 0x0000000000000000) at rIP: 0xffffffff8101ba07 
+Call Trace:
+ <TASK>
+ ? 0xffffffff81024405
+ ? 0xffffffff81024603
+ ? 0xffffffff816d20d4
+ ? 0xffffffff816c784f
+ ? 0xffffffff8101ba07
+ ? 0xffffffff816cc1fc
+ ? 0xffffffff816c81c8
+ ? 0xffffffff816c14cb
+ ? 0xffffffff816c7b5a
+ ? 0xffffffff816c7c1b
+ ? 0xffffffff81000176
+ </TASK>
+unchecked MSR access error: RDMSR from 0x8b at rIP: 0xffffffff8101ba17 (0xffffffff8101ba17)
+Call Trace:
+ <TASK>
+ ? 0xffffffff81024441
+ ? 0xffffffff81024603
+ ? 0xffffffff816d20d4
+ ? 0xffffffff816c784f
+ ? 0xffffffff8101ba17
+ ? 0xffffffff816cc1fc
+ ? 0xffffffff816c81c8
+ ? 0xffffffff816c14cb
+ ? 0xffffffff816c7b5a
+ ? 0xffffffff816c7c1b
+ ? 0xffffffff81000176
+ </TASK>
+x86/split lock detection: #DB: warning on user-space bus_locks
+BIOS-provided physical RAM map:
+BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+BIOS-e820: [mem 0x0000000000100000-0x0000000007ffffff] usable
+NX (Execute Disable) protection: active
+APIC: Static calls initialized
+tsc: Detected 3263.000 MHz processor
+tsc: Detected 3263.810 MHz TSC
+last_pfn = 0x8000 max_arch_pfn = 0x400000000
+x86/PAT: PAT support disabled because CONFIG_X86_PAT is disabled in the kernel.
+x86/PAT: Configuration [0-7]: WB  WT  UC- UC  WB  WT  UC- UC  
+Kernel does not support x2APIC, please recompile with CONFIG_X86_X2APIC.
+Disabling APIC, expect reduced performance and functionality.
+Using GB pages for direct mapping
+RAMDISK: [mem 0x07ebd000-0x07ffffff]
+Zone ranges:
+  DMA32    [mem 0x0000000000001000-0x0000000007ffffff]
+  Normal   empty
+Movable zone start for each node
+Early memory node ranges
+  node   0: [mem 0x0000000000001000-0x000000000009efff]
+  node   0: [mem 0x0000000000100000-0x0000000007ffffff]
+Initmem setup node 0 [mem 0x0000000000001000-0x0000000007ffffff]
+On node 0, zone DMA32: 1 pages in unavailable ranges
+On node 0, zone DMA32: 97 pages in unavailable ranges
+TSC deadline timer available
+No local APIC present
+APIC: disable apic facility
+APIC: Switched APIC routing to: noop
+[mem 0x08000000-0xffffffff] available for PCI devices
+clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604462750000 ns
+Kernel command line: console=ttyS0,115200 earlyprintk=serial,ttyS0,115200
+Unknown kernel command line parameters "earlyprintk=serial,ttyS0,115200", will be passed to user space.
+random: crng init done
+Dentry cache hash table entries: 16384 (order: 5, 131072 bytes, linear)
+Inode-cache hash table entries: 8192 (order: 4, 65536 bytes, linear)
+Built 1 zonelists, mobility grouping on.  Total pages: 32000
+mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+Memory: 117960K/130680K available (4096K kernel code, 764K rwdata, 292K rodata, 520K init, 756K bss, 1246
+SLUB: HWalign=64, Order=0-1, MinObjects=0, CPUs=1, Nodes=1
+NR_IRQS: 4352, nr_irqs: 24, preallocated irqs: 16
+Unable to read current time from RTC
+Console: colour dummy device 80x25
+printk: console [ttyS0] enabled
+APIC disabled via kernel command line
+APIC: Keep in PIC mode(8259)
+clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x2f0bc0dc020, max_idle_ns: 440795302816 ns
+Calibrating delay loop (skipped), value calculated using timer frequency.. 6527.62 BogoMIPS (lpj=32638100
+Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+CPU: Intel(R) Core(TM) Ultra 7 255U (family: 0x6, model: 0xb5, stepping: 0x0)
+Spectre V2 : User space: Vulnerable
+Speculative Store Bypass: Vulnerable
+x86/fpu: x87 FPU will use FXSAVE
+pid_max: default: 4096 minimum: 301
+Mount-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+Mountpoint-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+Performance Events: unsupported p6 CPU model 181 no PMU driver, software events only.
+signal: max sigframe size: 1040
+devtmpfs: initialized
+clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604462750000 ns
+clocksource: Switched to clocksource tsc-early
+clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x2f0bc0dc020, max_idle_ns: 440795302816 ns
+clocksource: Switched to clocksource tsc
+platform rtc_cmos: registered platform RTC device (no PNP device found)
+Unpacking initramfs...
+Freeing initrd memory: 1292K
+workingset: timestamp_bits=62 max_order=15 bucket_order=0
+Serial: 8250/16550 driver, 4 ports, IRQ sharing disabled
+serial8250: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
+i8042: No controller found
+sched_clock: Marking stable (0, 1345365247)->(1345365247, 0)
+Freeing unused kernel image (initmem) memory: 520K
+Write protecting the kernel read-only data: 6144k
+Freeing unused kernel image (rodata/data gap) memory: 1756K
+Run /init as init process
+KUDOS-GUEST-UP
+/bin/sh: can't access tty; job control turned off
+~ # 
+~ # ls -al /
+total 8
+drwxrwxr-x    8 0        0                0 Jan  1 00:00 [1;34m.[m
+drwxrwxr-x    8 0        0                0 Jan  1 00:00 [1;34m..[m
+-rw-------    1 0        0                9 Jan  1 00:00 [0;0m.ash_history[m
+drwxrwxr-x    2 0        0                0 Jan  1 00:00 [1;34mbin[m
+drwxr-xr-x    2 0        0                0 Jan  1 00:00 [1;34mdev[m
+-rwxrwxr-x    1 0        0              161 Jan  1 00:00 [1;32minit[m
+dr-xr-xr-x   50 0        0                0 Jan  1 00:00 [1;34mproc[m
+drwx------    2 0        0                0 Jan  1 00:00 [1;34mroot[m
+drwxrwxr-x    2 0        0                0 Jan  1 00:00 [1;34msbin[m
+dr-xr-xr-x   10 0        0                0 Jan  1 00:00 [1;34msys[m

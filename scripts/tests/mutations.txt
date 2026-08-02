@@ -1,0 +1,35 @@
+# The mutation manifest (process.md §Verification): one row per regression test,
+# reintroducing the bug the test exists to catch. mutcheck.sh applies each row to a
+# scratch copy and demands the named suite go RED. Rows join with their regression
+# test — a new test lands with its row — and on touch of a module whose past
+# mutations live only in commit messages.
+#
+# <src file> | <sed -E expression> | <-Dtest-only substring> | <bug class reintroduced>
+src/kernel/timer/rtc_decode.zig | s/if \(sameTime\(a, b\)\) return a;/return a;/ | rtc_decode | torn RTC read accepted (KRN-004 twice-identical policy)
+src/kernel/sched/armpolicy.zig | s/return if \(rt != 0\)/return if (rt > now)/ | armpolicy | idle core disarms over a due sleeper — the shipped forever-halt (KRN-007)
+src/drivers/net/stack/tlskeys.zig | s/"c hs traffic"/"s hs traffic"/ | tlskeys | client/server traffic-secret labels swapped (NET-010 key schedule)
+src/drivers/net/stack/tlskeys.zig | s/tls.hkdfExpandLabel\(P.Hkdf, client_secret, "iv", "", P.AEAD.nonce_length\)/tls.hkdfExpandLabel(P.Hkdf, server_secret, "iv", "", P.AEAD.nonce_length)/ | tlskeys | client IV derived from the server secret (NET-010)
+src/drivers/net/stack/wire.zig | s/const n = @min\(req.len, out.len\);/const n = req.len;/ | wire | echo reply unbounded by the transmit buffer (NET-006 oversized-ping overrun)
+src/drivers/gpu/present/flip_stats.zig | s/return interval_us > refresh_us \+ JITTER_BUDGET_US;/return false;/ | flip_stats | frame-drop detector wedged off — every interval judged on time (DIAG-003)
+src/kernel/debug/tracering.zig | s/if \(r.len >= cap\) return .\{ .\{ .off = 0, .len = cap \}/if (false) return .{ .{ .off = 0, .len = cap }/ | tracering | an over-long record's span unbounded by the ring (trace-bus storage overrun)
+src/kernel/debug/tracering.zig | s/const first = @min\(r.len, cap - off\);/const first = r.len;/ | tracering | wrap split ignored — a straddling record runs off the end of storage
+src/drivers/storage/fat.zig | s/^        try self.dev.sync\(\);$//  | fat | FAT metadata left unbarriered — a power cut loses an acked write (STO-007)
+src/drivers/gl/softdisplay.zig | s/if \(m.gpu_coming\) return .gpu_coming;// | softdisplay | GPU-coming guard removed — the desktop rasterises on the CPU with a 4090 present (ARCH-015)
+src/widgets/hudsnapshot.zig | s/pub const SAMPLE_MS: u64 = 500;/pub const SAMPLE_MS: u64 = 1000;/ | hudview | HUD refresh halved to 1 Hz — under the twice-a-second floor (HUD-032)
+src/widgets/hudcontrol.zig | s/if \(faults > 0\) self.alarm = true;/self.alarm = faults > 0;/ | hudcontrol | alarm no longer latches — a fault that ticks once vanishes from view (HUD-029)
+src/widgets/hudcontrol.zig | s/if \(!have_prev or dt_ms == 0 or now < prev\) return 0;/if (!have_prev or dt_ms == 0) return 0;/ | hudcontrol | a counter reset underflows into an enormous rate on an idle machine (HUD-020)
+src/widgets/hudcontrol.zig | s/if \(!self.shown or self.frozen\) return false;/if (!self.shown) return false;/ | hudcontrol | a frozen display keeps sampling (HUD-030)
+src/drivers/net/debug/lineasm.zig | s/if \(n < take\) self.truncated \+= 1;// | lineasm | an over-long trace line is shortened silently, uncounted
+src/drivers/net/debug/lineasm.zig | s/if \(self.len == CAP and self.buf\[self.len - 1\] != '\\n'\) self.buf\[self.len - 1\] = '\\n';// | lineasm | a truncated line loses its terminator — downstream framing breaks on it
+src/widgets/hudsnapshot.zig | s/"drop", "fail", "fault",/"fail", "fault",/ | hudsnapshot | a counter named *drop* stops reading as a fault — the alarm never trips (HUD-028)
+src/widgets/hudview.zig | s/if \(opts\.alarm\)/if (false)/ | hud_shot | the alarm band is never painted — a latched alarm is invisible (HUD-028)
+src/widgets/hudview.zig | s/\{c\.runnable\}/\{c.runnable * 0\}/ | hud_shot | every core claims an empty run queue — waiting tasks vanish (HUD-008)
+src/ui/screen/truetype.zig | s/const v: f32 = if \(a <= 0\) 0 else if \(a >= 1\) 255 else a \* 255.0 \+ 0.5;/const v: f32 = if (a <= 0) 0 else 255;/ | truetype | coverage quantised to on-off — antialiasing silently lost (RND-010)
+src/drivers/net/stack/tlsclient.zig | s/iovecs\[0\.\.if \(host\.len == 0\) 1 else 2\]/iovecs[0..1]/ | tlsclient | the ClientHello ships without its server name — SNI silently dropped
+src/apps/calchistory.zig | s/if \(self\.count == ROWS\) \{/if (self.count == ROWS) return; if (false) {/ | calchistory | a full ledger silently drops the NEWEST line instead of scrolling (APP-017)
+src/widgets/plot.zig | s/const half = \(self\.max - self\.min\) \/ 2 \* factor;/const half = (self.max - self.min) \/ 2;/ | plot | zoom becomes a no-op — the window never widens or narrows (APP-018)
+src/drivers/storage/bootlog.zig | s/const MAGIC = "KUDOSLOG";/const MAGIC = "KUDOSBAD";/ | bootlog | the ring header loses its magic — every boot restarts the ring at zero (DIAG-014)
+src/ui/screen/kgl.zig | s/self\.prepare\(tex, 6\);/if (true) return; self.prepare(tex, 6);/ | desktop_shot | an image draw paints nothing — the wallpaper silently vanishes (DSK-001)
+src/kernel/sched/taskstat.zig | s/self\.activity\[0\.\.@min\(self\.activity_len, self\.activity\.len\)\]/self.activity[0..self.activity_len]/ | taskstat | a torn activity length slices past the label array — ps streams heap (the boot-3 incident)
+src/console/complete.zig | s/    m.name_len = i;/    _ = i;/ | complete | ambiguous completion writes the FIRST match instead of the shared prefix (APP-024)
+src/console/complete.zig | s/false, true/false, false/ | complete | the case-folded retry dropped — a lower-case guess finds nothing on a FAT volume (APP-027)

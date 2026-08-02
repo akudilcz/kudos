@@ -1,0 +1,1 @@
+"everything in RAM, nothing on disk." -- the kudos way

@@ -1,0 +1,2 @@
+{ "stage": 0, "num_gprs": 40, "slm_size": 0, "code_size": 15456, "data_size": 0,
+  "cbuf_map": [{ "type": 1, "desc_set": 0, "desc_offset": 0 }, { "type": 5, "desc_set": 0, "desc_offset": 16 }] }

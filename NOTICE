@@ -1,0 +1,101 @@
+kudos — a GPU-first hobby operating system
+Copyright 2026 Andrew Kudilczak
+
+This product includes software developed by Andrew Kudilczak.
+
+kudos is a HOBBY operating system. It is not a product, is not certified or
+qualified for any purpose, and is not offered as fit for safety-critical,
+life-critical, or otherwise regulated use. It is built around AI agents that
+generate their own applications just in time: the agent writes Zig, an external
+build service compiles it off-target into a loadable module (the system carries
+no compiler), and the kernel verifies and runs it — with OpenGL rendering as the
+use case the whole machine is shaped around. See the Apache-2.0 warranty
+disclaimer below, which applies in full.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License in the LICENSE file at the root of this repository, or at
+http://www.apache.org/licenses/LICENSE-2.0
+
+Anyone redistributing this work, in source or binary form, with or without
+modification, must retain this NOTICE and the attribution above.
+
+
+THIRD-PARTY MATERIAL
+====================
+
+The source code in src/, test/, scripts/ and build.zig is original work under
+the Apache-2.0 licence above, EXCEPT where named below. The bundled data files
+and vendored sources listed here are third-party and keep their own licences,
+which are NOT superseded by Apache-2.0.
+
+TLS client — src/drivers/net/stack/tlsclient.zig
+    Vendored from the Zig standard library (lib/std/crypto/tls/Client.zig,
+    Zig 0.14.1) and patched for a freestanding kernel; the file's own header
+    records every edit. The MIT License (Expat), Copyright (c) Zig
+    contributors:
+
+        Permission is hereby granted, free of charge, to any person obtaining
+        a copy of this software and associated documentation files (the
+        "Software"), to deal in the Software without restriction, including
+        without limitation the rights to use, copy, modify, merge, publish,
+        distribute, sublicense, and/or sell copies of the Software, and to
+        permit persons to whom the Software is furnished to do so, subject to
+        the following conditions:
+
+        The above copyright notice and this permission notice shall be
+        included in all copies or substantial portions of the Software.
+
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+        EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+        MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+        IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+        CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+        TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+        SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Desktop wallpaper — assets/media/background.png
+    Generated with Google AI; the image carries that credit in its own IPTC and
+    XMP metadata (IPTC DigitalSourceType: trainedAlgorithmicMedia), which is
+    retained in the file. assets/media/screenshot.png is a photograph of this
+    system running and shows the same wallpaper.
+
+Icons — assets/icons/*.svg
+    Phosphor Icons, MIT License. Full text: assets/icons/LICENSE-phosphor.
+
+Typeface — src/ui/assets/RobotoMono-Regular.ttf
+    Roboto Mono, Copyright 2015 The Roboto Mono Project Authors, licensed under
+    the Apache License, Version 2.0 (the same text as LICENSE).
+
+CA certificate bundle — assets/net/cacert.pem
+    Extracted from Mozilla's root store and distributed by the curl project
+    under the Mozilla Public License, Version 2.0.
+
+3D models — assets/models/, src/ui/assets/{duck,teapot}.glb
+    Per-model licences are recorded in assets/models/README.md. The corpus is
+    drawn from the Khronos glTF-Sample-Assets repository (CC0 and CC-BY 4.0)
+    and Poly by Google (CC-BY 3.0). Every bundled model permits commercial
+    use; no non-commercial asset ships in this repository.
+
+Reference renderings — test/ui/assets/fixtures/reference/*.png
+    The published screenshots of the Khronos feature-validation models, from the
+    glTF-Sample-Assets repository, held as the conformance oracle. Per-file
+    licences (CC-BY 4.0 and CC0 1.0) and the named artists are recorded in
+    test/ui/assets/fixtures/reference/README.md.
+
+Mesa patches — scripts/shaders/patches/*.patch
+    Diffs against Mesa (NVK and the nouveau drm-shim), which is MIT-licensed.
+    They carry the context lines a diff requires and are applied to an upstream
+    checkout inside the shader-toolchain container; no Mesa source is vendored
+    into this repository.
+
+HARDWARE INTERFACES
+
+The GPU driver programs a documented device, and the register offsets, class
+method numbers and bring-up sequences it uses are facts about that hardware,
+learned by reading published open-source drivers: nouveau in the Linux kernel
+(GPL-2.0-only), Mesa's NIL and NVK (MIT), and NVIDIA's open-gpu-kernel-modules
+(MIT/GPL-2.0 dual). The owning modules name their source in place — see
+src/drivers/gpu/display/modeset.zig, src/drivers/gl/ada/til.zig and
+src/drivers/gpu/gsp/gsp.zig. The implementations here are original Zig written
+against those interfaces; no code was copied from them.

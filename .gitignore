@@ -1,0 +1,35 @@
+# All build/generated artifacts live under build/: zig install prefix
+# (build/bin), local zig cache (build/.zig-cache), the ISOs, and their staging
+# dirs (build/isodir-*). Nothing generated lands at the repo root.
+build/
+
+*.o
+
+# Claude Code local state stays out of the tree — but the project's agent
+# definitions (.claude/agents/) are shared, versioned config.
+.claude/*
+!.claude/agents/
+
+# Zig's default install prefix / cache when someone runs bare `zig build` instead
+# of `make build` (which redirects both under build/ via -p build --cache-dir).
+# Not where artifacts belong (see the build/ note above) — ignored so a stray
+# default-path build never pollutes git.
+zig-out/
+.zig-cache
+
+# netdebug screenshots downloaded from a live run — generated at runtime.
+assets/screenshots/
+
+# Python bytecode from the host tools (tools/netdebug-mcp/, scripts/).
+__pycache__/
+*.pyc
+
+# Editor config — personal/local, not shared.
+.vscode/
+
+# Secrets live in .env (sourced by scripts/agent/factory-run.sh), never in the tree.
+.env
+
+# glTF validator per-asset reports (transient)
+*.gltf.report.json
+*.glb.report.json

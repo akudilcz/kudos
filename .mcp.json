@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "kudos-netdebug": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--script",
+        "${CLAUDE_PROJECT_DIR:-.}/scripts/tools/netdebug-mcp/server.py"
+      ]
+    }
+  }
+}
