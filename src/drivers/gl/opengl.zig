@@ -48,6 +48,7 @@ const vram = @import("../gpu/core/vram.zig");
 const shim = @import("../gpu/base/shim.zig");
 const ce = @import("../gpu/core/ce.zig");
 const present = @import("../gpu/present/present.zig");
+const counter = @import("../../kernel/debug/counter.zig");
 const hostpush = @import("hostpush");
 const idraw = @import("idraw");
 const gr_mod = @import("engine/gr.zig");
@@ -65,9 +66,13 @@ const RT_H: u32 = idraw.MAX_H;
 const MAX_CTX: u32 = idraw.MAX_CTX;
 
 /// The GR pushbuffer is many pages, not one: the compositor draws the whole desktop in a
-/// single frame — wallpaper, every window's frame and content, the dock — which is far
-/// more methods than the one-mesh path ever emitted. 32 KiB holds a few hundred draws.
-const GR_PUSH_BYTES: u32 = 0x8000;
+/// single frame — wallpaper, every window's frame and content, the dock, and with the
+/// heads-up display open its panels, traces and counter wall on top. Each 2D draw
+/// records ~300 bytes of methods, so this budget is the frame's draw-call capacity:
+/// 256 KiB holds several hundred draws, and it fills the whole
+/// GL_CTX_GRPUSH_OFF..GL_CTX_GRSEM_OFF window, which is the hard bound on growing it.
+/// A draw past the budget is refused and counted (gpu.draws_dropped), never silent.
+const GR_PUSH_BYTES: u32 = 0x40000;
 
 /// Where the shader programs bind. The vertex and pixel pipeline slots are fixed by the
 /// class (methods.SLOT_VERTEX / SLOT_PIXEL). The bind groups are the mesa/NAK convention
@@ -358,8 +363,13 @@ const Ctx = struct {
 
         const push = &self.p;
         // Guard the frame's push page. Refuse the draw that would overflow rather than let
-        // HostPush panic — the window drops a frame, it does not crash the kernel.
-        if (push.bytes() + 0x400 > GR_PUSH_BYTES) return idraw.Error.DrawOutOfResources;
+        // HostPush panic — the shape goes missing from this frame, it does not crash the
+        // kernel — and count it: the caller swallows the error (GL records a flag nobody
+        // reads mid-frame), so this counter is the only witness that pixels were lost.
+        if (push.bytes() + 0x400 > GR_PUSH_BYTES) {
+            cnt_draws_dropped.inc();
+            return idraw.Error.DrawOutOfResources;
+        }
 
         // The pipeline's viewport/scissor, emitted on change: this is how one frame
         // hosts both the full-screen 2D pass and each window's inline 3D (confined to
@@ -973,6 +983,10 @@ var device: Device = undefined;
 var device_ready: bool = false;
 /// One-shot guard so a refused blend names itself once, not every frame.
 var blend_refusal_logged: bool = false;
+/// Draws refused because the frame's push page was full. Each one is a shape missing
+/// from the presented frame, so the count is a visible defect, not bookkeeping: "drop"
+/// marks it a fault counter and the heads-up display's fault line trips on it.
+var cnt_draws_dropped = counter.Counter{ .mod = .gpu, .name = "draws_dropped" };
 
 pub fn pumpAll() void {
     if (!device_ready) return;
@@ -1161,6 +1175,7 @@ pub fn init(g: gsp.Gsp, f: *fifo.Fifo, gr: *gr_mod.Gr, up: shaders.Uploaded) Err
         device.tic_black = device.textures[hb - 1].tic;
     }
     device_ready = true;
+    counter.register(&cnt_draws_dropped);
     log("gl.opengl: GR IDraw device up ({} ctx slots, RT {}x{} BL, 2D path)\n", .{ MAX_CTX, RT_W, RT_H });
     return device.iface();
 }
