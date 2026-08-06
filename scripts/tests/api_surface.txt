@@ -2984,6 +2984,7 @@ src/kernel/timer/rtc_decode.zig: pub const Civil = struct
 src/kernel/timer/rtc_decode.zig: pub fn civil(raw: Raw) ?Civil
 src/kernel/timer/rtc_decode.zig: pub fn epochSeconds(raw: Raw) ?i64
 src/kernel/timer/rtc_decode.zig: pub fn sameTime(a: Raw, b: Raw) bool
+src/kernel/timer/rtc_decode.zig: pub const UIP_POLL_BUDGET: u32 = 65536;
 src/kernel/timer/rtc_decode.zig: pub fn stableRead(rtc: anytype, max_attempts: u8) ?Raw
 src/kernel/timer/timer.zig: pub const TICK_HZ: u32 = 100;
 src/kernel/timer/timer.zig: pub var wait_hook: ?*const fn () void = null;

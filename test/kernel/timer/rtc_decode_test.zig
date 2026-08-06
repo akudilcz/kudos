@@ -159,6 +159,23 @@ test "an update in progress defers the read rather than tearing it (KRN-004)" {
     try std.testing.expectEqual(@as(u8, 0x08), got.h);
 }
 
+test "a read landing inside the update window waits it out, not burns retries (KRN-004)" {
+    // UIP stays high for far more polls than there are read attempts — the ~2 ms
+    // window a boot can land in. A policy that spends one attempt per UIP sight
+    // exhausts itself and reports a healthy clock dead ("no RTC" on a machine
+    // whose RTC is fine); the poll-until-closed policy walks out of the window
+    // and reads the time.
+    var i: usize = 0;
+    var steps: [3000 + 2]FakeRtc.Step = undefined;
+    for (steps[0..3000]) |*s| s.* = .{ .uip = true, .raw = at(0, 0, 0) };
+    steps[3000] = .{ .uip = false, .raw = at(0x23, 0x49, 0x26) };
+    steps[3001] = .{ .uip = false, .raw = at(0x23, 0x49, 0x26) };
+    const fake = FakeRtc{ .i = &i, .steps = &steps };
+    const got = rtc.stableRead(fake, 10) orelse return error.NoStableRead;
+    try std.testing.expectEqual(@as(u8, 0x23), got.h);
+    try std.testing.expectEqual(@as(u8, 0x26), got.s);
+}
+
 test "an RTC that never settles is a null clock, not a wedge or a guess (KRN-004)" {
     // UIP stuck high: the bounded retry gives up loudly.
     var i: usize = 0;

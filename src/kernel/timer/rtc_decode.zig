@@ -96,15 +96,36 @@ pub fn sameTime(a: Raw, b: Raw) bool {
         a.day == b.day and a.month == b.month and a.year == b.year;
 }
 
-/// The MC146818 stable-read policy (KRN-004): wait out an in-progress update,
-/// read twice, accept only two identical consecutive snapshots. A torn read
-/// across a rollover otherwise yields e.g. 09:59:59 → 09:00:00. `rtc` is the
-/// register access seam: `updateInProgress()` (status A UIP) and `snapshot()`;
-/// the retry bound keeps a broken clock loud (null) instead of wedging boot.
+/// STATUS_A polls that outlast one whole update window. The MC146818 raises
+/// UIP for ~2 ms ahead of each once-per-second update, so a reader that lands
+/// inside that window must KEEP POLLING until it closes: a fixed handful of
+/// immediate retries all land in the same window and report a healthy clock as
+/// dead. Each poll is a port read (microseconds), so this budget spans the
+/// window many times over, while a UIP stuck high (a broken clock) still
+/// exhausts it in well under a second — bounded and loud, never a wedge.
+pub const UIP_POLL_BUDGET: u32 = 65536;
+
+/// Poll UIP until the update window closes, up to `budget` reads. True when
+/// the registers are stable to read; false when UIP never dropped.
+fn waitUpdateIdle(rtc: anytype, budget: u32) bool {
+    var i: u32 = 0;
+    while (i < budget) : (i += 1) {
+        if (!rtc.updateInProgress()) return true;
+    }
+    return false;
+}
+
+/// The MC146818 stable-read policy (KRN-004): wait out an in-progress update
+/// (polling UIP until the window closes, never a fixed count of immediate
+/// retries), read twice, accept only two identical consecutive snapshots. A
+/// torn read across a rollover otherwise yields e.g. 09:59:59 → 09:00:00.
+/// `rtc` is the register access seam: `updateInProgress()` (status A UIP) and
+/// `snapshot()`; the retry bound keeps a broken clock loud (null) instead of
+/// wedging boot.
 pub fn stableRead(rtc: anytype, max_attempts: u8) ?Raw {
     var attempt: u8 = 0;
     while (attempt < max_attempts) : (attempt += 1) {
-        if (rtc.updateInProgress()) continue;
+        if (!waitUpdateIdle(rtc, UIP_POLL_BUDGET)) continue;
         const a = rtc.snapshot();
         if (rtc.updateInProgress()) continue;
         const b = rtc.snapshot();

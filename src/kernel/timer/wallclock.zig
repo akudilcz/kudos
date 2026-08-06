@@ -38,9 +38,11 @@ const REG_CENTURY: u8 = 0x32;
 
 const STATUS_A_UIP: u8 = 0x80; // update in progress: registers unstable
 
-/// Retries for a stable (UIP-clear, twice-identical) snapshot. Each UIP wait
-/// is bounded by the RTC's own update cycle (~2 ms); 10 attempts is orders of
-/// magnitude beyond what a healthy RTC needs, and a broken one fails loudly.
+/// Retries for a stable (UIP-clear, twice-identical) snapshot. Each attempt
+/// first polls the ~2 ms update window closed (rtc_decode.UIP_POLL_BUDGET
+/// STATUS_A reads — the whole window, not a fixed count of instant retries);
+/// 10 attempts is orders of magnitude beyond what a healthy RTC needs, and a
+/// broken one still fails loudly in well under a second.
 const READ_ATTEMPTS: u8 = 10;
 
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
