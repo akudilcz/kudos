@@ -581,23 +581,54 @@ report_memory() {
 }
 
 # The caches a package manager's install scripts normally build. This image is
-# assembled unprivileged, with --no-scripts, so none of them exist — and each
-# one is load-bearing rather than an optimisation: GTK aborts on an icon it
-# cannot decode, and the loader that decodes it is found only through this
-# cache. They are cheap, they are idempotent, and they must run in the guest
-# because each one interrogates the very libraries it indexes.
+# assembled unprivileged with --no-scripts, so NONE of them exist, and each one
+# is load-bearing rather than an optimisation. They must run in the guest
+# because each interrogates the very libraries and files it indexes.
+#
+# Nothing here is allowed to fail quietly. Every one of these was a silenced
+# `2>/dev/null` before, and the one that was simply MISSING from the list —
+# update-mime-database — is what killed the browser: without a compiled MIME
+# database gdk-pixbuf cannot identify a file's type, reports "Unrecognized
+# image file format" for a perfectly good icon, and GTK responds to a failed
+# icon load by aborting the process. The browser died before painting, and the
+# only clue was a warning that named the mime database in passing.
+build_cache() {
+    label=\$1; artifact=\$2
+    shift 2
+    if "\$@" > /tmp/cache.log 2>&1; then
+        if [ -z "\$artifact" ] || [ -e "\$artifact" ]; then
+            say "cache: \$label ok"
+        else
+            say "cache: \$label RAN BUT PRODUCED NOTHING at \$artifact"
+        fi
+    else
+        say "cache: \$label FAILED rc=\$?"
+        tail -2 /tmp/cache.log | fold -w ${CONSOLE_COLS} | while read -r l; do
+            say "cache: \$l"
+        done
+    fi
+}
+
+# The MIME database: gdk-pixbuf asks it what a file IS before choosing a loader.
+build_cache mime /usr/share/mime/mime.cache update-mime-database /usr/share/mime
+# The pixbuf loaders, including the SVG one librsvg ships (spelled
+# libpixbufloader_svg.so, with an underscore, unlike every built-in loader).
+build_cache pixbuf "" gdk-pixbuf-query-loaders --update-cache
 PIXBUF_CACHE=\$(find /usr/lib/gdk-pixbuf-2.0 -name loaders.cache 2>/dev/null | head -1)
-gdk-pixbuf-query-loaders --update-cache 2>/dev/null
-# Name the cache explicitly rather than trusting the default path compiled into
-# the library. GTK aborts — not degrades — the first time it cannot decode an
-# icon, and its own Adwaita icons are SVG, so the one loader that must be found
-# is the one shipped by a different package (librsvg, whose module is spelled
-# libpixbufloader_svg.so with an underscore, unlike every built-in loader).
-# Losing it costs the whole browser: "Unrecognized image file format", then
-# Gtk:ERROR, then abort, with no line naming an icon.
+# Name it explicitly rather than trusting the path compiled into the library.
 [ -n "\$PIXBUF_CACHE" ] && export GDK_PIXBUF_MODULE_FILE="\$PIXBUF_CACHE"
-glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null
-fc-cache -f 2>/dev/null
+# GTK reads its settings from GSettings and treats a missing schema as fatal.
+build_cache schemas /usr/share/glib-2.0/schemas/gschemas.compiled \
+    glib-compile-schemas /usr/share/glib-2.0/schemas
+# A browser with no font cache renders nothing.
+build_cache fonts "" fc-cache -f
+# The icon theme index. GTK works without it by scanning directories, so this is
+# the one entry here that is genuinely an optimisation.
+for theme in /usr/share/icons/*/; do
+    [ -f "\$theme/index.theme" ] && build_cache "icons \$(basename "\$theme")" "" \
+        gtk-update-icon-cache -q -t -f "\$theme"
+done
+
 # dbus identifies the machine by this file and logs an error on every
 # connection when it is missing; nothing persists here, so fresh each boot.
 dbus-uuidgen > /etc/machine-id
