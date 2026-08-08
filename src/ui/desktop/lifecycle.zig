@@ -45,9 +45,6 @@ const MODEL_H: usize = 520;
 const CASCADE_ORIGIN: usize = 60; // origin (x and y) of the first cascaded window
 const CASCADE_STEP: usize = 28; // diagonal offset per successive cascaded window
 
-/// RAM given to each guest. A busybox-initramfs boot fits comfortably in 128 MiB,
-/// and several guests at this size stay far inside the frame allocator's budget.
-const GUEST_RAM_BYTES: u64 = 128 * 1024 * 1024;
 /// The kernel command line handed to every guest — owned by the hypervisor,
 /// which is where the guest's device map is decided.
 const GUEST_CMDLINE = virt.STAGED_CMDLINE;
@@ -194,7 +191,7 @@ pub fn spawnApp(d: *Desktop, kind: Kind) !void {
             // (no VT-x, no staged image, no free core, no slot), and failing
             // before any window exists means nothing to unwind and a clear error
             // for the caller to report.
-            const id = try virt.bootStaged(GUEST_RAM_BYTES, GUEST_CMDLINE);
+            const id = try virt.bootStaged(virt.stagedRamBytes(), GUEST_CMDLINE);
             errdefer virt.windowClosed(id); // no window will own it — give it back
             try spawnVmWindow(d, id);
         },

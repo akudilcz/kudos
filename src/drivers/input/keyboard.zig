@@ -32,6 +32,12 @@ pub const KEY_DOWN: u8 = keymap.KEY_DOWN;
 pub const KeyEvent = struct {
     ascii: u8, // 0 if not a printable/edit key
     key: Key, // .none unless this press is a named non-character key (e.g. F12)
+    /// Linux key code for this key (keymap.hidToEvdev), 0 for a usage Linux does
+    /// not name, and whether this is the press or the release. The desktop's own
+    /// consumers act on `ascii` and see only presses; a guest needs both edges
+    /// and the keys that type no character, so those travel here.
+    evdev: u16 = 0,
+    down: bool = true,
     /// TSC at receipt, stamped by `inject` (producers leave it 0). The desktop's
     /// sampling pass feeds it to the PERF-008 input-latency latch
     /// (iaccel.input_latch) so receipt → present is measurable per keystroke.
@@ -42,6 +48,15 @@ pub const KeyEvent = struct {
 /// pure, host-tested keymap — the single source of truth the USB HID path
 /// (src/drivers/usb/xhci.zig) shares.
 pub const hidToAscii = keymap.hidToAscii;
+
+/// Translate a USB HID keyboard usage code to its Linux key code. Owned by the
+/// same pure keymap, for the guest input path.
+pub const hidToEvdev = keymap.hidToEvdev;
+
+/// The first modifier usage: a HID report carries modifiers as a bitmap whose
+/// bit i is usage MOD_USAGE_FIRST + i, so a producer diffing that bitmap needs
+/// the range's base to name the key that changed.
+pub const MOD_USAGE_FIRST = keymap.MOD_USAGE_FIRST;
 
 // The event queue: the USB HID poll (and remote injection) are the producers,
 // the desktop poll loop the sole consumer. The SPSC `Ring` owns the

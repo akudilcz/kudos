@@ -268,37 +268,37 @@ test "decodeMouse: a full-length 16-bit report keeps its own layout (no spurious
 test "decodeKeyboard: press/release diff is edge-triggered" {
     var last: [6]u8 = .{0} ** 6;
     // Press 'a' (0x04): fires once.
-    const r1 = decodeKeyboard(&[_]u8{ 0, 0, 0x04, 0, 0, 0, 0, 0 }, last).?;
+    const r1 = decodeKeyboard(&[_]u8{ 0, 0, 0x04, 0, 0, 0, 0, 0 }, last, 0).?;
     try expectEqual(@as(usize, 1), r1.count);
     try expectEqual(@as(u8, 0x04), r1.keys[0]);
     last = r1.next_last;
     // Held 'a' + new 'b' (0x05): only 'b' fires.
-    const r2 = decodeKeyboard(&[_]u8{ 0, 0, 0x04, 0x05, 0, 0, 0, 0 }, last).?;
+    const r2 = decodeKeyboard(&[_]u8{ 0, 0, 0x04, 0x05, 0, 0, 0, 0 }, last, 0).?;
     try expectEqual(@as(usize, 1), r2.count);
     try expectEqual(@as(u8, 0x05), r2.keys[0]);
     last = r2.next_last;
     // Release all: nothing fires; next 'a' press fires again.
-    const r3 = decodeKeyboard(&[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 }, last).?;
+    const r3 = decodeKeyboard(&[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 }, last, 0).?;
     try expectEqual(@as(usize, 0), r3.count);
     last = r3.next_last;
-    const r4 = decodeKeyboard(&[_]u8{ 0, 0, 0x04, 0, 0, 0, 0, 0 }, last).?;
+    const r4 = decodeKeyboard(&[_]u8{ 0, 0, 0x04, 0, 0, 0, 0, 0 }, last, 0).?;
     try expectEqual(@as(usize, 1), r4.count);
 }
 
 test "decodeKeyboard: shift bits and 6-key rollover" {
     const last: [6]u8 = .{0} ** 6;
     // Right shift (0x20) held, all six slots full: six presses, shift set.
-    const r = decodeKeyboard(&[_]u8{ 0x20, 0, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09 }, last).?;
+    const r = decodeKeyboard(&[_]u8{ 0x20, 0, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09 }, last, 0).?;
     try expectEqual(true, r.shift);
     try expectEqual(@as(usize, 6), r.count);
     // Phantom-state rollover report (all slots ErrorRollOver 0x01): the 0x01
     // usages are edge-triggered like any other — fire once, then never while held.
-    const ro = decodeKeyboard(&[_]u8{ 0, 0, 1, 1, 1, 1, 1, 1 }, last).?;
+    const ro = decodeKeyboard(&[_]u8{ 0, 0, 1, 1, 1, 1, 1, 1 }, last, 0).?;
     try expectEqual(@as(usize, 6), ro.count);
-    const ro2 = decodeKeyboard(&[_]u8{ 0, 0, 1, 1, 1, 1, 1, 1 }, ro.next_last).?;
+    const ro2 = decodeKeyboard(&[_]u8{ 0, 0, 1, 1, 1, 1, 1, 1 }, ro.next_last, 0).?;
     try expectEqual(@as(usize, 0), ro2.count);
     // Short report: null, never a partial parse.
-    try expectEqual(@as(?KeyPresses, null), decodeKeyboard(&[_]u8{ 0, 0, 4 }, last));
+    try expectEqual(@as(?KeyPresses, null), decodeKeyboard(&[_]u8{ 0, 0, 4 }, last, 0));
 }
 
 test "decodeTablet: scale, clamp, and the 0x8000 wrap guard" {
@@ -427,4 +427,36 @@ test "protocol must match layout: a boot-format frame under the G Pro report-lay
     const boot_frame = [_]u8{ 0, 5, 0xFB, 0, 0, 0, 0, 0 };
     const bad = decodeMouse(&boot_frame, layout).?;
     try expect(!(bad.dx == 5 and bad.dy == -5));
+}
+
+test "decodeKeyboard: a key let go is reported, so nothing stays held forever" {
+    // The press diff alone cannot express this: a guest told a key went down and
+    // never told it came up holds it down for good.
+    const first = decodeKeyboard(&[_]u8{ 0, 0, 0x04, 0x05, 0, 0, 0, 0 }, .{0} ** 6, 0).?;
+    try expectEqual(@as(usize, 2), first.count);
+    try expectEqual(@as(usize, 0), first.released_count);
+
+    // 'a' let go, 'b' still held, 'c' newly pressed: one of each, no double
+    // counting of the held key.
+    const next = decodeKeyboard(&[_]u8{ 0, 0, 0x05, 0x06, 0, 0, 0, 0 }, first.next_last, 0).?;
+    try expectEqual(@as(usize, 1), next.count);
+    try expectEqual(@as(u8, 0x06), next.keys[0]);
+    try expectEqual(@as(usize, 1), next.released_count);
+    try expectEqual(@as(u8, 0x04), next.released[0]);
+
+    // Everything up: both remaining keys release together.
+    const up = decodeKeyboard(&[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 }, next.next_last, 0).?;
+    try expectEqual(@as(usize, 0), up.count);
+    try expectEqual(@as(usize, 2), up.released_count);
+}
+
+test "decodeKeyboard: the modifier bitmap crosses intact, with its predecessor" {
+    // Modifiers never appear in the key array, so a caller can only diff them
+    // from the bitmap — and only if it is given both sides of the diff.
+    const r = decodeKeyboard(&[_]u8{ 0x02, 0, 0, 0, 0, 0, 0, 0 }, .{0} ** 6, 0).?;
+    try expectEqual(@as(u8, 0x02), r.mods); // left shift down
+    try expectEqual(@as(u8, 0x00), r.last_mods);
+    const r2 = decodeKeyboard(&[_]u8{ 0x00, 0, 0, 0, 0, 0, 0, 0 }, r.next_last, r.mods).?;
+    try expectEqual(@as(u8, 0x00), r2.mods); // and back up
+    try expectEqual(@as(u8, 0x02), r2.last_mods);
 }

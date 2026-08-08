@@ -38,6 +38,36 @@ pub fn onKey(d: *Desktop, ascii: u8) void {
     }
 }
 
+/// Give the focused VM window's guest the pointer while it is over that
+/// window's content, in the guest's own coordinates. Absolute, because the
+/// window shows the guest's whole screen: where the pointer sits inside the
+/// content IS where it sits on the guest's display, and a relative delta would
+/// need a second cursor to accumulate against.
+fn forwardPointerToGuest(d: *Desktop, buttons: u8) void {
+    const a = d.focusedApp() orelse return;
+    if (a != .vm) return;
+    const win = a.window();
+    const cw = win.contentW();
+    const ch = win.contentH();
+    if (cw == 0 or ch == 0) return;
+    const rel_x = d.cursor_x - win.contentX();
+    const rel_y = d.cursor_y - win.contentY();
+    if (rel_x < 0 or rel_y < 0) return;
+    if (rel_x >= @as(i32, @intCast(cw)) or rel_y >= @as(i32, @intCast(ch))) return;
+    a.vm.onPointer(@intCast(rel_x), @intCast(rel_y), @intCast(cw), @intCast(ch), buttons);
+}
+
+/// Offer one key EDGE — press or release, by Linux key code — to the focused
+/// app. Returns whether it was taken. This runs BESIDE the ascii path, not
+/// instead of it: a VM window feeds its guest both, because a guest running a
+/// shell reads its serial port and one running a compositor reads evdev, and
+/// the window cannot know which it has.
+pub fn onRawKey(d: *Desktop, code: u16, down: bool) bool {
+    if (code == 0) return false; // a usage Linux does not name
+    const a = d.focusedApp() orelse return false;
+    return a.onRawKey(code, down);
+}
+
 /// Handle one mouse sample: update the cursor position (absolute tablet wins
 /// over relative motion once seen — see `have_abs_pointer`), forward it to the
 /// compositor, then carry out any window action the click requested (the
@@ -105,6 +135,14 @@ pub fn onMouse(d: *Desktop, ev: imouse.MouseEvent) bool {
             return true;
         }
     }
+    // A VM window's guest owns the pointer while it is over that window's
+    // content: a browser inside the guest needs to know where the pointer is,
+    // and the desktop has nothing to do with a position inside someone else's
+    // screen. The window chrome is NOT forwarded — the title bar, the controls
+    // and the resize grips stay the desktop's, so a guest can never take the
+    // pointer hostage.
+    forwardPointerToGuest(d, ev.buttons);
+
     var changed = d.wm.onMouse(d.cursor_x, d.cursor_y, ev.buttons);
     // The compositor records at most one window action per click; carry it out
     // here (the desktop owns the apps + allocator) and clear it. Drained right

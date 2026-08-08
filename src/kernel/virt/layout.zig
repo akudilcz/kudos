@@ -95,6 +95,15 @@ pub fn cmdlineArg(comptime slot: VirtioSlot) []const u8 {
     return std.fmt.comptimePrint("virtio_mmio.device=4K@0x{x}:{d}", .{ slot.gpa(), slot.irq() });
 }
 
+/// Every slot the machine model instantiates, as the discovery arguments a guest
+/// needs to find them. One home for "which devices a kudos guest has": the
+/// staged guest's command line and every catalog entry's share this, so a device
+/// added to the machine model cannot be one the guest is never told about.
+pub const WIRED_DEVICES = cmdlineArg(.gpu) ++ " " ++
+    cmdlineArg(.keyboard) ++ " " ++
+    cmdlineArg(.tablet) ++ " " ++
+    cmdlineArg(.net);
+
 /// Default guest RAM if the caller does not specify: 128 MiB, a whole number of
 /// 2 MiB pages so the EPT builder uses large pages throughout.
 pub const DEFAULT_RAM_BYTES: u64 = 128 * 1024 * 1024;

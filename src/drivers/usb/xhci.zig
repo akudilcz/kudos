@@ -1085,7 +1085,8 @@ const Hid = struct {
     dci: u32, // device context index of the interrupt-IN endpoint
     report: usize, // DMA buffer the endpoint writes reports into
     mps: u32, // endpoint max packet size
-    last_keys: [6]u8 = .{0} ** 6, // previous keyboard report, for press detection
+    last_keys: [6]u8 = .{0} ** 6, // previous keyboard report, for the press/release diff
+    last_mods: u8 = 0, // previous modifier bitmap, for the modifier edges
     layout: hid_report.MouseLayout = .{}, // mouse report field offsets (boot layout default)
     // Per-endpoint recovery state (a composite device drives two endpoints — a
     // keyboard and a mouse — and each falls silent, halts, and self-heals on its
@@ -2677,30 +2678,58 @@ fn snapshotReport(report: usize) [HID_REPORT_BUF]u8 {
     return buf;
 }
 
-/// Translate one HID keyboard boot report into key-press events. The 6-slot
-/// press diff is hid_report.decodeKeyboard (pure, host-tested); only the
-/// newly-pressed keys inject: F12 as a named key, everything else via
-/// hidToAscii under the current shift state.
+/// Translate one HID keyboard boot report into key events. The 6-slot diff is
+/// hid_report.decodeKeyboard (pure, host-tested); this turns each edge it found
+/// into an injection: F12 and friends as named keys, characters via hidToAscii
+/// under the current shift state, and EVERY edge — including the releases and
+/// the modifiers, which type nothing — as a Linux key code for whoever needs
+/// the whole keyboard rather than the characters it produces (a guest's input
+/// stack does).
 fn processKeyboard(hid: *Hid) void {
     cnt_kbd_reports.inc();
     const rep = snapshotReport(hid.report);
-    const kp = hid_report.decodeKeyboard(rep[0..], hid.last_keys) orelse return;
+    const kp = hid_report.decodeKeyboard(rep[0..], hid.last_keys, hid.last_mods) orelse return;
     for (kp.keys[0..kp.count]) |u| {
+        const evdev = keyboard.hidToEvdev(u);
         // F1 (HID usage 0x3A) / F10 (0x43) / F12 (0x45): named keys with no ASCII,
         // injected bypassing the ascii!=0 gate. The last_keys press-diff already
         // makes these edge-triggered.
         if (u == 0x3A) {
-            keyboard.inject(.{ .ascii = 0, .key = .f1 });
+            keyboard.inject(.{ .ascii = 0, .key = .f1, .evdev = evdev });
         } else if (u == 0x43) {
-            keyboard.inject(.{ .ascii = 0, .key = .f10 });
+            keyboard.inject(.{ .ascii = 0, .key = .f10, .evdev = evdev });
         } else if (u == 0x45) {
-            keyboard.inject(.{ .ascii = 0, .key = .f12 });
+            keyboard.inject(.{ .ascii = 0, .key = .f12, .evdev = evdev });
         } else {
             const ascii = keyboard.hidToAscii(u, kp.shift);
-            if (ascii != 0) keyboard.inject(.{ .ascii = ascii, .key = .none });
+            // A key that types no character still went down: it carries no ascii
+            // and no name, and reaches only the consumers that read key codes.
+            keyboard.inject(.{ .ascii = ascii, .key = .none, .evdev = evdev });
         }
     }
-    hid.last_keys = kp.next_last; // remember this report for the next press-diff
+    // Releases type nothing by definition, so they carry no ascii at all.
+    for (kp.released[0..kp.released_count]) |u| {
+        keyboard.inject(.{ .ascii = 0, .key = .none, .evdev = keyboard.hidToEvdev(u), .down = false });
+    }
+    // Modifiers live in the report's bitmap, never in its key array: each bit
+    // that changed is one key edge of its own.
+    const changed = kp.mods ^ kp.last_mods;
+    var bit: u3 = 0;
+    while (true) : (bit += 1) {
+        const mask = @as(u8, 1) << bit;
+        if (changed & mask != 0) {
+            const usage: u8 = keyboard.MOD_USAGE_FIRST + @as(u8, bit);
+            keyboard.inject(.{
+                .ascii = 0,
+                .key = .none,
+                .evdev = keyboard.hidToEvdev(usage),
+                .down = kp.mods & mask != 0,
+            });
+        }
+        if (bit == 7) break;
+    }
+    hid.last_keys = kp.next_last; // remember this report for the next diff
+    hid.last_mods = kp.mods;
 }
 
 /// Relative mouse: boot [buttons, dx, dy] by default, or wherever the report

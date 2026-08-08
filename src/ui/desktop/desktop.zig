@@ -203,6 +203,10 @@ pub const Desktop = struct {
     // ── input routing (input.zig) ────────────────────────────────────────────
 
     /// Route one keystroke to the focused app.
+    pub fn onRawKey(self: *Desktop, code: u16, down: bool) bool {
+        return input.onRawKey(self, code, down);
+    }
+
     pub fn onKey(self: *Desktop, ascii: u8) void {
         input.onKey(self, ascii);
     }

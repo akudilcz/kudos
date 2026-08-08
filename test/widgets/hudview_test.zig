@@ -17,8 +17,11 @@ const qemu: rects.Rect = .{ .x = 0, .y = 0, .w = 1920, .h = 1080 };
 const tiny: rects.Rect = .{ .x = 0, .y = 0, .w = 1024, .h = 600 };
 
 /// A machine with enough of everything that every band has something to ask for.
+/// Its matrix is full, because that is the page the type step is chosen for: a
+/// layout checked only against a small machine is a layout checked against a
+/// page kudos' own hardware never draws.
 fn machine(counters: usize) hudview.Snapshot {
-    var s = hudview.Snapshot{ .cores_online = 8, .mem_total = 64 << 30, .mem_used = 18 << 30 };
+    var s = hudview.Snapshot{ .cores_online = hudview.MAX_CORES, .mem_total = 64 << 30, .mem_used = 18 << 30 };
     var i: usize = 0;
     while (i < counters) : (i += 1) {
         s.counters[i] = .{ .group = .usb, .name = "ev.consumed", .value = 1 };
@@ -77,11 +80,12 @@ test "the memory column is the widest: it carries the most" {
 
 test "the page is set at the largest type step the screen can hold it at" {
     try typeface.init(std.heap.page_allocator);
-    try std.testing.expectEqual(hudview.Density.comfortable, hudview.scaleFor(qemu).density);
+    // A full page is a full core matrix, and only a desk-wide panel has the room
+    // for one set comfortably.
     try std.testing.expectEqual(hudview.Density.comfortable, hudview.scaleFor(wide).density);
-    // A laptop panel is short of the room a comfortable page needs, and a screen
-    // that is wide but shallow is short of it too: the page steps down for both
-    // rather than spilling off either.
+    // A 1080p panel, a laptop panel, and a screen that is wide but shallow are
+    // all short of that room: the page steps down rather than spilling off.
+    try std.testing.expectEqual(hudview.Density.compact, hudview.scaleFor(qemu).density);
     try std.testing.expectEqual(hudview.Density.compact, hudview.scaleFor(laptop).density);
     try std.testing.expectEqual(hudview.Density.compact, hudview.scaleFor(.{ .x = 0, .y = 0, .w = 3440, .h = 768 }).density);
 }
@@ -138,7 +142,12 @@ test "the counter wall grows with its rows, and the panels keep theirs" {
 
 test "on a page too short for everything, the wall gives before the panels do" {
     try typeface.init(std.heap.page_allocator);
-    const s = machine(40);
+    // A small machine on a small screen: its panels fit and its 40 counters do
+    // not, which is the case that shows what the page gives up first. (A full
+    // matrix on this screen is short of room for the panels themselves — what
+    // the page does THERE is asserted in the shot fixture.)
+    var s = machine(40);
+    s.cores_online = 8;
     const sc = hudview.scaleFor(tiny);
     const d = hudview.demandOf(&s, sc);
     const l = hudview.layout(tiny, sc, d);

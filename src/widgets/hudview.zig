@@ -228,7 +228,10 @@ pub const Scale = struct {
 /// A full page of content, in the units the page is made of: the type step is
 /// chosen against THIS rather than against the machine in front of it, so the
 /// page does not resize when a counter appears or a core goes idle.
-pub const REF_CORE_ROWS: usize = 4;
+/// Rows of core tiles a full page holds: the matrix at the display's ceiling.
+/// A page whose type step was chosen against half a matrix has nothing left for
+/// the traces when a full one arrives, and kudos' own target fills it.
+pub const REF_CORE_ROWS: usize = gridFor(snap.MAX_CORES).rows;
 /// Counter rows a wall column must hold without hiding one.
 pub const REF_WALL_ROWS: usize = 12;
 /// Characters a wall column must hold: the longest counter name the kernel
@@ -623,15 +626,25 @@ fn fillSilicon(rows: *panel.Rows, sc: Scale, s: *const Snapshot) void {
     rows.drop(grid.cores - placed);
 }
 
-/// How the core matrix divides: two columns while the tiles can carry the task
-/// label in its aligned column, three while a label started at the core id
-/// still fits, four only past twelve cores — where the count itself is the
-/// story and `ps` carries the names. One home for the division, because the
-/// panel draws it and the page's demand is measured from it.
-pub fn coreGrid(s: *const Snapshot) struct { cores: usize, cols: usize, rows: usize } {
-    const n = @min(@as(usize, s.cores_online), MAX_CORES);
+/// How a matrix of core tiles is divided: the cores it places, the columns
+/// they sit in and the rows that takes.
+pub const CoreGrid = struct { cores: usize, cols: usize, rows: usize };
+
+/// The matrix a machine with `n` cores online divides into: two columns while
+/// the tiles can carry the task label in its aligned column, three while a
+/// label started at the core id still fits, four only past twelve cores — where
+/// the count itself is the story and `ps` carries the names. One home for the
+/// division, because the panel draws it, the page's demand is measured from it,
+/// and the type step is chosen against it.
+pub fn gridFor(n_online: usize) CoreGrid {
+    const n = @min(n_online, MAX_CORES);
     const cols: usize = if (n <= 8) 2 else if (n <= 12) 3 else 4;
     return .{ .cores = n, .cols = cols, .rows = (n + cols - 1) / cols };
+}
+
+/// The matrix this machine divides into.
+pub fn coreGrid(s: *const Snapshot) CoreGrid {
+    return gridFor(@as(usize, s.cores_online));
 }
 
 fn drawCore(rows: *panel.Rows, sc: Scale, r: rects.Rect, c: *const CoreLine, i: usize) void {

@@ -1,8 +1,9 @@
 //! A picture of the heads-up display, rendered on the host.
 //!
 //! The display's view is a pure function of a snapshot, so it can be drawn without
-//! a machine to read: this fabricates a plausible one — a busy core, a heap that
-//! has been leaking for half a minute, a HID fault counter that has ticked — and
+//! a machine to read: this fabricates a plausible one for each screen kudos is put
+//! on — a busy core, a heap that has been leaking for half a minute, a HID fault
+//! counter that has ticked, and the core matrix that screen's machine brings — and
 //! renders it through the REAL painter, lowered into the software rasteriser. The
 //! result is a PPM: the layout can be reviewed, and a regression seen, on a laptop
 //! with no GPU, no QEMU and no kudos running.
@@ -22,18 +23,28 @@ const rects = @import("rects");
 const typeface = @import("typeface");
 const hudview = @import("hudview");
 
-/// The shapes the display is taken at. The first is the real target's panel; the
-/// second is the laptop a `-Dsoft-display` build runs on, which is the screen the
-/// page has to set itself a step smaller for. Both are rendered, because "it fits
-/// at 1080p" has never been the same claim as "it fits".
-const Shape = struct { w: u32, h: u32, path: []const u8 };
+/// The pages the display is taken as: a screen, and the machine that drives it.
+/// The pairing is the claim — a full page is a page a real machine puts on the
+/// real screen it is attached to — and the core count is the half of the machine
+/// that changes the page's shape, because the core matrix is the only band that
+/// grows with the hardware. The desk machine fills the matrix to the display's
+/// ceiling; the small screen is a `-Dsoft-display` dev build, which comes with
+/// the laptop's smaller core count and is the screen the page must set itself a
+/// step smaller for.
+const Shape = struct { w: u32, h: u32, cores: u32, path: []const u8 };
 const SHAPES = [_]Shape{
-    .{ .w = 1920, .h = 1080, .path = "build/hud_shot.ppm" },
-    .{ .w = 1280, .h = 800, .path = "build/hud_shot_small.ppm" },
-    // The desk-wide panel: the only shape roomy enough for the per-core
-    // silicon rows (each with its own busy meter) and the memory ribbon.
-    .{ .w = 3440, .h = 1440, .path = "build/hud_shot_wide.ppm" },
+    .{ .w = 1920, .h = 1080, .cores = DESK_CORES, .path = "build/hud_shot.ppm" },
+    .{ .w = 1280, .h = 800, .cores = LAPTOP_CORES, .path = "build/hud_shot_small.ppm" },
+    // The desk-wide panel: the roomiest shape the desk machine is seen on, where
+    // the core tiles grow past their smallest and the memory ribbon breathes.
+    .{ .w = 3440, .h = 1440, .cores = DESK_CORES, .path = "build/hud_shot_wide.ppm" },
 };
+
+/// Cores the desk machine brings up: the display's ceiling, which is the matrix
+/// kudos' own target fills (a 32-thread desktop).
+const DESK_CORES: u32 = hudview.MAX_CORES;
+/// Cores a laptop dev build brings up — a smaller matrix on a smaller screen.
+const LAPTOP_CORES: u32 = 16;
 
 fn screenOf(sp: Shape) rects.Rect {
     return .{ .x = 0, .y = 0, .w = @floatFromInt(sp.w), .h = @floatFromInt(sp.h) };
@@ -44,9 +55,9 @@ fn screenOf(sp: Shape) rects.Rect {
 const GIB: u64 = 1024 * 1024 * 1024;
 const MIB: u64 = 1024 * 1024;
 
-fn cores(s: *hudview.Snapshot) void {
+fn cores(s: *hudview.Snapshot, n: u32) void {
     const Spec = struct { busy: u32, task: []const u8, act: []const u8, rq: u32 };
-    const specs = [_]Spec{
+    const named = [_]Spec{
         .{ .busy = 71, .task = "desktop", .act = "present", .rq = 2 },
         .{ .busy = 88, .task = "vcpu0", .act = "guest", .rq = 0 },
         .{ .busy = 12, .task = "term1", .act = "shell", .rq = 1 },
@@ -56,8 +67,18 @@ fn cores(s: *hudview.Snapshot) void {
         .{ .busy = 0, .task = "idle", .act = "", .rq = 0 },
         .{ .busy = 1, .task = "idle", .act = "", .rq = 0 },
     };
-    s.cores_online = specs.len;
-    for (specs, 0..) |sp, i| {
+    s.cores_online = n;
+    // Past the named work the machine is idle, at the small wandering occupancy
+    // an idle core actually reads at — a matrix of flat zeroes would hide a tile
+    // that failed to draw its figure.
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const sp = if (i < named.len) named[i] else Spec{
+            .busy = @intCast((i * 7) % 5),
+            .task = "idle",
+            .act = "",
+            .rq = 0,
+        };
         var line = hudview.CoreLine{ .online = true, .is_bsp = i == 0, .busy_pct = sp.busy, .runnable = sp.rq };
         line.setTask(sp.task, sp.act);
         s.cores[i] = line;
@@ -104,7 +125,7 @@ fn counters(s: *hudview.Snapshot) void {
     s.counter_count = list.len;
 }
 
-fn snapshot() hudview.Snapshot {
+fn snapshot(sp: Shape) hudview.Snapshot {
     var s = hudview.Snapshot{
         .taken_ms = 4 * 3600_000 + 17 * 60_000 + 36_000,
         .seconds_since_midnight = 14 * 3600 + 32 * 60 + 7,
@@ -137,7 +158,7 @@ fn snapshot() hudview.Snapshot {
         .guest_exits = 88401227,
     };
     @memcpy(&s.vendor, "GenuineIntel");
-    cores(&s);
+    cores(&s, sp.cores);
     counters(&s);
     return s;
 }
@@ -194,10 +215,11 @@ fn writePpm(g: *gles.Context, sp: Shape) !void {
     try w.flush();
 }
 
-test "the layout puts every band on the screen, at every shape it is shipped for" {
+test "the layout puts every band on the screen, at every page it is shipped for" {
     try typeface.init(std.heap.page_allocator);
-    const s = snapshot();
     for (SHAPES) |sp| {
+        errdefer std.debug.print("{d} cores at {d}x{d}\n", .{ sp.cores, sp.w, sp.h });
+        const s = snapshot(sp);
         const scr = screenOf(sp);
         const sc = hudview.scaleFor(scr);
         const l = hudview.layout(scr, sc, hudview.demandOf(&s, sc));
@@ -219,14 +241,17 @@ test "the layout puts every band on the screen, at every shape it is shipped for
     }
 }
 
-test "this machine's whole page fits at every shape, with nothing hidden (HUD-001)" {
+test "every whole page fits its screen, with nothing hidden (HUD-001)" {
     // The point of the type step: at 1080p and at a laptop's panel alike, the
     // panels get the room their readings need and the wall gets the room its
     // counters need. A page that had to hide a row here would be a page the type
-    // scale chose wrongly for.
+    // scale chose wrongly for — and the core matrix is the band that grows with
+    // the machine, so the type step has to be chosen for the matrix the screen's
+    // own machine brings, not for a smaller one.
     try typeface.init(std.heap.page_allocator);
-    const s = snapshot();
     for (SHAPES) |sp| {
+        errdefer std.debug.print("{d} cores at {d}x{d}\n", .{ sp.cores, sp.w, sp.h });
+        const s = snapshot(sp);
         const scr = screenOf(sp);
         const sc = hudview.scaleFor(scr);
         const d = hudview.demandOf(&s, sc);
@@ -239,14 +264,47 @@ test "this machine's whole page fits at every shape, with nothing hidden (HUD-00
     }
 }
 
+test "a page too full for its screen gives way in priority order, counting what it hid" {
+    // The pairings above are the machines kudos is put on; this is what the page
+    // does when it meets one it was not sized for — the desk machine's full
+    // matrix on the small screen, which no type step on the ladder can hold.
+    // The readings the display exists for keep their room, the traces starve,
+    // and the counter wall says how many rows it could not show. Silence is the
+    // one failure mode a diagnostic screen may not have.
+    try typeface.init(std.heap.page_allocator);
+    var over = SHAPES[1];
+    over.cores = DESK_CORES;
+    const s = snapshot(over);
+    const scr = screenOf(over);
+    const sc = hudview.scaleFor(scr);
+    const d = hudview.demandOf(&s, sc);
+    const l = hudview.layout(scr, sc, d);
+    // The panels are never traded away: the silicon, memory and IO readings are
+    // all still placed.
+    try std.testing.expect(l.silicon.h + 0.01 >= d.panels);
+    for ([_]rects.Rect{ l.silicon, l.memory, l.io }) |b| {
+        try std.testing.expect(b.bottom() <= scr.bottom() + 0.01);
+    }
+    // What gave way, gave way in order — and was counted.
+    try std.testing.expect(l.traces.h < sc.trace_min_h);
+    try std.testing.expect(l.counters.h < d.counters);
+    try std.testing.expect(hudview.hiddenBy(&s, sc, l) > 0);
+}
+
 // ── every presented datum reaches the pixels ────────────────────────────────────
+
+/// The page the probes below are rendered as: the smallest screen kudos ships
+/// for, with the machine that drives it — the cheapest of the three, and the
+/// tightest, so a datum that only reaches the pixels when there is room to
+/// spare is caught here.
+const PROBE_SHAPE = SHAPES[1];
 
 /// Render the page once and hash the raster. Two snapshots that should read
 /// differently must paint differently, or the display is not presenting the
 /// datum that changed — this is what "shall present X" means, made falsifiable
 /// without a golden image. The laptop shape keeps the ~20 renders cheap.
 fn renderHash(ta: std.mem.Allocator, s: *const hudview.Snapshot, tr: hudview.Traces, opts: hudview.Options) !u64 {
-    const sp = SHAPES[1];
+    const sp = PROBE_SHAPE;
     var dev = raster.Soft{ .alloc = ta };
     idraw.device = dev.iface();
     defer idraw.device = null;
@@ -286,7 +344,7 @@ test "every presented datum reaches the pixels: a changed value is a changed pag
     try typeface.init(ta);
     var base_tr = Traces{};
     base_tr.fill();
-    const base_s = snapshot();
+    const base_s = snapshot(PROBE_SHAPE);
     const base_o = hudview.Options{ .alarm = base_s.faults > 0, .now_ms = base_s.taken_ms + 320 };
     const base = try renderHash(ta, &base_s, base_tr.refs(), base_o);
     // Determinism first: the same inputs must repaint the same page, or every
@@ -409,7 +467,7 @@ test "every presented datum reaches the pixels: a changed value is a changed pag
     };
 
     for (probes) |pr| {
-        var s = snapshot();
+        var s = snapshot(PROBE_SHAPE);
         var tr = Traces{};
         tr.fill();
         var o = hudview.Options{ .alarm = s.faults > 0, .now_ms = s.taken_ms + 320 };
@@ -436,10 +494,12 @@ test "render the heads-up display through kgl + Soft and write a screenshot" {
 
     var traces = Traces{};
     traces.fill();
-    const s = snapshot();
     std.Io.Dir.cwd().createDirPath(std.testing.io, "build") catch {};
 
     for (SHAPES) |sp| {
+        // Each picture is of the machine that screen belongs to, so the shot of
+        // the desk panel is a shot of the matrix kudos' own target fills.
+        const s = snapshot(sp);
         var g = gles.createContext(ta, .{ .win_base = 0, .stride_px = sp.w, .off_x = 0, .off_y = 0 }) orelse
             return error.NoDevice;
         defer g.deinit();

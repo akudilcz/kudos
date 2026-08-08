@@ -55,6 +55,17 @@ pub const App = union(enum) {
         }
     }
 
+    /// Deliver one key EDGE — press or release, by Linux key code — to an app
+    /// that has a use for one. Only the VM console does: its guest runs its own
+    /// input stack, which needs the key-up an ASCII stream cannot express.
+    /// Returns whether the app took it.
+    pub fn onRawKey(self: App, code: u16, down: bool) bool {
+        return switch (self) {
+            .vm => |v| v.onRawKey(code, down),
+            else => false,
+        };
+    }
+
     /// Draw this app's content into the whole-desktop GL frame, content-locally (the
     /// caller positioned the painter's origin and scissor). Model windows are absent
     /// here on purpose: their 3D is drawn inline by the desktop (ModelView.drawInline),

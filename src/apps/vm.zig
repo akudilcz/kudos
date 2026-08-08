@@ -31,6 +31,11 @@ const FETCH_BAR_SPAN: f32 = 0.6;
 
 const MB: u64 = 1 << 20;
 
+/// Linux button codes for the pointer's buttons, in the bit order the mouse
+/// event's mask carries them: left, right, middle (BTN_LEFT/RIGHT/MIDDLE in
+/// linux/input-event-codes.h).
+const BUTTONS = [_]u16{ 0x110, 0x111, 0x112 };
+
 fn mbWhole(bytes: u64) u64 {
     return bytes / MB;
 }
@@ -52,6 +57,13 @@ pub const Vm = struct {
     /// binding, so it cannot go stale.
     core: ?u32,
     console: vmconsole.Console,
+    /// The pointer position and button mask last SENT to the guest, in the
+    /// mailbox's absolute range. The desktop samples the pointer every frame
+    /// whether or not it moved; a guest is told what changed, so these are what
+    /// "changed" is measured against.
+    ptr_x: u32 = 0,
+    ptr_y: u32 = 0,
+    ptr_buttons: u8 = 0,
     fb_tex: u32 = 0, // guest scanout texture, 0 = none
     fb_gen: u32 = 0, // ivirt generation the texture was built for
     /// Whether the guest has FLUSHED at least one real frame into the scanout.
@@ -78,6 +90,44 @@ pub const Vm = struct {
         }
         const b: u8 = if (ascii == '\n') RETURN else ascii;
         _ = ivirt.conInput(self.id, b);
+    }
+
+    /// Deliver one key edge to the guest's virtio keyboard. The guest sees the
+    /// whole keyboard here — releases, modifiers, and the keys that type no
+    /// character — which is what an input stack inside it needs and what the
+    /// serial path (onKey) structurally cannot carry.
+    ///
+    /// Both paths run for every keystroke: whether this guest reads evdev or its
+    /// serial console is the guest's business, and a window cannot know which.
+    /// A guest with no virtio-input driver never drains these, and the drop
+    /// shows in the mailbox's counter rather than as silence.
+    pub fn onRawKey(self: *Vm, code: u16, down: bool) bool {
+        return ivirt.inputPost(self.id, .{ .key = .{ .code = code, .down = down } });
+    }
+
+    /// Deliver the pointer to the guest: its position inside the window's
+    /// content, scaled into the range the guest's tablet declares, plus any
+    /// button that changed. Position is sent only when it moved and a button
+    /// only on its edge — a guest is told what changed, not re-told sixty times
+    /// a second what did not.
+    pub fn onPointer(self: *Vm, x: u32, y: u32, w: u32, h: u32, buttons: u8) void {
+        // Scale in the window's own terms: the content rect is the guest's whole
+        // screen, whatever size the user has dragged it to.
+        const ax: u32 = @intCast(@as(u64, x) * ivirt.ABS_RANGE / @max(w - 1, 1));
+        const ay: u32 = @intCast(@as(u64, y) * ivirt.ABS_RANGE / @max(h - 1, 1));
+        if (ax != self.ptr_x or ay != self.ptr_y) {
+            self.ptr_x = ax;
+            self.ptr_y = ay;
+            _ = ivirt.inputPost(self.id, .{ .motion = .{ .x = ax, .y = ay } });
+        }
+        const changed = buttons ^ self.ptr_buttons;
+        if (changed == 0) return;
+        self.ptr_buttons = buttons;
+        for (BUTTONS, 0..) |code, bit| {
+            const mask = @as(u8, 1) << @intCast(bit);
+            if (changed & mask != 0)
+                _ = ivirt.inputPost(self.id, .{ .button = .{ .code = code, .down = buttons & mask != 0 } });
+        }
     }
 
     /// Drain guest serial output into the console grid. Returns true when

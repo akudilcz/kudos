@@ -435,42 +435,65 @@ fn decodeMouseLayout(report: []const u8, layout: MouseLayout) ?MouseEvent {
     return .{ .buttons = buttons, .dx = dx, .dy = dy };
 }
 
-/// The newly-pressed keys of one keyboard boot report, diffed against the
-/// previous report. `keys[0..count]` are HID usages pressed THIS report (held
-/// keys don't repeat — edge-triggered); `next_last` is this report's keycode
-/// slots, stored by the caller for the next diff.
+/// What changed between two keyboard boot reports. `keys[0..count]` are HID
+/// usages pressed THIS report and `released[0..released_count]` those let go
+/// (held keys appear in neither — the decode is edge-triggered); `next_last` is
+/// this report's keycode slots, stored by the caller for the next diff.
+///
+/// Releases matter to anything that is not a line editor: a guest's evdev stack
+/// is told a key is down until it is told otherwise, so a press with no matching
+/// release is a key held forever. `mods`/`last_mods` carry the modifier bitmap
+/// for the same reason — modifiers never appear in the key array at all.
 pub const KeyPresses = struct {
     shift: bool,
     keys: [6]u8 = .{0} ** 6,
     count: usize = 0,
+    released: [6]u8 = .{0} ** 6,
+    released_count: usize = 0,
+    /// This report's modifier bitmap, and the previous one's: bit i is usage
+    /// 0xE0 + i, so a caller diffs them into the same press/release events.
+    mods: u8 = 0,
+    last_mods: u8 = 0,
     next_last: [6]u8 = .{0} ** 6,
 };
 
 /// Diff one HID keyboard boot report `[mods, _, k0..k5]` against the previous
-/// report's keycode slots so only newly-pressed keys fire.
+/// report's keycode slots and modifier bitmap, so each key edge fires once.
 /// Returns null for a report shorter than the 8-byte boot format.
-pub fn decodeKeyboard(report: []const u8, last_keys: [6]u8) ?KeyPresses {
+pub fn decodeKeyboard(report: []const u8, last_keys: [6]u8, last_mods: u8) ?KeyPresses {
     if (report.len < 8) return null;
     const mods = report[0];
-    var out = KeyPresses{ .shift = (mods & 0x22) != 0 }; // left|right shift → uppercase
-    var i: usize = 2;
-    while (i < 8) : (i += 1) {
-        const u = report[i];
+    var out = KeyPresses{
+        .shift = (mods & 0x22) != 0, // left|right shift → uppercase
+        .mods = mods,
+        .last_mods = last_mods,
+    };
+    for (report[2..8]) |u| {
         if (u == 0) continue;
-        var was = false;
-        for (last_keys) |lk| {
-            if (lk == u) {
-                was = true;
-                break;
-            }
-        }
-        if (!was) {
+        if (!holds(&last_keys, u)) {
             out.keys[out.count] = u;
             out.count += 1;
         }
     }
-    @memcpy(&out.next_last, report[2..8]); // remember this report for the next press-diff
+    // A usage in the previous report and not in this one was let go. The two
+    // loops are the same diff run in opposite directions.
+    for (last_keys) |u| {
+        if (u == 0) continue;
+        if (!holds(report[2..8], u)) {
+            out.released[out.released_count] = u;
+            out.released_count += 1;
+        }
+    }
+    @memcpy(&out.next_last, report[2..8]); // remember this report for the next diff
     return out;
+}
+
+/// Whether `slots` holds usage `u`.
+fn holds(slots: []const u8, u: u8) bool {
+    for (slots) |s| {
+        if (s == u) return true;
+    }
+    return false;
 }
 
 // HID absolute-pointer logical maximum (usb-tablet report descriptor Logical Max).
