@@ -35,6 +35,11 @@ const REG_QUEUE_DRIVER_LOW: u64 = 0x090;
 const REG_QUEUE_DRIVER_HIGH: u64 = 0x094;
 const REG_QUEUE_DEVICE_LOW: u64 = 0x0a0;
 const REG_QUEUE_DEVICE_HIGH: u64 = 0x0a4;
+const REG_SHM_SEL: u64 = 0x0ac;
+const REG_SHM_LEN_LOW: u64 = 0x0b0;
+const REG_SHM_LEN_HIGH: u64 = 0x0b4;
+const REG_SHM_BASE_LOW: u64 = 0x0b8;
+const REG_SHM_BASE_HIGH: u64 = 0x0bc;
 const REG_CONFIG_GENERATION: u64 = 0x0fc;
 const REG_CONFIG: u64 = 0x100;
 
@@ -48,6 +53,19 @@ const VENDOR_ID: u32 = 0x4b445653;
 const QUEUE_NUM_MAX: u32 = 256;
 /// VIRTIO_F_VERSION_1, feature bit 32 (§6): "this device is a virtio 1 device".
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;
+
+/// SHMLen for a shared-memory region that does not exist (§4.2.2.2): all ones,
+/// in BOTH halves, because the driver assembles the two 32-bit reads into one
+/// 64-bit length and tests it against ~0.
+///
+/// kudos exposes no shared-memory regions: the 2D scanout path copies through
+/// virtqueues and never maps host memory into the guest. That makes this the
+/// one value the transport must state rather than leave to the unmapped-reads-
+/// as-zero rule, because zero does not mean "absent" — it describes a region
+/// that EXISTS at address zero with zero length. A driver told that reserves
+/// it, fails, and aborts its probe: it is how virtio-gpu refuses to bind while
+/// virtio-net and virtio-input, which never ask for a region, bind fine.
+const SHM_LEN_ABSENT: u32 = 0xffff_ffff;
 
 // InterruptStatus bits (§4.2.2).
 pub const INT_USED_RING: u32 = 1 << 0;
@@ -110,8 +128,10 @@ pub const Mmio = struct {
     /// device base). Registers honor only 32-bit access (§4.2.2.2 — the driver
     /// MUST use u32 there; anything else reads 0); config space is byte-granular
     /// (§4.2.2.2 allows 8/16/32-bit config access, and Linux reads sub-word
-    /// config fields with readb/readw). Unmapped offsets read 0 — a probe of an
-    /// absent register is harmless.
+    /// config fields with readb/readw). Unmapped offsets read 0, which is
+    /// harmless only where zero and "absent" mean the same thing to a driver —
+    /// SHMLen is the register where they do not, and it is answered explicitly
+    /// above rather than left to the default.
     pub fn read(self: *Mmio, off: u64, size: u8) u32 {
         if (off >= REG_CONFIG) return self.configRead(off - REG_CONFIG, size);
         if (size != 4) return 0;
@@ -126,6 +146,11 @@ pub const Mmio = struct {
             REG_INTERRUPT_STATUS => self.int_status,
             REG_STATUS => self.status,
             REG_CONFIG_GENERATION => self.config_generation,
+            REG_SHM_LEN_LOW, REG_SHM_LEN_HIGH => SHM_LEN_ABSENT,
+            // Unreachable in practice: a driver told the length is all-ones
+            // stops before reading the base. Answered anyway, so the register
+            // block is wholly mapped rather than mapped where it was noticed.
+            REG_SHM_BASE_LOW, REG_SHM_BASE_HIGH => 0,
             else => 0,
         };
     }
@@ -142,6 +167,10 @@ pub const Mmio = struct {
         }
         if (size != 4) return;
         switch (off) {
+            // The shared-memory region selector. Ignored deliberately: with no
+            // region to select, every SHMLen read answers "absent" whatever was
+            // selected, so remembering the selection would change nothing.
+            REG_SHM_SEL => {},
             REG_DEVICE_FEATURES_SEL => self.device_features_sel = val,
             REG_DRIVER_FEATURES => setFeatureBank(&self.driver_features, self.driver_features_sel, val),
             REG_DRIVER_FEATURES_SEL => self.driver_features_sel = val,

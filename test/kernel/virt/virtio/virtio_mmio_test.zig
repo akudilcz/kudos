@@ -34,6 +34,9 @@ const QUEUE_DRIVER_LOW: u64 = 0x090;
 const QUEUE_DRIVER_HIGH: u64 = 0x094;
 const QUEUE_DEVICE_LOW: u64 = 0x0a0;
 const QUEUE_DEVICE_HIGH: u64 = 0x0a4;
+const SHM_SEL: u64 = 0x0ac;
+const SHM_LEN_LOW: u64 = 0x0b0;
+const SHM_LEN_HIGH: u64 = 0x0b4;
 const CONFIG_GENERATION: u64 = 0x0fc;
 const CONFIG: u64 = 0x100;
 
@@ -289,6 +292,21 @@ test "unmapped registers read 0 and ignore writes" {
     try expectEqual(@as(u32, 0), m.read(0x0c8, 4));
     m.write(0x0c8, 4, 0xDEAD_BEEF); // must not disturb anything
     try expectEqual(@as(u32, 0x74726976), m.read(MAGIC, 4));
+}
+
+// A transport that answers 0 here tells the driver a shared-memory region
+// EXISTS, at address zero with zero length. Linux's virtio-gpu is the driver
+// that asks: it reserves what it was told about, the reservation fails, and the
+// probe aborts — so the guest gets no DRM device and no scanout, while every
+// device whose driver never asks binds normally and hides the fault.
+test "a shared-memory region that does not exist reads back as all ones" {
+    var f = Fixture{};
+    var m = f.device();
+    for ([_]u32{ 0, 1, 7 }) |region| {
+        m.write(SHM_SEL, 4, region);
+        try expectEqual(@as(u32, 0xffff_ffff), m.read(SHM_LEN_LOW, 4));
+        try expectEqual(@as(u32, 0xffff_ffff), m.read(SHM_LEN_HIGH, 4));
+    }
 }
 
 test "config space honors byte and word access widths" {
