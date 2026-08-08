@@ -573,6 +573,9 @@ physical network.
 **VIRT-033.** The Kudos system shall discard frames a guest transmits whose
 source is not that guest's link-layer address (VIRT-027).
 
+**VIRT-034.** The Kudos system shall present each guest the floating-point and
+vector register values it last held, on every resumption of that guest.
+
 ## Agent
 
 **AGT-001.** The Kudos system shall provide an AI agent, available on demand,

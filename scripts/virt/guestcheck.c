@@ -245,6 +245,164 @@ static int jit_contract(int rounds)
  * would prove almost nothing; a few hundred costs milliseconds. */
 #define JIT_ROUNDS 256
 
+/* How many guaranteed virtual-machine exits the vector-state contract takes.
+ * CPUID exits unconditionally under VMX, so this is an exact count of exits
+ * rather than a hopeful one, and it is large enough that ordinary timer and
+ * device interrupts land inside the window too. */
+#define EXIT_ROUNDS 200000
+
+/* The number of vector registers the contract checks. Eight is enough to catch
+ * a hypervisor that loses extended state while keeping the assembly below
+ * short enough to read in one go. */
+#define VEC_REGS 8
+/* Widths of the two register files the contract can test. SSE's 128-bit XMM
+ * exists on every x86-64 and is saved by the basic FXSAVE area; AVX's 256-bit
+ * YMM exists only where XSAVE does and is saved separately. They are different
+ * mechanisms in the hypervisor, so a machine offering both is tested twice —
+ * and a machine offering only SSE is still tested, which is the case that
+ * matters, because SSE is what every libc's memcpy uses. */
+#define XMM_BYTES 16
+#define YMM_BYTES 32
+
+/* Does the machine give back the registers it interrupted?
+ *
+ * A hypervisor must save the guest's extended processor state on every exit
+ * and restore it on entry. When it does not — a stale XSAVE area, a save that
+ * misses the upper halves the guest enabled through XCR0, a host that runs its
+ * own vector code in between — the guest's registers change without the guest
+ * touching them.
+ *
+ * That failure is invisible until it is fatal, and it never names itself.
+ * Every libc's memcpy, strlen and hash routines keep pointers and lengths in
+ * these registers; a corrupted one becomes a wrong address, and the process
+ * dies dereferencing it inside whichever library happened to run first. It
+ * reads exactly like a null-pointer bug in that library, which is why it costs
+ * days: the evidence names the victim and never the cause.
+ *
+ * Executing a feature is a weaker promise than preserving it, so this is a
+ * separate contract from the CPUID table above: every instruction there can
+ * run correctly on a machine that still loses the register a moment later.
+ */
+static unsigned char vec_written[VEC_REGS * YMM_BYTES] __attribute__((aligned(YMM_BYTES)));
+static unsigned char vec_read_back[VEC_REGS * YMM_BYTES] __attribute__((aligned(YMM_BYTES)));
+
+/* Compare what came back with what went in, naming the first register and byte
+ * that differs. `width` says which register file was tested, so the report
+ * names xmm3 or ymm3 rather than an offset the reader has to divide. */
+static int vec_verify(const char *file, size_t width, int rounds)
+{
+    size_t i;
+
+    for (i = 0; i < VEC_REGS * width; i++) {
+        if (vec_read_back[i] != vec_written[i]) {
+            printf("guestcheck: BROKEN %s%zu byte %zu became 0x%02x, was 0x%02x,"
+                   " across %d vm exits — the hypervisor loses vector state\n",
+                   file, i / width, i % width, vec_read_back[i], vec_written[i], rounds);
+            return 0;
+        }
+    }
+    printf("guestcheck: PASS %s state intact across %d vm exits\n", file, rounds);
+    return 1;
+}
+
+/* Fill the pattern buffer and clear the read-back buffer. A pattern with no
+ * repeating byte and no zeroes, so a register that is zeroed, duplicated from
+ * its neighbour, or half-restored each reads as a different failure rather
+ * than all of them reading as "not the pattern". */
+static void vec_arm(size_t width)
+{
+    size_t i;
+
+    for (i = 0; i < VEC_REGS * width; i++)
+        vec_written[i] = (unsigned char)(i * 7 + 13);
+    memset(vec_read_back, 0, VEC_REGS * width);
+}
+
+/* SSE: the 128-bit registers every x86-64 has, saved by the basic FXSAVE area.
+ * This is the case that matters on a machine with no XSAVE, because it is
+ * still the state every memcpy in the guest depends on. */
+static int sse_state_survives_exits(int rounds)
+{
+    vec_arm(XMM_BYTES);
+
+    /* One asm block from load to store: split into three, the compiler is free
+     * to spill these registers to the stack and reload them, which would
+     * restore the pattern itself and pass a machine that had lost it. */
+    __asm__ volatile(
+        "movdqa    0x00(%[in]), %%xmm0\n\t"
+        "movdqa    0x10(%[in]), %%xmm1\n\t"
+        "movdqa    0x20(%[in]), %%xmm2\n\t"
+        "movdqa    0x30(%[in]), %%xmm3\n\t"
+        "movdqa    0x40(%[in]), %%xmm4\n\t"
+        "movdqa    0x50(%[in]), %%xmm5\n\t"
+        "movdqa    0x60(%[in]), %%xmm6\n\t"
+        "movdqa    0x70(%[in]), %%xmm7\n\t"
+        /* CPUID overwrites EBX, which is call-saved and may hold one of the
+         * pointers below: keep it across the whole loop rather than per round. */
+        "pushq     %%rbx\n\t"
+        "movl      %[n], %%esi\n\t"
+        "1:\n\t"
+        "xorl      %%eax, %%eax\n\t"
+        "cpuid\n\t"
+        "decl      %%esi\n\t"
+        "jnz       1b\n\t"
+        "popq      %%rbx\n\t"
+        "movdqa    %%xmm0, 0x00(%[out])\n\t"
+        "movdqa    %%xmm1, 0x10(%[out])\n\t"
+        "movdqa    %%xmm2, 0x20(%[out])\n\t"
+        "movdqa    %%xmm3, 0x30(%[out])\n\t"
+        "movdqa    %%xmm4, 0x40(%[out])\n\t"
+        "movdqa    %%xmm5, 0x50(%[out])\n\t"
+        "movdqa    %%xmm6, 0x60(%[out])\n\t"
+        "movdqa    %%xmm7, 0x70(%[out])\n\t"
+        :
+        : [in] "r"(vec_written), [out] "r"(vec_read_back), [n] "r"(rounds)
+        : "rax", "rcx", "rdx", "rsi", "memory",
+          "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7");
+
+    return vec_verify("xmm", XMM_BYTES, rounds);
+}
+
+/* AVX: the 256-bit registers, whose upper halves live in the XSAVE area rather
+ * than the FXSAVE one — a separate mechanism, so a hypervisor can keep SSE
+ * perfectly and still lose these. */
+static int avx_state_survives_exits(int rounds)
+{
+    vec_arm(YMM_BYTES);
+
+    __asm__ volatile(
+        "vmovdqa   0x00(%[in]), %%ymm0\n\t"
+        "vmovdqa   0x20(%[in]), %%ymm1\n\t"
+        "vmovdqa   0x40(%[in]), %%ymm2\n\t"
+        "vmovdqa   0x60(%[in]), %%ymm3\n\t"
+        "vmovdqa   0x80(%[in]), %%ymm4\n\t"
+        "vmovdqa   0xa0(%[in]), %%ymm5\n\t"
+        "vmovdqa   0xc0(%[in]), %%ymm6\n\t"
+        "vmovdqa   0xe0(%[in]), %%ymm7\n\t"
+        "pushq     %%rbx\n\t"
+        "movl      %[n], %%esi\n\t"
+        "1:\n\t"
+        "xorl      %%eax, %%eax\n\t"
+        "cpuid\n\t"
+        "decl      %%esi\n\t"
+        "jnz       1b\n\t"
+        "popq      %%rbx\n\t"
+        "vmovdqa   %%ymm0, 0x00(%[out])\n\t"
+        "vmovdqa   %%ymm1, 0x20(%[out])\n\t"
+        "vmovdqa   %%ymm2, 0x40(%[out])\n\t"
+        "vmovdqa   %%ymm3, 0x60(%[out])\n\t"
+        "vmovdqa   %%ymm4, 0x80(%[out])\n\t"
+        "vmovdqa   %%ymm5, 0xa0(%[out])\n\t"
+        "vmovdqa   %%ymm6, 0xc0(%[out])\n\t"
+        "vmovdqa   %%ymm7, 0xe0(%[out])\n\t"
+        :
+        : [in] "r"(vec_written), [out] "r"(vec_read_back), [n] "r"(rounds)
+        : "rax", "rcx", "rdx", "rsi", "memory",
+          "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6", "ymm7");
+
+    return vec_verify("ymm", YMM_BYTES, rounds);
+}
+
 int main(void)
 {
     struct sigaction sa;
@@ -289,6 +447,28 @@ int main(void)
 
     if (!jit_contract(JIT_ROUNDS))
         broken++;
+
+    /* SSE unconditionally — every x86-64 has it, so there is no machine this
+     * check may quietly skip on. AVX only where CPUID offers it: a guest whose
+     * hypervisor withholds AVX has no upper halves to lose, and running the
+     * instructions anyway would report a fault the feature table above has
+     * already reported correctly.
+     *
+     * A skipped check must say it was skipped. A contract that silently does
+     * not run reads exactly like a contract that passed, which is how the
+     * first version of this check reported three clean runs having tested
+     * nothing at all. */
+    if (!sse_state_survives_exits(EXIT_ROUNDS))
+        broken++;
+    {
+        unsigned eax, ebx, ecx, edx;
+        if (__get_cpuid_count(1, 0, &eax, &ebx, &ecx, &edx) && (ecx & (1u << 28))) {
+            if (!avx_state_survives_exits(EXIT_ROUNDS))
+                broken++;
+        } else {
+            printf("guestcheck: skipped ymm state — this machine offers no avx\n");
+        }
+    }
 
     return broken ? 1 : 0;
 }

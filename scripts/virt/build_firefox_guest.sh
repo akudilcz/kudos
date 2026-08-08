@@ -122,6 +122,12 @@ DMESG_TAIL_LINES=6
 # instead of breaking mid-word at whatever the window happens to be.
 CONSOLE_COLS=56
 
+# The kernel-command-line token that carries a script for the guest to run
+# (see run_cmdline_script in /init). Named once here because the guest reads it
+# and every caller writes it, and a token spelled two ways is a script that
+# silently never runs.
+RUN_TOKEN="kudos.run"
+
 CC_STD="gcc -std=gnu11"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -176,6 +182,15 @@ CONFIG_PACKET=y
 CONFIG_NETDEVICES=y
 CONFIG_NET_CORE=y
 CONFIG_VIRTIO_NET=y
+# ACPI, for the interrupt controller. Without it x86 Linux knows only the two
+# 8259 chips and their sixteen interrupt lines, because the IO-APIC's existence
+# and address are stated in the MADT and nowhere else a kernel this small
+# reads. kudos builds an RSDP, XSDT and MADT for every guest (kernel/virt/
+# acpi.zig) that a kernel without this option cannot look at, and a machine
+# whose devices sit above IRQ 15 — QEMU's microvm puts its virtio transports at
+# 25 and up — has no way to deliver an interrupt to a guest that only has a
+# PIC. It is also the table an SMP guest reads to find its other processors.
+CONFIG_ACPI=y
 EOF
 
 cd "$WORK"
@@ -208,7 +223,7 @@ make olddefconfig
 # milestone, so a config regression fails the build instead of the field.
 for opt in VIRTIO_MMIO VIRTIO_MMIO_CMDLINE_DEVICES DRM_VIRTIO_GPU \
            SERIAL_8250_CONSOLE VIRTIO_INPUT INPUT_EVDEV UNIX SHMEM TMPFS \
-           FUTEX MULTIUSER UNIX98_PTYS VIRTIO_NET INET; do
+           FUTEX MULTIUSER UNIX98_PTYS VIRTIO_NET INET ACPI X86_IO_APIC; do
     grep -qx "CONFIG_$opt=y" .config || {
         echo "build_firefox_guest: CONFIG_$opt did not survive the config merge" >&2
         exit 1
@@ -509,6 +524,49 @@ report_devices() {
     say ""
 }
 
+# A script handed to this guest on the kernel command line, as
+# ${RUN_TOKEN}=<base64>. Base64 because a kernel command line is separated by
+# whitespace and a shell script is full of it: encoding sidesteps quoting
+# entirely, at both ends, and a token with no spaces in it cannot be split by
+# anything between here and the guest.
+#
+# This is how a guest is driven by a machine instead of by a person typing at
+# its console. Typing is the slower half of every guest investigation and the
+# unreliable half: a keystroke goes to whichever window has focus, and a
+# transcript that does not say which window that was is not evidence. A script
+# named on the command line runs in the guest by construction, and its output
+# and exit status come back on the serial console with markers around them, so
+# a caller reading nothing but the serial stream knows exactly what happened.
+#
+# It runs after the whole machine is up and before the console shell, so a
+# script sees the same guest a person at that shell would, and a guest given no
+# script behaves exactly as it did before.
+run_cmdline_script() {
+    enc=\$(tr ' ' '\\n' < /proc/cmdline | sed -n 's/^${RUN_TOKEN}=//p')
+    [ -n "\$enc" ] || return 0
+    if ! echo "\$enc" | base64 -d > /tmp/kudos-run.enc 2>/dev/null; then
+        say "KUDOS-RUN-UNDECODABLE — ${RUN_TOKEN}= is not base64"
+        return 0
+    fi
+    # Gzipped if it decompresses, plain text if it does not. Linux accepts
+    # about two kilobytes of command line and base64 costs a third on top of
+    # what it encodes, so compressing is what keeps a useful script inside the
+    # budget — and accepting both means the caller never has to say which.
+    if ! gzip -dc /tmp/kudos-run.enc > /tmp/kudos-run.sh 2>/dev/null; then
+        cp /tmp/kudos-run.enc /tmp/kudos-run.sh
+    fi
+    chmod +x /tmp/kudos-run.sh
+    say "KUDOS-RUN-BEGIN"
+    # Streamed line by line, not collected and printed at the end: a script
+    # that takes minutes must show it is alive while it runs, and one that
+    # hangs must show where. The exit status goes through a file because a
+    # pipeline reports the status of its LAST stage, which here is the loop
+    # that prints — it would report success for a script that died.
+    { /tmp/kudos-run.sh 2>&1; echo \$? > /tmp/kudos-run.rc; } |
+        fold -w ${CONSOLE_COLS} | while read -r l; do say "run: \$l"; done
+    say "KUDOS-RUN-EXIT=\$(cat /tmp/kudos-run.rc 2>/dev/null || echo unknown)"
+}
+
 # The CPU this guest believes it has. A hypervisor's CPUID is a promise, and a
 # guest takes it literally: a library that sees a vector extension advertised
 # emits it, and a process that then faults leaves no trace naming the feature.
@@ -767,6 +825,9 @@ fi
 # last thing on a console that shows one screenful and does not scroll.
 sleep ${REPORT_DELAY_S}
 report_devices
+
+# Anything the caller asked this boot to do, on a machine that is now fully up.
+run_cmdline_script
 
 # PID 1 must not exit: a shell on the serial console is what is left to
 # diagnose with when the picture is wrong.

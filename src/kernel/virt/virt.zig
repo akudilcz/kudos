@@ -46,12 +46,35 @@ const gueststage = @import("gueststage.zig");
 const layout = @import("layout.zig");
 const ivirt = @import("ivirt");
 
-/// The command line every staged guest boots with: the serial console kudos
-/// emulates, plus the discovery argument for each virtio device the machine
-/// model wires up (there is no device tree or PCI bus in a kudos guest). The
-/// framebuffer console comes first so kernel messages land on the guest's
-/// display, while ttyS0 — named last — stays /dev/console for the shell.
-pub const STAGED_CMDLINE = "console=tty0 console=ttyS0 " ++ layout.WIRED_DEVICES;
+/// The machine half of the staged guest's command line: the serial console
+/// kudos emulates, plus the discovery argument for each virtio device the
+/// machine model wires up (there is no device tree or PCI bus in a kudos
+/// guest). The framebuffer console comes first so kernel messages land on the
+/// guest's display, while ttyS0 — named last — stays /dev/console for the shell.
+const MACHINE_CMDLINE = "console=tty0 console=ttyS0 " ++ layout.WIRED_DEVICES;
+
+/// The command line every staged guest boots with: what the machine requires,
+/// then whatever `-Dguest-cmdline=` added. The build option is how a caller
+/// tells a guest what to do — the guest images read a `kudos.run=<base64>` word
+/// from it, run that script and report its exit status on the serial console —
+/// so an experiment inside a guest is a build flag, not a person typing into a
+/// window whose focus the transcript does not record. Empty by default, and an
+/// empty option leaves the line byte-for-byte as it was.
+pub const STAGED_CMDLINE = if (buildinfo.guest_cmdline.len == 0)
+    MACHINE_CMDLINE
+else
+    MACHINE_CMDLINE ++ " " ++ buildinfo.guest_cmdline;
+
+/// Linux's own ceiling on a command line, `COMMAND_LINE_SIZE` from
+/// arch/x86/include/asm/setup.h, counting the terminating NUL. The bzImage
+/// header states the limit that actually applies and `layout.plan` enforces it
+/// at boot; asserting it here as well turns an over-long `-Dguest-cmdline=`
+/// from a boot that fails into a build that does, which is where the fix is.
+const COMMAND_LINE_SIZE = 2048;
+comptime {
+    if (STAGED_CMDLINE.len + 1 > COMMAND_LINE_SIZE)
+        @compileError("-Dguest-cmdline= makes the staged guest's command line longer than Linux accepts");
+}
 
 /// How long one `pump` slice runs before the driver looks at the world again.
 ///

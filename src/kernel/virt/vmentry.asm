@@ -1,15 +1,24 @@
 ; vmentry.asm — the VM-entry/exit trampoline (Intel SDM Vol 3C §26, §27).
 ;
-; extern fn vmxEnter(regs: *GuestRegs, launched: bool) u64
-;   System V: rdi = pointer to the 15-register GuestRegs block, sil = launched?
+; extern fn vmxEnter(regs: *GuestRegs, launched: bool, fpu: *FpuSwap) u64
+;   System V: rdi = pointer to the 15-register GuestRegs block, sil = launched?,
+;   rdx = pointer to the two 512-byte FXSAVE areas (host first, guest second).
 ;   Returns 0 when a VM exit occurred (guest ran and exited); returns the RFLAGS
 ;   image (always nonzero — bit 1 is fixed 1) when VM entry itself failed.
 ;
 ; On entry we save the host callee-saved registers, point the VMCS host RSP/RIP at
-; this frame and the exit landing pad, load the guest GPRs, and VMLAUNCH (first
-; entry) or VMRESUME (subsequent). A VM exit re-enters at .vmexit with host RSP
-; restored by the CPU; we write the guest GPRs back and return 0. A failed entry
+; this frame and the exit landing pad, exchange the x87/SSE register file, load the
+; guest GPRs, and VMLAUNCH (first entry) or VMRESUME (subsequent). A VM exit
+; re-enters at .vmexit with host RSP restored by the CPU; we write the guest GPRs
+; back, exchange the register file the other way, and return 0. A failed entry
 ; falls through to .vmfail and returns RFLAGS so the caller can read the reason.
+;
+; The x87/SSE exchange lives HERE, in the instructions either side of the
+; transition, rather than in the Zig caller: the processor does not save or
+; restore that register file across a VM transition, so every instruction between
+; the restore and VMLAUNCH — and between the exit and the save — runs with the
+; wrong guest's registers live. Keeping the pair adjacent to VMLAUNCH/VMRESUME is
+; what makes that window provably empty instead of merely short.
 ;
 ; GuestRegs field offsets — MUST match the extern struct in vcpu.zig.
 
@@ -32,6 +41,11 @@
 %define VMCS_HOST_RSP 0x6C14
 %define VMCS_HOST_RIP 0x6C16
 
+; FpuSwap field offsets — MUST match the extern struct in vcpu.zig. One FXSAVE
+; area is 512 bytes, so the guest's begins where the host's ends.
+%define F_HOST  0x000
+%define F_GUEST 0x200
+
 default rel
 section .text
 global vmxEnter
@@ -44,7 +58,9 @@ vmxEnter:
     push r13
     push r14
     push r15
+    push rdx                      ; save the FpuSwap pointer for the exit path
     push rdi                      ; save the GuestRegs pointer for the exit path
+                                  ; [rsp] = regs, [rsp+8] = fpu
 
     ; Point the VMCS host state at this stack and the exit landing pad, so a VM
     ; exit returns here with rsp restored to exactly this value.
@@ -53,6 +69,14 @@ vmxEnter:
     lea  rax, [.vmexit]
     mov  rdx, VMCS_HOST_RIP
     vmwrite rdx, rax
+
+    ; Park the host's x87/SSE file and load the guest's. VMWRITE used rdx as a
+    ; scratch, so take the pointer back off the stack. Neither instruction
+    ; touches EFLAGS, and nothing below here uses these registers before the
+    ; guest does.
+    mov  rdx, [rsp + 8]
+    fxsave  [rdx + F_HOST]
+    fxrstor [rdx + F_GUEST]
 
     ; Decide launch vs resume now, while sil is still the argument. `mov` does not
     ; disturb flags, so ZF survives the guest-register loads below.
@@ -100,9 +124,17 @@ vmxEnter:
     mov  [rdi + R_R13], r13
     mov  [rdi + R_R14], r14
     mov  [rdi + R_R15], r15
-    pop  rax                       ; guest rdi we stashed
+    pop  rax                       ; guest rdi we stashed; [rsp]=regs, [rsp+8]=fpu
     mov  [rdi + R_RDI], rax
-    add  rsp, 8                    ; drop the saved GuestRegs pointer
+
+    ; Take the guest's x87/SSE file out before any host code can use those
+    ; registers, and give the host its own back. The guest's rdx has already
+    ; been stored above, so rdx is free again.
+    mov  rdx, [rsp + 8]
+    fxsave  [rdx + F_GUEST]
+    fxrstor [rdx + F_HOST]
+
+    add  rsp, 16                   ; drop the saved GuestRegs and FpuSwap pointers
     pop  r15
     pop  r14
     pop  r13
@@ -116,7 +148,12 @@ vmxEnter:
 .vmfail:
     pushfq
     pop  rax                       ; RFLAGS image, always nonzero
-    add  rsp, 8                    ; drop the saved GuestRegs pointer
+    ; The guest's register file was loaded for an entry that never happened;
+    ; the host must still get its own back, or the caller returns to a kernel
+    ; whose SSE registers belong to a guest that never ran.
+    mov  rdx, [rsp + 8]
+    fxrstor [rdx + F_HOST]
+    add  rsp, 16                   ; drop the saved GuestRegs and FpuSwap pointers
     pop  r15
     pop  r14
     pop  r13

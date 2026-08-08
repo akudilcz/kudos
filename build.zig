@@ -73,6 +73,14 @@ pub fn build(b: *std.Build) void {
     // What the `vm boot` list calls entry 1: the staged image's own name, so the
     // menu cannot drift from what -Dguest actually staged.
     const staged_guest_name = guest_name orelse "busybox";
+    // Extra words on the staged guest's kernel command line. The command line
+    // is how a caller tells a guest what to do without typing at its console:
+    // the guest images carry a `kudos.run=<base64>` hook that runs a script and
+    // states its exit code on the serial line, so an experiment inside a guest
+    // becomes a build flag and a boot rather than a person driving a keyboard
+    // into whichever window has focus. Empty by default — a guest given nothing
+    // extra boots exactly as it always did.
+    const guest_cmdline = b.option([]const u8, "guest-cmdline", "extra words appended to the staged guest's kernel command line") orelse "";
     const guest_bzimage_rel = b.fmt("{s}/bzImage", .{guest_dir});
     const guest_initramfs_rel = b.fmt("{s}/initramfs.cpio.gz", .{guest_dir});
     const guest_present = blk: {
@@ -482,6 +490,7 @@ pub fn build(b: *std.Build) void {
         buildinfo.addOption(u32, "usb_max_gb", usb_max_gb);
         buildinfo.addOption(bool, "heartbeat", heartbeat);
         buildinfo.addOption([]const u8, "staged_guest", staged_guest_name);
+        buildinfo.addOption([]const u8, "guest_cmdline", guest_cmdline);
         // verify-script is SMP-only: verifyscript.spawn creates a scheduler task
         // (sched.spawn/enqueue), and only the SMP image runs the per-core
         // scheduler. Injecting it into the single-core image would silently
@@ -615,6 +624,7 @@ pub fn build(b: *std.Build) void {
     pure_buildinfo.addOption(u32, "usb_max_gb", usb_max_gb);
     pure_buildinfo.addOption(bool, "heartbeat", heartbeat);
     pure_buildinfo.addOption([]const u8, "staged_guest", staged_guest_name);
+    pure_buildinfo.addOption([]const u8, "guest_cmdline", guest_cmdline);
     pure_buildinfo.addOption(bool, "verify_script", false);
     for ([_]HostSuite{
         .{ .n = "calc", .s = "src/drivers/gpu/base/calc.zig" }, // GPU MSI/MTRR + pitch math
@@ -781,6 +791,7 @@ pub fn build(b: *std.Build) void {
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/virtio/virtio_netdev_test.zig" }, // the network adapter: rx/tx queues behind the transport, frames over the FrameSink seam
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/virtio/virtio_inputdev_test.zig" }, // keyboard + tablet: config selectors and evdev events behind the transport
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/netbridge_test.zig" }, // the guest NIC bridge's forwarding policy (which port a frame is for)
+        .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/vfpu_test.zig" }, // the guest FPU register file: reset control words + the layout vmentry.asm indexes
         .{ .n = "vmslots", .s = "src/kernel/virt/vmslots.zig" }, // VM slot retirement handshake (window ↔ vCPU)
         .{ .n = "vspace", .s = "src/kernel/memory/vspace.zig" }, // 4-level address-space builder (MEM-001; session isolation)
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/guestlist_test.zig" }, // the `vm boot` network-image catalog (VIRT-019/020)

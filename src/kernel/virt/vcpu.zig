@@ -26,6 +26,7 @@ const vmx = @import("vmx.zig");
 const vmsr = @import("vmsr.zig");
 const msrarea = @import("msrarea.zig");
 const linuxload = @import("linuxload.zig");
+const vfpu = @import("vfpu.zig");
 
 /// The guest general-purpose registers, saved/restored by vmentry.asm. The field
 /// ORDER and offsets must match vmentry.asm's R_* defines exactly.
@@ -47,7 +48,7 @@ pub const GuestRegs = extern struct {
     r15: u64 = 0,
 };
 
-extern fn vmxEnter(regs: *GuestRegs, launched: bool) u64;
+extern fn vmxEnter(regs: *GuestRegs, launched: bool, fpu: *vfpu.FpuSwap) u64;
 
 /// What the machine model tells the run loop to do after handling an exit.
 pub const Action = enum {
@@ -152,6 +153,9 @@ fn coreSlot() u32 {
 
 pub const Vcpu = struct {
     regs: GuestRegs = .{},
+    /// The x87/SSE files swapped around every VM transition. The guest starts
+    /// with the register file a real processor has at reset.
+    fpu: vfpu.FpuSwap = .{ .host = vfpu.FpuArea.atReset(), .guest = vfpu.FpuArea.atReset() },
     vmcs_pa: u64 = 0,
     msr_area_pa: u64 = 0, // frame holding the VM-entry/exit MSR-load areas
     launched: bool = false,
@@ -710,7 +714,7 @@ pub const Vcpu = struct {
             // Offer a pending interrupt before entry.
             self.serviceInterrupts(ops, ctx);
 
-            const fail = vmxEnter(&self.regs, self.launched);
+            const fail = vmxEnter(&self.regs, self.launched, &self.fpu);
             if (fail != 0) {
                 cpu.irqRestore(was);
                 self.reportEntryFailure();
