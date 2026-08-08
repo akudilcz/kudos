@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const netdev = @import("testroot").kernel.virtio_netdev;
+const ivirt = netdev.ivirt;
 const mmio = netdev.mmio;
 const virtq = netdev.virtq;
 const expectEqual = std.testing.expectEqual;
@@ -350,11 +351,31 @@ test "an oversized inbound frame never touches the queue" {
     try expectEqual(@as(u16, 0), f.usedIdx(RX_USED_GPA)); // the buffer is still posted
 }
 
-test "guestMac is locally administered, unicast, and distinct per guest" {
+test "guestMac is locally administered, unicast, and distinct per guest (VIRT-027)" {
     const m0 = netdev.guestMac(0);
     const m1 = netdev.guestMac(1);
     try expect(m0[0] & 0x02 != 0); // locally administered
     try expect(m0[0] & 0x01 == 0); // unicast
     try expect(!std.mem.eql(u8, &m0, &m1));
     try expectEqualSlices(u8, m0[0..5], m1[0..5]); // same prefix, distinct tail
+}
+
+test "guestIdFor inverts guestMac exactly, and only for guest addresses (VIRT-029)" {
+    // Every address guestMac hands out maps back to its slot…
+    var id: usize = 0;
+    while (id < ivirt.MAX_VMS) : (id += 1) {
+        const mac = netdev.guestMac(id);
+        try expectEqual(@as(?ivirt.Id, id), netdev.guestIdFor(&mac));
+    }
+    // …and nothing else maps at all: a slot past the table, a foreign OUI with
+    // the same last byte, broadcast, and one flipped prefix byte.
+    const past = [6]u8{ 'R', 'S', 'V', 'D', 'K', ivirt.MAX_VMS };
+    try expectEqual(@as(?ivirt.Id, null), netdev.guestIdFor(&past));
+    const foreign = [6]u8{ 0x52, 0x54, 0x00, 0x12, 0x34, 0 };
+    try expectEqual(@as(?ivirt.Id, null), netdev.guestIdFor(&foreign));
+    const broadcast = [6]u8{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    try expectEqual(@as(?ivirt.Id, null), netdev.guestIdFor(&broadcast));
+    var near = netdev.guestMac(0);
+    near[0] ^= 0x02;
+    try expectEqual(@as(?ivirt.Id, null), netdev.guestIdFor(&near));
 }

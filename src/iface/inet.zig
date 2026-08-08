@@ -14,6 +14,13 @@
 
 const std = @import("std");
 
+/// Largest Ethernet frame the network carries: 1500-byte MTU payload plus the
+/// 14-byte header, no FCS (no consumer of this contract sees one) and no jumbo
+/// frames. Owned here because both the stack below this contract and the
+/// hypervisor's guest bridge above it size buffers from it, and they may not
+/// import each other.
+pub const ETHER_FRAME_MAX: usize = 1514;
+
 /// Everything a fetch can fail with. Spelled out rather than inferred because a vtable
 /// needs a concrete error set — and because an app that prints these to a user should
 /// be able to see the whole list it must account for.

@@ -521,6 +521,32 @@ const MAX_LISTENERS = 4;
 var listeners: [MAX_LISTENERS]struct { port: u16, handler: UdpHandler } = undefined;
 var listener_n: usize = 0;
 
+/// A guest NIC bridge: kudos' hypervisor shares the one physical NIC with its
+/// guests at layer 2, and this is the whole surface the stack sees of that.
+/// `offer` is shown every received frame BEFORE ethertype dispatch and returns
+/// true to consume it (a frame addressed to a guest is not kudos' to parse;
+/// broadcast is copied to guests AND left for the stack). `poll` yields the
+/// next guest-transmitted frame into `buf` — the pump puts each on the wire.
+/// The same rules as every RX-path handler: never block, never re-enter pump().
+pub const Bridge = struct {
+    ctx: *anyopaque,
+    offer: *const fn (ctx: *anyopaque, frame: []const u8) bool,
+    poll: *const fn (ctx: *anyopaque, buf: []u8) ?usize,
+};
+
+/// The buffer `Bridge.poll` fills — one whole Ethernet frame, the contract's
+/// own ceiling.
+pub const MAX_BRIDGE_FRAME = inet.ETHER_FRAME_MAX;
+
+var bridge: ?Bridge = null;
+
+/// Connect the guest bridge (same announce-yourself shape as `listenUdp`: the
+/// stack stays ignorant of the hypervisor above it). One bridge; connecting
+/// again replaces it — there is one guest subsystem.
+pub fn connectBridge(b: Bridge) void {
+    bridge = b;
+}
+
 /// Claim a UDP port: datagrams addressed to it go to `handler` instead of the ordinary
 /// receive path.
 ///
@@ -595,6 +621,13 @@ pub fn pump() void {
     var drained: usize = 0;
     while (drained < MAX_DRAIN_PER_PUMP) : (drained += 1) {
         const frame = nic.poll() orelse break;
+        // A guest's frame first: unicast to a guest MAC is not kudos' to parse,
+        // and the bridge consuming it here is what keeps two IP stacks from
+        // both answering. Broadcast comes back false — copied to the guests AND
+        // dispatched below, because an ARP request is everyone's.
+        if (bridge) |b| {
+            if (b.offer(b.ctx, frame)) continue;
+        }
         if (frame.len >= ETH_HLEN) {
             const ethertype = rbe16(frame[12..14]);
             const payload = frame[ETH_HLEN..];
@@ -603,6 +636,17 @@ pub fn pump() void {
                 ETH_IP => handleIp(payload),
                 else => {},
             }
+        }
+    }
+    // The guests' outbound frames, same per-pump bound for the same reason.
+    // After the RX drain so a request the guest just answered goes out on the
+    // tick it was made, and through the same single NIC everything else uses.
+    if (bridge) |b| {
+        var sent: usize = 0;
+        var buf: [MAX_BRIDGE_FRAME]u8 = undefined;
+        while (sent < MAX_DRAIN_PER_PUMP) : (sent += 1) {
+            const len = b.poll(b.ctx, &buf) orelse break;
+            nic.send(buf[0..len]);
         }
     }
     // Drive the async DHCP bind (a no-op once bound or if it was never started).

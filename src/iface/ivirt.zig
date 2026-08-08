@@ -57,12 +57,51 @@ pub const FetchProgress = struct { half: FetchHalf, done: u64, total: u64 };
 pub const TX_CAP = 8192;
 pub const RX_CAP = 256;
 
+/// Input events (window -> guest) buffered between vCPU polls. A human cannot
+/// produce many pointer samples in one frame and a keystroke is two events, so
+/// this only ever holds one frame's worth; it exists so the window never has to
+/// touch a device the guest's own core owns.
+pub const INPUT_CAP = 64;
+
+/// The absolute range a pointer position is expressed in, 0..ABS_RANGE on both
+/// axes. The window scales into it and the device model declares it, so neither
+/// has to know the other's pixel dimensions: a window resize changes the
+/// scaling, never the guest's idea of how big its own screen is.
+pub const ABS_RANGE: u32 = 0x7FFF;
+
+/// One input event on its way to a guest, in the terms the window means them —
+/// not the evdev wire format, which belongs to the device model. `code` is the
+/// Linux key or button code; motion is absolute, in 0..ABS_RANGE.
+pub const InputEvent = union(enum) {
+    key: struct { code: u16, down: bool },
+    button: struct { code: u16, down: bool },
+    motion: struct { x: u32, y: u32 },
+};
+
 /// Scanout dimension ceiling: the virtio-gpu device model refuses larger
 /// modes, so every published buffer holds at least FB_MAX_W * FB_MAX_H pixels.
 /// Sized for a browser-kiosk guest: comfortable page width while keeping the
 /// per-frame guest→host pixel copy well under a full-HD one.
 pub const FB_MAX_W = 1600;
 pub const FB_MAX_H = 900;
+
+/// Largest Ethernet frame the NIC bridge carries — the network contract's
+/// frame ceiling, re-exported so the bridge's producers and consumers size
+/// their buffers from the mailbox they talk through.
+pub const NET_FRAME_BYTES = @import("inet").ETHER_FRAME_MAX;
+
+/// Bridged frames buffered per guest per direction between the system loop and
+/// the guest's core. Sixteen frames each way per scheduling slice (~2 ms) keeps
+/// a browser's TCP window moving at tens of Mbit/s, far above what the page
+/// loads here need; a burst beyond it drops and is counted, never silent.
+pub const NET_RING_FRAMES = 16;
+
+/// One Ethernet frame in flight across the bridge, length-prefixed because the
+/// ring copies fixed-size slots.
+pub const NetFrame = struct {
+    len: u16 = 0,
+    data: [NET_FRAME_BYTES]u8 = undefined,
+};
 
 /// One guest's mailbox. Every field's producer/consumer pairing is documented on
 /// the accessor below; nothing here is shared between slots.
@@ -75,11 +114,31 @@ const Slot = struct {
     con_tx: Ring(u8, TX_CAP) = .{},
     /// keystroke -> guest: producer app (conInput), consumer hypervisor (conFetch).
     con_rx: Ring(u8, RX_CAP) = .{},
+    /// key/pointer -> guest: producer app (inputPost), consumer hypervisor
+    /// (inputFetch), drained onto the guest's own core. Serial input and this
+    /// ring are two different guests' worth of interface — a shell reads the
+    /// serial port, a compositor reads evdev — so a window feeds both and lets
+    /// the guest use the one it has a driver for.
+    input_rx: Ring(InputEvent, INPUT_CAP) = .{},
+    /// guest -> wire: producer hypervisor (netPost, on the guest's core),
+    /// consumer the system loop's bridge (netFetch), which puts each frame on
+    /// the real NIC.
+    net_tx: Ring(NetFrame, NET_RING_FRAMES) = .{},
+    /// wire -> guest: producer the system loop's bridge (netDeliver), consumer
+    /// hypervisor (netTake), landed in the guest's receive queue on its core.
+    net_rx: Ring(NetFrame, NET_RING_FRAMES) = .{},
     /// Bytes each discarding path dropped on a full ring — counted, never
     /// silent. Each has a single writer (its ring's producer); readers load
     /// monotonic, so a status line can report the loss from either core.
     dropped_tx: u64 = 0,
     dropped_rx: u64 = 0,
+    /// Input events dropped on a full ring. A guest whose driver is not reading
+    /// cannot be typed at, and that shows here rather than as silence.
+    dropped_input: u64 = 0,
+    /// Bridged frames dropped on a full ring, per direction. A guest whose
+    /// downloads stall shows the loss here rather than as silence.
+    dropped_net_tx: u64 = 0,
+    dropped_net_rx: u64 = 0,
     /// Guest console bytes written since reset, dropped or not. Zero after a
     /// guest has supposedly booted is the tell that separates a dead guest
     /// from a quiet one — a Linux boot always writes serial.
@@ -204,6 +263,82 @@ pub fn conInput(id: Id, b: u8) bool {
     if (s.con_rx.push(b)) return true;
     @atomicStore(u64, &s.dropped_rx, s.dropped_rx + 1, .monotonic);
     return false;
+}
+
+/// APP: queue one input event for the guest's keyboard or pointer. Returns
+/// false and counts the drop when the guest is not draining them.
+pub fn inputPost(id: Id, ev: InputEvent) bool {
+    const s = &slots[id];
+    if (s.input_rx.push(ev)) return true;
+    @atomicStore(u64, &s.dropped_input, s.dropped_input + 1, .monotonic);
+    return false;
+}
+
+/// HYPERVISOR: pop one input event, or null when none waits.
+pub fn inputFetch(id: Id) ?InputEvent {
+    return slots[id].input_rx.pop();
+}
+
+/// Input events dropped on a full ring since this slot was last reset.
+pub fn droppedInput(id: Id) u64 {
+    return @atomicLoad(u64, &slots[id].dropped_input, .monotonic);
+}
+
+/// Copy one frame into a NetFrame slot, or count a drop against `counter` —
+/// the one body behind both bridge directions. An oversized frame is dropped
+/// here too: the ring's slot is the size contract, and truncating an Ethernet
+/// frame would forward a corrupt packet instead of a counted loss.
+fn framePush(ring: anytype, counter: *u64, frame: []const u8) bool {
+    if (frame.len <= NET_FRAME_BYTES) {
+        var slot = NetFrame{ .len = @intCast(frame.len) };
+        @memcpy(slot.data[0..frame.len], frame);
+        if (ring.push(slot)) return true;
+    }
+    @atomicStore(u64, counter, counter.* + 1, .monotonic);
+    return false;
+}
+
+/// Copy the next queued frame into `buf` and return its length, or null when
+/// none waits. `buf` must hold NET_FRAME_BYTES.
+fn framePop(ring: anytype, buf: []u8) ?usize {
+    const slot = ring.pop() orelse return null;
+    @memcpy(buf[0..slot.len], slot.data[0..slot.len]);
+    return slot.len;
+}
+
+/// HYPERVISOR (guest core): queue one guest-transmitted Ethernet frame for the
+/// bridge to put on the wire. False (and a counted drop) when the bridge is
+/// not draining — a guest flooding faster than the system loop forwards.
+pub fn netPost(id: Id, frame: []const u8) bool {
+    const s = &slots[id];
+    return framePush(&s.net_tx, &s.dropped_net_tx, frame);
+}
+
+/// BRIDGE (system loop): copy the next guest-transmitted frame into `buf`
+/// (NET_FRAME_BYTES long) and return its length, or null when none waits.
+pub fn netFetch(id: Id, buf: []u8) ?usize {
+    return framePop(&slots[id].net_tx, buf);
+}
+
+/// BRIDGE (system loop): queue one wire frame for guest `id`. False (and a
+/// counted drop) when the guest is not draining its receive ring.
+pub fn netDeliver(id: Id, frame: []const u8) bool {
+    const s = &slots[id];
+    return framePush(&s.net_rx, &s.dropped_net_rx, frame);
+}
+
+/// HYPERVISOR (guest core): copy the next wire frame for guest `id` into `buf`
+/// (NET_FRAME_BYTES long) and return its length, or null when none waits.
+pub fn netTake(id: Id, buf: []u8) ?usize {
+    return framePop(&slots[id].net_rx, buf);
+}
+
+/// Bridged frames dropped per direction since this slot was last reset.
+pub fn droppedNetTx(id: Id) u64 {
+    return @atomicLoad(u64, &slots[id].dropped_net_tx, .monotonic);
+}
+pub fn droppedNetRx(id: Id) u64 {
+    return @atomicLoad(u64, &slots[id].dropped_net_rx, .monotonic);
 }
 
 /// HYPERVISOR: pop one keystroke for the guest UART, or null when none waits.

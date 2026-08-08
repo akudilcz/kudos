@@ -536,6 +536,33 @@ numbered catalog from the shell (VIRT-017), each bootable by its number.
 **VIRT-021.** The Kudos system shall run each guest virtual processor as a
 schedulable task, eligible for any online core (KRN-009).
 
+**VIRT-022.** The Kudos system shall present the guest a keyboard input device.
+
+**VIRT-023.** The Kudos system shall deliver both the press and the release of a
+key from the VM console window (VIRT-010) to the guest keyboard (VIRT-022).
+
+**VIRT-024.** The Kudos system shall present the guest an absolute pointing
+device.
+
+**VIRT-025.** The Kudos system shall deliver the pointer's position within the
+VM console window (VIRT-010) to the guest pointing device (VIRT-024).
+
+**VIRT-026.** The Kudos system shall deliver pointer button presses and releases
+from the VM console window (VIRT-010) to the guest pointing device (VIRT-024).
+
+**VIRT-027.** The Kudos system shall provide the guest a network device with a
+link-layer address unique among the host and its guests.
+
+**VIRT-028.** The Kudos system shall forward frames the guest transmits
+(VIRT-027) to the physical network.
+
+**VIRT-029.** The Kudos system shall deliver to the guest the physical
+network's frames addressed to the guest's link-layer address (VIRT-027), and
+its broadcast and multicast frames.
+
+**VIRT-030.** The Kudos system shall count bridged frames it discards
+(VIRT-028, VIRT-029), in each direction, per guest.
+
 ## Agent
 
 **AGT-001.** The Kudos system shall provide an AI agent, available on demand,

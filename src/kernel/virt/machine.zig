@@ -35,6 +35,7 @@ const guestwalk = @import("guestwalk.zig");
 const insn = @import("insn.zig");
 const gpudev = @import("virtio/gpudev.zig");
 const netdev = @import("virtio/netdev.zig");
+const inputdev = @import("virtio/inputdev.zig");
 const ivirt = @import("ivirt");
 
 // Serial port block (COM1) and the IRQ line the UART drives.
@@ -83,6 +84,10 @@ pub const Vm = struct {
     /// `net.connectSink`; until then transmitted frames drop into the device's
     /// counters, never silently.
     net: netdev.NetDev = .{},
+    /// The guest's keyboard and absolute pointer, wired by `start` for the same
+    /// reason. A guest with a scanout but no input is a picture, not a machine.
+    kbd: inputdev.InputDev = .{},
+    tablet: inputdev.InputDev = .{},
     /// Host-physical base of the display's pixel stores, and the frame count to
     /// return at teardown.
     stores_hpa: usize = 0,
@@ -148,6 +153,12 @@ pub const Vm = struct {
         const pixels = @as([*]u32, @ptrFromInt(self.stores_hpa))[0..store_words];
         self.gpu.bind(self.id, gpudev.carveStores(pixels), self.mem.ram());
         self.net.bind(netdev.guestMac(self.id), self.mem.ram());
+        // Transmitted guest frames cross to the system loop's bridge through
+        // the mailbox — the device model never touches the real NIC, and the
+        // rule that a guest's queues live on its own core is kept.
+        self.net.connectSink(.{ .ctx = self, .put = sinkPut });
+        self.kbd.bind(.keyboard, self.mem.ram());
+        self.tablet.bind(.tablet, self.mem.ram());
         ivirt.setState(self.id, .running);
     }
 
@@ -445,6 +456,8 @@ pub const Vm = struct {
         return switch (slot) {
             .gpu => self.gpu.read(off, size),
             .net => self.net.read(off, size),
+            .keyboard => self.kbd.read(off, size),
+            .tablet => self.tablet.read(off, size),
             else => 0,
         };
     }
@@ -453,6 +466,8 @@ pub const Vm = struct {
         switch (slot) {
             .gpu => self.gpu.write(off, size, val),
             .net => self.net.write(off, size, val),
+            .keyboard => self.kbd.write(off, size, val),
+            .tablet => self.tablet.write(off, size, val),
             else => {},
         }
     }
@@ -516,6 +531,13 @@ pub const Vm = struct {
     /// deadline, and arbitrate the PIC's ExtINT against the LAPIC. Non-destructive
     /// — `onCommitInterrupt` retires the winner only once the vCPU injects it, so
     /// a vector the guest cannot yet take is not acknowledged and lost.
+    /// netdev's FrameSink: one guest-transmitted Ethernet frame, posted to the
+    /// bridge mailbox. Runs on the guest's core; a full ring is a counted drop.
+    fn sinkPut(ctx: *anyopaque, frame: []const u8) bool {
+        const self: *Vm = @ptrCast(@alignCast(ctx));
+        return ivirt.netPost(self.id, frame);
+    }
+
     fn onPollInterrupt(ctx: *anyopaque, v: *vcpu.Vcpu) ?u8 {
         const self: *Vm = @ptrCast(@alignCast(ctx));
         _ = v;
@@ -523,6 +545,26 @@ pub const Vm = struct {
         // Pull any keystrokes the app posted into the UART receive path.
         while (ivirt.conFetch(self.id)) |b| {
             if (!self.uart.pushRx(b)) break;
+        }
+
+        // …and any key or pointer events into the input devices. Both drains
+        // happen HERE, on the guest's own core: the window that produced them
+        // runs on core 0, and a device's queues may only be touched by the core
+        // driving the vCPU (the same rule netdev's seam states).
+        while (ivirt.inputFetch(self.id)) |ev| switch (ev) {
+            .key => |k| self.kbd.key(k.code, k.down),
+            .button => |b| self.tablet.key(b.code, b.down),
+            .motion => |m| self.tablet.motion(m.x, m.y),
+        };
+
+        // …and the bridge's inbound Ethernet frames into the NIC's receive
+        // queue — same core rule. On a guest with no free receive buffer the
+        // frame is a counted drop in the device (rx_dropped) and the drain
+        // stops: the ring keeps the rest for a poll when the driver has caught
+        // up, instead of shredding a whole burst into drops.
+        var net_buf: [ivirt.NET_FRAME_BYTES]u8 = undefined;
+        while (ivirt.netTake(self.id, &net_buf)) |len| {
+            if (!self.net.pushRx(net_buf[0..len])) break;
         }
 
         // The legacy timer: convert the host TSC into PIT clock ticks and ask
@@ -545,6 +587,10 @@ pub const Vm = struct {
         if (self.gpu.irqLevel()) self.pic.raise(gpu_irq) else self.pic.lower(gpu_irq);
         const net_irq = layout.VirtioSlot.net.irq();
         if (self.net.irqLevel()) self.pic.raise(net_irq) else self.pic.lower(net_irq);
+        const kbd_irq = layout.VirtioSlot.keyboard.irq();
+        if (self.kbd.irqLevel()) self.pic.raise(kbd_irq) else self.pic.lower(kbd_irq);
+        const tablet_irq = layout.VirtioSlot.tablet.irq();
+        if (self.tablet.irqLevel()) self.pic.raise(tablet_irq) else self.pic.lower(tablet_irq);
 
         // An expired TSC deadline fires the LAPIC timer (disarms the MSR, raises
         // the vector into IRR).

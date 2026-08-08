@@ -236,3 +236,67 @@ test "every slot up to MAX_VMS is usable and separate" {
     }
     resetAll();
 }
+
+test "net bridge: a posted frame crosses to the wire side byte-identical (VIRT-028)" {
+    resetAll();
+    const frame = [_]u8{ 0x52, 'S', 'V', 'D', 'K', 0, 1, 2, 3, 4, 5, 6, 0x08, 0x00, 0xAA, 0xBB };
+    try expect(ivirt.netPost(A, &frame));
+    var buf: [ivirt.NET_FRAME_BYTES]u8 = undefined;
+    const len = ivirt.netFetch(A, &buf) orelse return error.NoFrame;
+    try expectEqual(frame.len, len);
+    try expect(std.mem.eql(u8, &frame, buf[0..len]));
+    try expectEqual(@as(?usize, null), ivirt.netFetch(A, &buf));
+    resetAll();
+}
+
+test "net bridge: delivery and transmit are independent directions (VIRT-029)" {
+    resetAll();
+    try expect(ivirt.netPost(A, "to-the-wire"));
+    try expect(ivirt.netDeliver(A, "to-the-guest"));
+    var buf: [ivirt.NET_FRAME_BYTES]u8 = undefined;
+    const rx = ivirt.netTake(A, &buf) orelse return error.NoFrame;
+    try expect(std.mem.eql(u8, "to-the-guest", buf[0..rx]));
+    try expectEqual(@as(?usize, null), ivirt.netTake(A, &buf));
+    const tx = ivirt.netFetch(A, &buf) orelse return error.NoFrame;
+    try expect(std.mem.eql(u8, "to-the-wire", buf[0..tx]));
+    resetAll();
+}
+
+test "net bridge: an oversized frame is refused and counted, never truncated (VIRT-030)" {
+    resetAll();
+    const big = [_]u8{0xEE} ** (ivirt.NET_FRAME_BYTES + 1);
+    try expect(!ivirt.netPost(A, &big));
+    try expectEqual(@as(u64, 1), ivirt.droppedNetTx(A));
+    try expect(!ivirt.netDeliver(A, &big));
+    try expectEqual(@as(u64, 1), ivirt.droppedNetRx(A));
+    var buf: [ivirt.NET_FRAME_BYTES]u8 = undefined;
+    try expectEqual(@as(?usize, null), ivirt.netFetch(A, &buf));
+    try expectEqual(@as(?usize, null), ivirt.netTake(A, &buf));
+    resetAll();
+}
+
+test "net bridge: a full ring drops with a count and leaves queued frames intact (VIRT-030)" {
+    resetAll();
+    var n: usize = 0;
+    while (n < ivirt.NET_RING_FRAMES) : (n += 1) try expect(ivirt.netPost(A, "queued"));
+    try expect(!ivirt.netPost(A, "overflow"));
+    try expectEqual(@as(u64, 1), ivirt.droppedNetTx(A));
+    var buf: [ivirt.NET_FRAME_BYTES]u8 = undefined;
+    var drained: usize = 0;
+    while (ivirt.netFetch(A, &buf)) |len| : (drained += 1)
+        try expect(std.mem.eql(u8, "queued", buf[0..len]));
+    try expectEqual(ivirt.NET_RING_FRAMES, drained);
+    resetAll();
+}
+
+test "net bridge: slots are independent and reset clears rings and counters" {
+    resetAll();
+    try expect(ivirt.netDeliver(A, "for-a"));
+    var buf: [ivirt.NET_FRAME_BYTES]u8 = undefined;
+    try expectEqual(@as(?usize, null), ivirt.netTake(B, &buf));
+    ivirt.reset(A);
+    try expectEqual(@as(?usize, null), ivirt.netTake(A, &buf));
+    try expectEqual(@as(u64, 0), ivirt.droppedNetTx(A));
+    try expectEqual(@as(u64, 0), ivirt.droppedNetRx(A));
+    resetAll();
+}

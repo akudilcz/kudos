@@ -1905,6 +1905,8 @@ src/drivers/input/keyboard.zig: pub const KEY_UP: u8 = keymap.KEY_UP;
 src/drivers/input/keyboard.zig: pub const KEY_DOWN: u8 = keymap.KEY_DOWN;
 src/drivers/input/keyboard.zig: pub const KeyEvent = struct
 src/drivers/input/keyboard.zig: pub const hidToAscii = keymap.hidToAscii;
+src/drivers/input/keyboard.zig: pub const hidToEvdev = keymap.hidToEvdev;
+src/drivers/input/keyboard.zig: pub const MOD_USAGE_FIRST = keymap.MOD_USAGE_FIRST;
 src/drivers/input/keyboard.zig: pub fn inject(ev: KeyEvent) void
 src/drivers/input/keyboard.zig: pub fn poll() ?KeyEvent
 src/drivers/input/keyboard.zig: pub fn init() void
@@ -1914,6 +1916,9 @@ src/drivers/input/keymap.zig: pub const KEY_LEFT: u8 = 0x12;
 src/drivers/input/keymap.zig: pub const KEY_RIGHT: u8 = 0x13;
 src/drivers/input/keymap.zig: pub const KEY_BACKSPACE: u8 = 0x08;
 src/drivers/input/keymap.zig: pub fn hidToAscii(usage: u8, shift: bool) u8
+src/drivers/input/keymap.zig: pub fn hidToEvdev(usage: u8) u16
+src/drivers/input/keymap.zig: pub const MOD_USAGE_FIRST: u8 = 0xE0;
+src/drivers/input/keymap.zig: pub const MOD_USAGE_LAST: u8 = 0xE7;
 src/drivers/io/io.zig: pub fn outb(port: u16, val: u8) void
 src/drivers/io/io.zig: pub fn inb(port: u16) u8
 src/drivers/io/io.zig: pub fn outw(port: u16, val: u16) void
@@ -2289,7 +2294,7 @@ src/drivers/usb/hid_report.zig: pub fn dci(ep_addr: u8) u32
 src/drivers/usb/hid_report.zig: pub const MouseEvent = struct
 src/drivers/usb/hid_report.zig: pub fn decodeMouse(report: []const u8, layout: MouseLayout) ?MouseEvent
 src/drivers/usb/hid_report.zig: pub const KeyPresses = struct
-src/drivers/usb/hid_report.zig: pub fn decodeKeyboard(report: []const u8, last_keys: [6]u8) ?KeyPresses
+src/drivers/usb/hid_report.zig: pub fn decodeKeyboard(report: []const u8, last_keys: [6]u8, last_mods: u8) ?KeyPresses
 src/drivers/usb/hid_report.zig: pub const TABLET_LOGICAL_MAX: usize = 0x7FFF;
 src/drivers/usb/hid_report.zig: pub const TabletEvent = struct
 src/drivers/usb/hid_report.zig: pub fn decodeTablet(report: []const u8, mps: u32, width: usize, height: usize) ?TabletEvent
@@ -2544,6 +2549,8 @@ src/iface/ivirt.zig: pub const FetchHalf = enum(u8) { kernel, initramfs };
 src/iface/ivirt.zig: pub const FetchProgress = struct { half: FetchHalf, done: u64, total: u64 };
 src/iface/ivirt.zig: pub const TX_CAP = 8192;
 src/iface/ivirt.zig: pub const RX_CAP = 256;
+src/iface/ivirt.zig: pub const INPUT_CAP = 64;
+src/iface/ivirt.zig: pub const InputEvent = union(enum)
 src/iface/ivirt.zig: pub const FB_MAX_W = 1600;
 src/iface/ivirt.zig: pub const FB_MAX_H = 900;
 src/iface/ivirt.zig: pub fn setState(id: Id, s: State) void
@@ -2559,6 +2566,9 @@ src/iface/ivirt.zig: pub fn stopRequested(id: Id) bool
 src/iface/ivirt.zig: pub fn conWrite(id: Id, b: u8) bool
 src/iface/ivirt.zig: pub fn conRead(id: Id) ?u8
 src/iface/ivirt.zig: pub fn conInput(id: Id, b: u8) bool
+src/iface/ivirt.zig: pub fn inputPost(id: Id, ev: InputEvent) bool
+src/iface/ivirt.zig: pub fn inputFetch(id: Id) ?InputEvent
+src/iface/ivirt.zig: pub fn droppedInput(id: Id) u64
 src/iface/ivirt.zig: pub fn conFetch(id: Id) ?u8
 src/iface/ivirt.zig: pub fn conPending(id: Id) bool
 src/iface/ivirt.zig: pub fn writtenTx(id: Id) u64
@@ -3093,6 +3103,7 @@ src/kernel/virt/layout.zig: pub const VIRTIO_MMIO_STRIDE: u64 = 0x1000;
 src/kernel/virt/layout.zig: pub const VirtioSlot = enum(u3)
 src/kernel/virt/layout.zig: pub const VIRTIO_MMIO_END: u64 =
 src/kernel/virt/layout.zig: pub fn cmdlineArg(comptime slot: VirtioSlot) []const u8
+src/kernel/virt/layout.zig: pub const WIRED_DEVICES = cmdlineArg(.gpu) ++ " " ++
 src/kernel/virt/layout.zig: pub const DEFAULT_RAM_BYTES: u64 = 128 * 1024 * 1024;
 src/kernel/virt/layout.zig: pub const Layout = struct
 src/kernel/virt/layout.zig: pub const PlanError = error{ NoFit, CmdlineTooLong, RamTooSmall };
@@ -3157,6 +3168,22 @@ src/kernel/virt/virtio/gpu.zig: pub const CtrlHdr = extern struct
 src/kernel/virt/virtio/gpu.zig: pub const Rect = extern struct { x: u32, y: u32, width: u32, height: u32 };
 src/kernel/virt/virtio/gpu.zig: pub const MemEntry = extern struct { addr: u64, length: u32, padding: u32 };
 src/kernel/virt/virtio/gpu.zig: pub const Gpu = struct
+src/kernel/virt/virtio/inputdev.zig: pub const mmio = @import("mmio.zig");
+src/kernel/virt/virtio/inputdev.zig: pub const virtq = @import("virtq.zig");
+src/kernel/virt/virtio/inputdev.zig: pub const EVENT_BYTES: usize = 8;
+src/kernel/virt/virtio/inputdev.zig: pub const EV_SYN: u16 = 0x00;
+src/kernel/virt/virtio/inputdev.zig: pub const EV_KEY: u16 = 0x01;
+src/kernel/virt/virtio/inputdev.zig: pub const EV_ABS: u16 = 0x03;
+src/kernel/virt/virtio/inputdev.zig: pub const SYN_REPORT: u16 = 0x00;
+src/kernel/virt/virtio/inputdev.zig: pub const ABS_X: u16 = 0x00;
+src/kernel/virt/virtio/inputdev.zig: pub const ABS_Y: u16 = 0x01;
+src/kernel/virt/virtio/inputdev.zig: pub const BTN_LEFT: u16 = 0x110;
+src/kernel/virt/virtio/inputdev.zig: pub const BTN_RIGHT: u16 = 0x111;
+src/kernel/virt/virtio/inputdev.zig: pub const BTN_MIDDLE: u16 = 0x112;
+src/kernel/virt/virtio/inputdev.zig: pub const Kind = enum
+src/kernel/virt/virtio/inputdev.zig: pub const ABS_MAX: u32 = 0x7FFF;
+src/kernel/virt/virtio/inputdev.zig: pub const InputDev = struct
+src/kernel/virt/virtio/inputdev.zig: pub fn fillConfig(kind: Kind, select: u8, subsel: u8, out: *[CONFIG_SIZE]u8) void
 src/kernel/virt/virtio/mmio.zig: pub const virtq = @import("virtq.zig");
 src/kernel/virt/virtio/mmio.zig: pub const INT_USED_RING: u32 = 1 << 0;
 src/kernel/virt/virtio/mmio.zig: pub const INT_CONFIG: u32 = 1 << 1;
@@ -3180,7 +3207,7 @@ src/kernel/virt/virtio/virtq.zig: pub const Error = error{ AddrOutOfBounds, Chai
 src/kernel/virt/virtio/virtq.zig: pub const Virtq = struct
 src/kernel/virt/virtio/virtq.zig: pub const ChainIter = struct
 src/kernel/virt/virtio/virtq.zig: pub fn chain(q: *const Virtq, head: u16) ChainIter
-src/kernel/virt/virt.zig: pub const STAGED_CMDLINE = "console=tty0 console=ttyS0 " ++
+src/kernel/virt/virt.zig: pub const STAGED_CMDLINE = "console=tty0 console=ttyS0 " ++ layout.WIRED_DEVICES;
 src/kernel/virt/virt.zig: pub fn init() void
 src/kernel/virt/virt.zig: pub fn available() bool
 src/kernel/virt/virt.zig: pub const Status = struct
@@ -3432,6 +3459,7 @@ src/ui/desktop/hud.zig: pub fn onKey(ascii: u8) bool
 src/ui/desktop/hud.zig: pub fn tick() bool
 src/ui/desktop/hud.zig: pub fn draw(p: *kgl.Painter, sheet_tex: u32) void
 src/ui/desktop/input.zig: pub fn onKey(d: *Desktop, ascii: u8) void
+src/ui/desktop/input.zig: pub fn onRawKey(d: *Desktop, code: u16, down: bool) bool
 src/ui/desktop/input.zig: pub fn onMouse(d: *Desktop, ev: imouse.MouseEvent) bool
 src/ui/desktop/input.zig: pub fn drainFaults(d: *Desktop) bool
 src/ui/desktop/lifecycle.zig: pub fn spawnTerm(d: *Desktop, x: i32, y: i32, w: usize, h: usize, title: ?[]const u8, ai_mode: bool) !*Window
@@ -3643,7 +3671,7 @@ src/widgets/hudview.zig: pub const Options = snap.Options;
 src/widgets/hudview.zig: pub const isFault = snap.isFault;
 src/widgets/hudview.zig: pub const Density = enum
 src/widgets/hudview.zig: pub const Scale = struct
-src/widgets/hudview.zig: pub const REF_CORE_ROWS: usize = 4;
+src/widgets/hudview.zig: pub const REF_CORE_ROWS: usize = gridFor(snap.MAX_CORES).rows;
 src/widgets/hudview.zig: pub const REF_WALL_ROWS: usize = 12;
 src/widgets/hudview.zig: pub const REF_WALL_CHARS: f32 = 34;
 src/widgets/hudview.zig: pub fn scaleFor(screen: rects.Rect) Scale
@@ -3655,7 +3683,9 @@ src/widgets/hudview.zig: pub fn layout(screen: rects.Rect, sc: Scale, d: Demand)
 src/widgets/hudview.zig: pub fn draw(
 src/widgets/hudview.zig: pub const Section = enum
 src/widgets/hudview.zig: pub fn hiddenBy(s: *const Snapshot, sc: Scale, l: Layout) usize
-src/widgets/hudview.zig: pub fn coreGrid(s: *const Snapshot) struct { cores: usize, cols: usize, rows: usize }
+src/widgets/hudview.zig: pub const CoreGrid = struct { cores: usize, cols: usize, rows: usize };
+src/widgets/hudview.zig: pub fn gridFor(n_online: usize) CoreGrid
+src/widgets/hudview.zig: pub fn coreGrid(s: *const Snapshot) CoreGrid
 src/widgets/hudview.zig: pub fn tallestGroup(s: *const Snapshot) usize
 src/widgets/hudview.zig: pub fn elide(buf: []u8, role: typeface.Role, str: []const u8, px: f32) []const u8
 src/widgets/hudview.zig: pub fn formatClock(buf: []u8, secs: ?u64) []const u8

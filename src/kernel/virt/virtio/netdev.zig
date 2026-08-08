@@ -75,6 +75,17 @@ pub fn guestMac(id: ivirt.Id) [6]u8 {
     return .{ 'R', 'S', 'V', 'D', 'K', @intCast(id) };
 }
 
+/// The mailbox slot addressed by `mac`, or null when it is no guest's — the
+/// inverse of `guestMac`, and the bridge's whole forwarding policy: a frame is
+/// a guest's exactly when its destination is an address `guestMac` handed out.
+pub fn guestIdFor(mac: *const [6]u8) ?ivirt.Id {
+    const id: ivirt.Id = mac[5];
+    if (id >= ivirt.MAX_VMS) return null;
+    const expect = guestMac(id);
+    if (!std.mem.eql(u8, mac[0..5], expect[0..5])) return null;
+    return id;
+}
+
 pub const NetDev = struct {
     transport: mmio.Mmio = undefined,
     config: [CONFIG_SIZE]u8 = [_]u8{0} ** CONFIG_SIZE,

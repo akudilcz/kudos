@@ -39,6 +39,7 @@ const smp = @import("../smp/smp.zig");
 const vmx = @import("vmx.zig");
 const vmxcaps = @import("vmxcaps.zig");
 const machine = @import("machine.zig");
+const netdev = @import("virtio/netdev.zig");
 const vmslots = @import("vmslots.zig");
 const gueststage = @import("gueststage.zig");
 const layout = @import("layout.zig");
@@ -49,8 +50,7 @@ const ivirt = @import("ivirt");
 /// model wires up (there is no device tree or PCI bus in a kudos guest). The
 /// framebuffer console comes first so kernel messages land on the guest's
 /// display, while ttyS0 — named last — stays /dev/console for the shell.
-pub const STAGED_CMDLINE = "console=tty0 console=ttyS0 " ++
-    layout.cmdlineArg(.gpu) ++ " " ++ layout.cmdlineArg(.net);
+pub const STAGED_CMDLINE = "console=tty0 console=ttyS0 " ++ layout.WIRED_DEVICES;
 
 /// How long one `pump` slice runs before the driver looks at the world again.
 ///
@@ -209,6 +209,10 @@ pub const BootError = error{
     NoNetwork,
 };
 
+/// How much RAM the staged guest needs, measured from the image this build
+/// carries — the size a caller of `bootStaged` should hand it.
+pub const stagedRamBytes = gueststage.ramBytes;
+
 /// Bring up the guest staged into this build with `ram_bytes` of RAM, and
 /// return the mailbox slot the caller must open a console window on. The SMP
 /// build spawns the guest's vCPU as a floating task (VIRT-021); the single-core
@@ -232,6 +236,51 @@ pub fn guestStaged() bool {
 /// for the window's status strip, so which core a guest holds stays visible.
 pub fn guestCore(id: ivirt.Id) ?u32 {
     return registry.coreOf(id);
+}
+
+// ── the guest NIC bridge (VIRT-027) ─────────────────────────────────────────
+//
+// kudos' guests share the machine's one physical NIC at layer 2. The network
+// stack knows nothing of guests: it exposes a Bridge hook (net.connectBridge),
+// the apex wires that hook to these two functions, and the frames themselves
+// cross cores through the ivirt mailbox — the same seam every other guest-bound
+// byte uses. Both run on the system loop's core; the guest's own core drains
+// and fills the rings at interrupt-poll time.
+
+/// Offer one received wire frame to the guests. Consumes (returns true) exactly
+/// the unicast frames addressed to a running guest's MAC; broadcast and
+/// multicast are COPIED to every running guest and left for kudos' own stack —
+/// an ARP request is everyone's. A full guest ring counts the drop in ivirt.
+pub fn bridgeOffer(frame: []const u8) bool {
+    if (frame.len < 14) return false;
+    const dst = frame[0..6];
+    if (dst[0] & 1 == 1) {
+        for (0..ivirt.MAX_VMS) |id| {
+            if (ivirt.state(id) == .running) _ = ivirt.netDeliver(id, frame);
+        }
+        return false;
+    }
+    const id = netdev.guestIdFor(dst) orelse return false;
+    if (ivirt.state(id) != .running) return false;
+    _ = ivirt.netDeliver(id, frame);
+    return true;
+}
+
+/// Round-robin cursor for `bridgePoll`, so one chatty guest cannot starve
+/// another of the wire.
+var bridge_next: ivirt.Id = 0;
+
+/// Copy the next guest-transmitted frame into `buf` and return its length, or
+/// null when no guest has anything to send.
+pub fn bridgePoll(buf: []u8) ?usize {
+    for (0..ivirt.MAX_VMS) |i| {
+        const id = (bridge_next + i) % ivirt.MAX_VMS;
+        if (ivirt.netFetch(id, buf)) |len| {
+            bridge_next = (id + 1) % ivirt.MAX_VMS;
+            return len;
+        }
+    }
+    return null;
 }
 
 // ── network image boots (VIRT-019/VIRT-020) ─────────────────────────────────

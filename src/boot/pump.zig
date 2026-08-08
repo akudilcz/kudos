@@ -110,11 +110,18 @@ fn dispatchInput(d: *Desktop) bool {
             d.spawnApp(.term) catch |e|
                 klog.puts(std.fmt.bufPrint(&msg, "F12: spawn term failed: {s}\n", .{@errorName(e)}) catch "F12: spawn term failed\n");
             changed = true;
-        } else if (ev.ascii != 0) {
-            // While it is up, the display takes the keys it owns (freeze,
-            // acknowledge) before the focused window sees them.
-            if (!hud.onKey(ev.ascii)) d.onKey(ev.ascii);
-            changed = true;
+        } else {
+            // Every edge — press and release alike — is offered to the focused
+            // window first, for an app that runs its own input stack (a VM's
+            // guest). It is not consumed there: the ascii path below still runs,
+            // so a guest with only a serial console keeps working.
+            if (d.onRawKey(ev.evdev, ev.down)) changed = true;
+            if (ev.down and ev.ascii != 0) {
+                // While it is up, the display takes the keys it owns (freeze,
+                // acknowledge) before the focused window sees them.
+                if (!hud.onKey(ev.ascii)) d.onKey(ev.ascii);
+                changed = true;
+            }
         }
     }
     while (imouse.poll()) |ev| {
@@ -143,6 +150,16 @@ var cnt_soft_render_input = counter.Counter{ .mod = .ui, .name = "soft.render.in
 var cnt_soft_render_tick = counter.Counter{ .mod = .ui, .name = "soft.render.tick" };
 var cnt_soft_render_forced = counter.Counter{ .mod = .ui, .name = "soft.render.forced" };
 
+/// net's guest-bridge hook, wired to the hypervisor here at the apex: the
+/// stack must stay ignorant of guests and the hypervisor of NICs, and this is
+/// the one file that already knows both.
+fn bridgeOffer(_: *anyopaque, frame: []const u8) bool {
+    return virt.bridgeOffer(frame);
+}
+fn bridgePoll(_: *anyopaque, buf: []u8) ?usize {
+    return virt.bridgePoll(buf);
+}
+
 /// Uses the module's `desktop` (set by main before either loop starts).
 pub fn systemLoop() noreturn {
     counter.register(&cnt_soft_frames);
@@ -151,6 +168,10 @@ pub fn systemLoop() noreturn {
     counter.register(&cnt_soft_render_input);
     counter.register(&cnt_soft_render_tick);
     counter.register(&cnt_soft_render_forced);
+    // Guests reach the wire from the first frame they send: connect the
+    // hypervisor's bridge before the loop's first net.pump().
+    var bridge_ctx: u8 = 0;
+    net.connectBridge(.{ .ctx = &bridge_ctx, .offer = bridgeOffer, .poll = bridgePoll });
     // Paint once on entry so the desktop is on screen immediately. In the SMP
     // build the desktop was already rendered once on the boot stack (consuming
     // the compositor's initial full-present), so force a fresh full present here
