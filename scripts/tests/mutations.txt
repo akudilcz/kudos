@@ -37,3 +37,4 @@ src/kernel/virt/netbridge.zig | s/if \(src == id\) continue;/if (false) continue
 src/kernel/virt/netbridge.zig | s/^        return false;$/        return true;/ | netbridge | a broadcast is treated as wholly the guests' — the host stack never sees an ARP request (VIRT-029)
 src/kernel/virt/netbridge.zig | s/return std\.mem\.eql\(u8, src, &netdev\.guestMac\(id\)\);/return true;/ | netbridge | a guest may transmit as its sibling or as the host (VIRT-033)
 src/kernel/virt/vcpuid.zig | s/const ECX_XSAVE_DEPENDENT: u32 = .*$/const ECX_XSAVE_DEPENDENT: u32 = 0;/ | vcpuid | AVX advertised to a guest with no XSAVE — an impossible CPU whose users die reading low addresses
+src/kernel/virt/virtio/gpu.zig | s/@memset\(self\.stores\[slot\], 0\);/\/\/ mutated/ | virtio_gpu | a new resource shows whatever its host store held — for a reused slot, the previous guest's last frame

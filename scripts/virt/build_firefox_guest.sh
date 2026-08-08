@@ -394,42 +394,27 @@ else
 fi
 kill \$CONTROL_PID 2>/dev/null
 
+# A stock browser, as plainly as it can be started. --kiosk is not here on
+# purpose: the compositor's kiosk-shell already fullscreens every client, so the
+# flag adds nothing but a second, less-travelled path through the browser's own
+# UI. --no-sandbox stays because it is not a preference — this kernel has no
+# user namespaces for the sandbox to build on, and the isolation that matters
+# here is the virtual machine around the whole guest.
 exec dbus-run-session firefox-esr \\
-    --no-remote --no-sandbox --kiosk \\
+    --no-remote --no-sandbox \\
     --profile /root/.mozilla/firefox/kudos \\
     "$START_URL"
 EOF
 chmod +x "$ROOTFS/usr/bin/kiosk-firefox"
 
-# The browser's profile settings, copied into the fresh profile at boot. Every
-# line here buys memory or removes a process, because this guest's whole system
-# lives in RAM and the browser is the thing it exists to run: Firefox's default
-# is a fleet of processes sized for a desktop with tens of gigabytes, and each
-# one it does not start is a working set the guest does not have to find.
+# The browser's profile settings. ONE line, because this guest is meant to run
+# a stock browser: every pref beyond what the hardware makes true is a setting
+# that has to be carried, explained, and re-justified for the next application.
+# There is no GPU here, so software rendering is not a workaround — it is the
+# machine — and naming it only skips a probe that would reach the same answer.
 mkdir -p "$ROOTFS/usr/share/kudos"
 cat > "$ROOTFS/usr/share/kudos/user.js" <<'EOF'
-// Firefox's own accessibility switch, alongside the two environment variables
-// /init exports. The browser reaches for org.a11y.Bus at start-up and exits
-// silently when the bus has no provider, and this image has none; a kiosk has
-// no screen reader to serve.
-user_pref("accessibility.force_disabled", 1);
-// One content process, not the default fleet: a kiosk shows one page.
-user_pref("dom.ipc.processCount", 1);
-// Run extensions in the parent. The separate WebExtensions process is pure
-// overhead for a kiosk with no extensions installed.
-user_pref("extensions.webextensions.remote", false);
-// There is no GPU in this guest, so WebRender's software backend IS the
-// renderer; naming it skips the probe that discovers the same thing.
 user_pref("gfx.webrender.software", true);
-user_pref("media.hardware-video-decoding.enabled", false);
-// Nothing here persists, so a first-run tour, a session to restore and a
-// telemetry upload are all work with no destination.
-user_pref("browser.aboutwelcome.enabled", false);
-user_pref("browser.startup.homepage_override.mstone", "ignore");
-user_pref("browser.sessionstore.resume_from_crash", false);
-user_pref("toolkit.telemetry.enabled", false);
-user_pref("datareporting.policy.dataSubmissionEnabled", false);
-user_pref("datareporting.healthreport.uploadEnabled", false);
 EOF
 
 # /init — the whole of userspace start-up for this image.
@@ -594,14 +579,6 @@ export MOZ_ENABLE_WAYLAND=1
 # reporter is a second GTK program started at the worst possible moment, and
 # when it fails it buries the failure that summoned it.
 export MOZ_CRASHREPORTER_DISABLE=1
-# No accessibility. Firefox asks the session bus for org.a11y.Bus at start-up,
-# dbus reports activating it, and the browser then exits without printing
-# anything at all — the whole failure, on a bus whose provider (at-spi2) is not
-# in this image. Nothing here reads an accessibility tree, so the subsystem is
-# removed rather than supplied: NO_AT_BRIDGE stops GTK's bridge from loading and
-# GTK_A11Y=none stops the toolkit asking for a backend in the first place.
-export NO_AT_BRIDGE=1
-export GTK_A11Y=none
 mkdir -p "\$XDG_RUNTIME_DIR"
 chmod 700 "\$XDG_RUNTIME_DIR"
 

@@ -225,6 +225,15 @@ pub const Gpu = struct {
             return self.respond(hdr, RESP_ERR_INVALID_PARAMETER);
         const slot = self.freeSlot() orelse return self.respond(hdr, RESP_ERR_UNSPEC);
         self.resources[slot] = .{ .id = c.resource_id, .width = c.width, .height = c.height };
+        // A new resource reads as black, not as whatever its host store last
+        // held. Nothing else clears it: SET_SCANOUT publishes the store the
+        // moment the guest names it, which is before the first
+        // TRANSFER_TO_HOST_2D has put a single pixel there, so an unblanked
+        // store IS what the window composites for those frames. Uninitialised
+        // memory shown as pixels is the visible half; the half that matters is
+        // that a slot reused by a later guest would otherwise show the previous
+        // guest's last frame, and one guest may never see another's screen.
+        @memset(self.stores[slot], 0);
         return self.respond(hdr, RESP_OK_NODATA);
     }
 

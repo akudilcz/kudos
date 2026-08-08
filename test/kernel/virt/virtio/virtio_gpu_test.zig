@@ -169,6 +169,15 @@ fn create2d(r: *Req, id: u32, format: u32, w: u32, h: u32) []const u8 {
     return r.hdr(gpu.CMD_RESOURCE_CREATE_2D, 0, 0).u32le(id).u32le(format).u32le(w).u32le(h).bytes();
 }
 
+/// Re-lay the sentinel over a slot's store AFTER its resource exists. Creating
+/// a resource blanks its store on purpose, so a test that means to watch which
+/// pixels a TRANSFER writes has to establish its marker afterwards — otherwise
+/// it is watching the blanking, and would pass over a transfer that wrote
+/// nothing at all.
+fn seedStore(slot: usize) void {
+    @memset(&stores_mem[slot], STORE_SENTINEL);
+}
+
 /// Attach the 8x4 test image as its two non-contiguous scatter entries, so a
 /// transfer's linear offsets must cross an entry boundary.
 fn attachSplitImage(r: *Req) []const u8 {
@@ -202,6 +211,7 @@ test "full sequence: create, attach split backing, scanout, sub-rect transfer, f
     f.paintGuestImage();
     var r1 = Req{};
     try f.expectOk(&g, create2d(&r1, RES_ID, gpu.FORMAT_B8G8R8X8_UNORM, IMG_W, IMG_H));
+    seedStore(0);
     var r2 = Req{};
     try f.expectOk(&g, attachSplitImage(&r2));
 
@@ -342,6 +352,26 @@ test "attach: entry addr past RAM and entry count over the ceiling are rejected"
     try expectEqual(gpu.RESP_ERR_INVALID_PARAMETER, (try f.submit(&g, r3.hdr(gpu.CMD_RESOURCE_ATTACH_BACKING, 0, 0).u32le(RES_ID).u32le(gpu.MAX_BACKING_ENTRIES + 1).bytes())).resp);
 }
 
+test "a new resource blanks its store: a scanout shows black, never stale pixels" {
+    var f: Fx = undefined;
+    f.init();
+    // The store arrives holding another image entirely — which is the real
+    // case: these stores are per-VM and outlive the guest that last drew into
+    // them, so a slot handed to a new guest starts full of the old guest's
+    // final frame.
+    var g = makeGpu();
+    var r1 = Req{};
+    try f.expectOk(&g, create2d(&r1, RES_ID, gpu.FORMAT_B8G8R8X8_UNORM, IMG_W, IMG_H));
+
+    // SET_SCANOUT publishes the store immediately — before any
+    // TRANSFER_TO_HOST_2D has put a pixel in it — so what it holds at creation
+    // is what the window composites for those first frames.
+    var r2 = Req{};
+    try f.expectOk(&g, r2.hdr(gpu.CMD_SET_SCANOUT, 0, 0).rect(0, 0, IMG_W, IMG_H).u32le(0).u32le(RES_ID).bytes());
+    try expect(ivirt.fb(VM) != null);
+    for (stores_mem[0][0 .. IMG_W * IMG_H]) |px| try expectEqual(@as(u32, 0), px);
+}
+
 test "transfer: rect outside the resource leaves the store untouched" {
     var f: Fx = undefined;
     f.init();
@@ -349,6 +379,7 @@ test "transfer: rect outside the resource leaves the store untouched" {
     f.paintGuestImage();
     var r1 = Req{};
     try f.expectOk(&g, create2d(&r1, RES_ID, gpu.FORMAT_B8G8R8X8_UNORM, IMG_W, IMG_H));
+    seedStore(0);
     var r2 = Req{};
     try f.expectOk(&g, attachSplitImage(&r2));
     var r3 = Req{};
@@ -364,6 +395,7 @@ test "transfer: an offset past the backing, or near u64 max, is rejected" {
     var g = makeGpu();
     var r1 = Req{};
     try f.expectOk(&g, create2d(&r1, RES_ID, gpu.FORMAT_B8G8R8X8_UNORM, IMG_W, IMG_H));
+    seedStore(0);
     var r2 = Req{};
     try f.expectOk(&g, attachSplitImage(&r2));
     var r3 = Req{};
@@ -379,6 +411,7 @@ test "transfer: a scatter entry corrupted after attach is re-checked, not truste
     var g = makeGpu();
     var r1 = Req{};
     try f.expectOk(&g, create2d(&r1, RES_ID, gpu.FORMAT_B8G8R8X8_UNORM, IMG_W, IMG_H));
+    seedStore(0);
     var r2 = Req{};
     try f.expectOk(&g, attachSplitImage(&r2));
     g.resources[0].entries[0].addr = RAM_LEN; // the corruption the re-check defends against
