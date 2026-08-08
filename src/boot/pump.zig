@@ -110,6 +110,14 @@ fn dispatchInput(d: *Desktop) bool {
             d.spawnApp(.term) catch |e|
                 klog.puts(std.fmt.bufPrint(&msg, "F12: spawn term failed: {s}\n", .{@errorName(e)}) catch "F12: spawn term failed\n");
             changed = true;
+        } else if (ev.down and ev.ascii != 0 and hud.onKey(ev.ascii)) {
+            // While it is up, the display takes the keys it owns (freeze,
+            // acknowledge) before ANY window sees them — including a window
+            // that runs its own input stack, which is offered raw edges below.
+            // The matching release still reaches that window: a release for a
+            // press it never saw is ignored by every input stack, while
+            // swallowing releases would leave a key stuck down in a guest.
+            changed = true;
         } else {
             // Every edge — press and release alike — is offered to the focused
             // window first, for an app that runs its own input stack (a VM's
@@ -117,9 +125,7 @@ fn dispatchInput(d: *Desktop) bool {
             // so a guest with only a serial console keeps working.
             if (d.onRawKey(ev.evdev, ev.down)) changed = true;
             if (ev.down and ev.ascii != 0) {
-                // While it is up, the display takes the keys it owns (freeze,
-                // acknowledge) before the focused window sees them.
-                if (!hud.onKey(ev.ascii)) d.onKey(ev.ascii);
+                d.onKey(ev.ascii);
                 changed = true;
             }
         }
@@ -153,11 +159,11 @@ var cnt_soft_render_forced = counter.Counter{ .mod = .ui, .name = "soft.render.f
 /// net's guest-bridge hook, wired to the hypervisor here at the apex: the
 /// stack must stay ignorant of guests and the hypervisor of NICs, and this is
 /// the one file that already knows both.
-fn bridgeOffer(_: *anyopaque, frame: []const u8) bool {
-    return virt.bridgeOffer(frame);
+fn bridgeOffer(_: *anyopaque, from: net.Port, frame: []const u8) bool {
+    return virt.bridgeOffer(from, frame);
 }
-fn bridgePoll(_: *anyopaque, buf: []u8) ?usize {
-    return virt.bridgePoll(buf);
+fn bridgePoll(_: *anyopaque, buf: []u8, from: *net.Port) ?usize {
+    return virt.bridgePoll(buf, from);
 }
 
 /// Uses the module's `desktop` (set by main before either loop starts).

@@ -70,6 +70,9 @@ pub fn build(b: *std.Build) void {
     // booting and spending half an hour pulling 236 MiB through the TCP stack.
     const guest_name = b.option([]const u8, "guest", "stage assets/virt/<name>/ as the built-in guest (default: assets/virt/)");
     const guest_dir = if (guest_name) |n| b.fmt("assets/virt/{s}", .{n}) else "assets/virt";
+    // What the `vm boot` list calls entry 1: the staged image's own name, so the
+    // menu cannot drift from what -Dguest actually staged.
+    const staged_guest_name = guest_name orelse "busybox";
     const guest_bzimage_rel = b.fmt("{s}/bzImage", .{guest_dir});
     const guest_initramfs_rel = b.fmt("{s}/initramfs.cpio.gz", .{guest_dir});
     const guest_present = blk: {
@@ -217,7 +220,9 @@ pub fn build(b: *std.Build) void {
     imouse_mod.addImport("ring", ring_mod);
     imouse_mod.addImport("ilog", ilog_mod);
     // ivirt: the hypervisor ↔ VM-console-app cross-core mailbox (serial rings,
-    // guest lifecycle state, scanout publish). Leaf; depends only on the ring.
+    // guest lifecycle state, scanout publish, bridged Ethernet frames). Depends
+    // on the ring and (for the frame ceiling) the inet contract, wired below
+    // once inet_mod exists.
     const ivirt_mod = b.createModule(.{ .root_source_file = b.path("src/iface/ivirt.zig") });
     ivirt_mod.addImport("ring", ring_mod);
     // overlay_plane.zig: pure overlay-plane arm/blank state machine (the transition
@@ -241,6 +246,9 @@ pub fn build(b: *std.Build) void {
     // The network as an application sees it: online?, resolve, ping, fetch. Everything
     // below it (Ethernet, IP, TCP, DHCP, DNS) stays inside the net group.
     const inet_mod = b.createModule(.{ .root_source_file = b.path("src/iface/inet.zig") });
+    // The guest NIC bridge's frame rings size their slots from the network
+    // contract's frame ceiling (inet.ETHER_FRAME_MAX): one fact, one home.
+    ivirt_mod.addImport("inet", inet_mod);
 
     // The hardware inventory as a list of facts. Not a vtable: a diagnostic that prints
     // the device list wants to NAME each device, not talk to it.
@@ -473,6 +481,7 @@ pub fn build(b: *std.Build) void {
         buildinfo.addOption(bool, "soft_display", soft_display);
         buildinfo.addOption(u32, "usb_max_gb", usb_max_gb);
         buildinfo.addOption(bool, "heartbeat", heartbeat);
+        buildinfo.addOption([]const u8, "staged_guest", staged_guest_name);
         // verify-script is SMP-only: verifyscript.spawn creates a scheduler task
         // (sched.spawn/enqueue), and only the SMP image runs the per-core
         // scheduler. Injecting it into the single-core image would silently
@@ -605,6 +614,7 @@ pub fn build(b: *std.Build) void {
     pure_buildinfo.addOption(bool, "soft_display", soft_display);
     pure_buildinfo.addOption(u32, "usb_max_gb", usb_max_gb);
     pure_buildinfo.addOption(bool, "heartbeat", heartbeat);
+    pure_buildinfo.addOption([]const u8, "staged_guest", staged_guest_name);
     pure_buildinfo.addOption(bool, "verify_script", false);
     for ([_]HostSuite{
         .{ .n = "calc", .s = "src/drivers/gpu/base/calc.zig" }, // GPU MSI/MTRR + pitch math
@@ -770,6 +780,7 @@ pub fn build(b: *std.Build) void {
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/virtio/virtio_gpudev_test.zig" }, // the display adapter: 2D model behind the transport
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/virtio/virtio_netdev_test.zig" }, // the network adapter: rx/tx queues behind the transport, frames over the FrameSink seam
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/virtio/virtio_inputdev_test.zig" }, // keyboard + tablet: config selectors and evdev events behind the transport
+        .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/netbridge_test.zig" }, // the guest NIC bridge's forwarding policy (which port a frame is for)
         .{ .n = "vmslots", .s = "src/kernel/virt/vmslots.zig" }, // VM slot retirement handshake (window ↔ vCPU)
         .{ .n = "vspace", .s = "src/kernel/memory/vspace.zig" }, // 4-level address-space builder (MEM-001; session isolation)
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/guestlist_test.zig" }, // the `vm boot` network-image catalog (VIRT-019/020)
@@ -1313,6 +1324,7 @@ pub fn build(b: *std.Build) void {
         host_buildinfo.addOption(bool, "test_hooks", test_hooks);
         host_buildinfo.addOption(bool, "verify_script", false);
         host_buildinfo.addOption(bool, "heartbeat", false);
+        host_buildinfo.addOption([]const u8, "staged_guest", staged_guest_name);
         host_buildinfo.addOption(u32, "usb_max_gb", usb_max_gb);
         terminal_root_mod.addOptions("buildinfo", host_buildinfo);
         const t = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("test/apps/terminal_test.zig"), .target = b.graph.host, .optimize = optimize }) });

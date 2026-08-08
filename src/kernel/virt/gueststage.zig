@@ -1,6 +1,7 @@
-//! The Linux guest image staged into this build. scripts/virt/build_guest.sh
-//! produces a tiny 64-bit bzImage and a busybox initramfs under assets/virt/
-//! (git-ignored, optional); the kernel embeds them here via @embedFile — the
+//! The Linux guest image staged into this build. The scripts/virt/build_*.sh
+//! family each produce a 64-bit bzImage and an initramfs under assets/virt/
+//! (git-ignored, optional); `-Dguest=<name>` picks which pair is staged, and
+//! the kernel embeds the chosen one here via @embedFile — the
 //! same mechanism seedRamdisk uses for teapot.glb, minus the ramdisk heap copy,
 //! since only the VM boot path consumes these ~2 MiB and duplicating them into
 //! the ramdisk would double the cost. When no guest was staged, the build wires
@@ -12,11 +13,20 @@
 //! loader accepts cannot drift.
 
 const bzimage = @import("bzimage.zig");
+const layout = @import("layout.zig");
+const buildinfo = @import("buildinfo");
 
 /// The staged kernel image (Linux/x86 bzImage). Empty when none was staged.
 const guest_bzimage = @embedFile("guest_bzimage");
 /// The staged root filesystem (gzip-compressed cpio initramfs). Empty when none.
 const guest_initramfs = @embedFile("guest_initramfs");
+
+/// The staged guest's name — the `-Dguest=<name>` the build was given, or the
+/// default busybox pair. Recorded at build time beside the blobs it names, so
+/// what the `vm boot` list calls entry 1 cannot drift from what was staged.
+pub fn name() []const u8 {
+    return buildinfo.staged_guest;
+}
 
 /// The staged bzImage bytes, to hand to the loader (virt/linuxload.zig).
 pub fn bzImage() []const u8 {
@@ -58,19 +68,27 @@ pub fn staged() bool {
 ///     UNPACK_RATIO times its packed size (measured on the Firefox image:
 ///     662 MiB from 236 MiB).
 ///   - room for that userland to RUN in — heap, page cache, a browser's own
-///     working set — which is the same size again, generously.
+///     working set. A browser is the demanding case and its working set is not
+///     proportional to its rootfs at all: several processes, each with a
+///     software rasteriser's buffers for a whole scanout. Sized so the measured
+///     Firefox image gets its tmpfs and about two GiB on top of it, because a
+///     guest that runs out does not report a shortage — its allocations fail and
+///     its libraries dereference the failure, which reads as a null-pointer bug
+///     in whatever library happened to ask.
 /// A floor keeps the small guests exactly where they were.
 pub fn ramBytes() u64 {
     const packed_len = initramfs().len;
     const rootfs = packed_len * UNPACK_RATIO;
-    return @max(MIN_RAM_BYTES, rootfs * RUNTIME_MULTIPLE);
+    return @min(layout.MAX_RAM_BYTES, @max(MIN_RAM_BYTES, rootfs * RUNTIME_MULTIPLE));
 }
 
 /// Bytes a gzipped cpio initramfs unpacks to, per byte packed.
 const UNPACK_RATIO: usize = 3;
 /// Total RAM per byte of unpacked root filesystem: the tree itself plus the room
-/// its userland needs to run.
-const RUNTIME_MULTIPLE: usize = 3;
+/// its userland needs to run. A browser's own working set dominates and is not
+/// proportional to the tree at all, so this is set for the demanding case; the
+/// browser image lands above the ceiling and takes all of it.
+const RUNTIME_MULTIPLE: usize = 6;
 /// The floor, which is what every guest smaller than a browser gets: a busybox
 /// initramfs boot fits comfortably in 128 MiB and several such guests stay far
 /// inside the frame allocator's budget.

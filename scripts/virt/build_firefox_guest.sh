@@ -39,7 +39,7 @@ ALPINE_MIRROR="https://dl-cdn.alpinelinux.org/alpine"
 # the exercise is a browser that BROWSES. The self-describing local page is
 # still in the image at file:///usr/share/kudos/start.html for runs where the
 # wire is deliberately absent.
-START_URL="${START_URL:-https://example.com}"
+START_URL="${START_URL:-https://en.wikipedia.org/wiki/Operating_system}"
 
 # The scanout the compositor drives. Held at the ivirt scanout ceiling
 # (iface/ivirt.zig FB_MAX_W/FB_MAX_H), because the device model refuses a larger
@@ -55,6 +55,37 @@ MARKER="KUDOS-FIREFOX-UP"
 # compositor anyway. Every wait states a budget: a guest whose devices never
 # appear must reach its serial shell and say so, not hang in PID 1.
 UDEV_SETTLE_S=30
+
+# How long /init waits for the DHCP lease before starting the compositor anyway.
+# The browser resolves its start URL once, at launch, so a lease that lands after
+# it has given up costs a whole boot to notice and looks exactly like a broken
+# bridge. Waiting first makes the lease a precondition rather than a race. The
+# budget is generous because a guest that comes up before the bridge does is the
+# case it exists for; when it expires the browser still starts, and says it is
+# offline, which is a true and diagnosable answer.
+DHCP_WAIT_S=30
+
+# How long the userspace stress probe runs before the compositor starts. It
+# exists to answer one question early and cheaply — does this guest execute
+# ordinary forks and threads correctly? — because everything above it is built
+# on the answer, and a browser is a slow and ambiguous way to ask. Seconds, not
+# minutes: a CPU-state fault shows up immediately or not at all.
+STRESS_S=15
+
+# How long the control Wayland client is given to prove it can hold a buffer
+# before the browser replaces it. A client that cannot get one fails on its
+# first frame, so this only has to outlast a compositor round trip.
+CONTROL_S=5
+
+# How often /init checks that the compositor and the browser are both still
+# alive. Every wait states a budget: a few seconds is fast enough that the death
+# report names the failure while its log lines are still on screen, and slow
+# enough to cost a guest with a software rasteriser nothing.
+WATCH_INTERVAL_S=5
+
+# How many of those checks pass between routine memory reports. A trend is what
+# distinguishes a guest that is merely tight from one that is being consumed.
+MEMORY_EVERY_CHECKS=6
 
 # How long /init lets the compositor talk before printing its device report.
 # Long enough for wlroots' backend start-up, short enough that a stuck guest is
@@ -228,6 +259,23 @@ tar xzf "$WORK/$MINIROOTFS" -C "$ROOTFS"
 #   dbus                            — Firefox expects a session bus; without one
 #                                     it retries and logs on every service
 #   firefox-esr                     — the point of the exercise
+#   weston-clients                  — the CONTROL. A browser is the worst
+#                                     possible first Wayland client to debug
+#                                     with: when it fails to paint, the fault
+#                                     could be the virtual GPU, the compositor,
+#                                     the buffer path, or the browser. A tiny
+#                                     known-good client that only allocates a
+#                                     shared-memory buffer and draws into it
+#                                     splits that four ways into one, and its
+#                                     liveness is the whole assertion.
+#   stress-ng                       — the other control, for the layer below:
+#                                     fork, threads and CPU state exercised
+#                                     hard, from userspace, in seconds. A guest
+#                                     whose processes die at low addresses is
+#                                     either running a browser bug or a
+#                                     hypervisor bug, and this is what tells
+#                                     the two apart without waiting on a
+#                                     browser to boot.
 # --no-scripts because package scripts want a chroot the build does not have;
 # the minirootfs already carries the busybox symlink farm they would rebuild,
 # and the caches they warm (fonts, icons) are rebuilt at first use instead.
@@ -236,8 +284,9 @@ tar xzf "$WORK/$MINIROOTFS" -C "$ROOTFS"
     --repository "$ALPINE_MIRROR/$ALPINE_BRANCH/community" \
     --no-cache --no-scripts --no-interactive \
     add mesa-dri-gallium mesa-egl mesa-gbm weston weston-backend-drm \
-        xkeyboard-config seatd eudev font-dejavu \
-        adwaita-icon-theme librsvg gsettings-desktop-schemas dbus firefox-esr
+        weston-clients xkeyboard-config seatd eudev font-dejavu \
+        adwaita-icon-theme librsvg gsettings-desktop-schemas dbus firefox-esr \
+        stress-ng
 
 echo "kudos-firefox" > "$ROOTFS/etc/hostname"
 
@@ -313,12 +362,57 @@ EOF
 cat > "$ROOTFS/usr/bin/kiosk-firefox" <<EOF
 #!/bin/sh
 # Started by weston's [autolaunch] with WAYLAND_DISPLAY already set.
+
+# The control, before the browser. weston-simple-shm does exactly one thing:
+# allocate a shared-memory buffer, attach it to a surface, and keep drawing.
+# That is the whole path a browser needs and the whole path that is in doubt,
+# with none of a browser's own complexity on top — so if it lives, the virtual
+# GPU, the compositor and the buffer path are all proven, and a browser that
+# then fails has failed for reasons of its own. Its liveness IS the assertion;
+# a client that cannot get a buffer exits at once.
+weston-simple-shm > /tmp/control.log 2>&1 &
+CONTROL_PID=\$!
+sleep ${CONTROL_S}
+if kill -0 \$CONTROL_PID 2>/dev/null; then
+    echo "kudos-guest: CONTROL-CLIENT-ALIVE — shm buffer path works" > /dev/console
+else
+    echo "kudos-guest: CONTROL-CLIENT-DIED — the fault is below the browser" > /dev/console
+    tail -5 /tmp/control.log > /dev/console
+fi
+kill \$CONTROL_PID 2>/dev/null
+
 exec dbus-run-session firefox-esr \\
     --no-remote --no-sandbox --kiosk \\
     --profile /root/.mozilla/firefox/kudos \\
     "$START_URL"
 EOF
 chmod +x "$ROOTFS/usr/bin/kiosk-firefox"
+
+# The browser's profile settings, copied into the fresh profile at boot. Every
+# line here buys memory or removes a process, because this guest's whole system
+# lives in RAM and the browser is the thing it exists to run: Firefox's default
+# is a fleet of processes sized for a desktop with tens of gigabytes, and each
+# one it does not start is a working set the guest does not have to find.
+mkdir -p "$ROOTFS/usr/share/kudos"
+cat > "$ROOTFS/usr/share/kudos/user.js" <<'EOF'
+// One content process, not the default fleet: a kiosk shows one page.
+user_pref("dom.ipc.processCount", 1);
+// Run extensions in the parent. The separate WebExtensions process is pure
+// overhead for a kiosk with no extensions installed.
+user_pref("extensions.webextensions.remote", false);
+// There is no GPU in this guest, so WebRender's software backend IS the
+// renderer; naming it skips the probe that discovers the same thing.
+user_pref("gfx.webrender.software", true);
+user_pref("media.hardware-video-decoding.enabled", false);
+// Nothing here persists, so a first-run tour, a session to restore and a
+// telemetry upload are all work with no destination.
+user_pref("browser.aboutwelcome.enabled", false);
+user_pref("browser.startup.homepage_override.mstone", "ignore");
+user_pref("browser.sessionstore.resume_from_crash", false);
+user_pref("toolkit.telemetry.enabled", false);
+user_pref("datareporting.policy.dataSubmissionEnabled", false);
+user_pref("datareporting.healthreport.uploadEnabled", false);
+EOF
 
 # /init — the whole of userspace start-up for this image.
 #
@@ -399,6 +493,49 @@ report_devices() {
     say ""
 }
 
+# The CPU this guest believes it has. A hypervisor's CPUID is a promise, and a
+# guest takes it literally: a library that sees a vector extension advertised
+# emits it, and a process that then faults leaves no trace naming the feature.
+# So the promise is printed where the faults are read.
+report_cpu() {
+    say "cpu: \$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | tr -s ' ')"
+    say "cores: \$(grep -c ^processor /proc/cpuinfo)"
+    say "feat: \$(grep -m1 ^flags /proc/cpuinfo | tr ' ' '\\n' |
+        grep -xE 'avx|avx2|avx512f|xsave|xsaveopt|fsgsbase|sse4_2|aes|rdrand|rdseed|pcid|smep|smap|erms|fma' |
+        tr '\\n' ' ')"
+}
+
+# Does this guest execute ordinary userspace correctly? Fork storms and thread
+# churn are what a browser does constantly and what a hypervisor gets wrong
+# subtly: a mishandled segment base or saved register leaves a fresh process
+# dereferencing a low address, which reads as a null-pointer bug in whichever
+# library happened to run first. Asking directly, before the browser, turns a
+# three-minute ambiguous failure into a fifteen-second verdict.
+run_stress_probe() {
+    stress-ng --fork 4 --pthread 4 --timeout ${STRESS_S}s --metrics-brief \\
+        > /tmp/stress.log 2>&1
+    rc=\$?
+    if [ \$rc -eq 0 ]; then
+        say "stress: PASS — fork and thread churn survived ${STRESS_S}s"
+    else
+        say "stress: FAIL rc=\$rc — this guest miscomputes below the browser"
+        grep -iE 'fail|error|signal' /tmp/stress.log | tail -4 |
+            fold -w ${CONSOLE_COLS} | while read -r l; do say "stress: \$l"; done
+    fi
+}
+
+# What the guest has left, and whether the kernel has killed anything for it.
+# The first suspect whenever a browser dies here: this guest's whole system is
+# in RAM (VIRT-004), so the tmpfs root is charged against the same budget the
+# browser allocates from, and the two together are what the hypervisor sized.
+report_memory() {
+    say "mem \$1: \$(free -m | sed -n '2p' | tr -s ' ')"
+    dmesg | grep -iE 'out of memory|oom-kill|killed process' | tail -3 |
+        fold -w ${CONSOLE_COLS} | while read -r l; do
+        say "oom: \$l"
+    done
+}
+
 # The caches a package manager's install scripts normally build. This image is
 # assembled unprivileged, with --no-scripts, so none of them exist — and each
 # one is load-bearing rather than an optimisation: GTK aborts on an icon it
@@ -450,26 +587,69 @@ say "seatd started"
 # it (weston autolaunches the browser — /usr/bin/kiosk-firefox — with a fresh
 # profile, because nothing persists anyway).
 mkdir -p /root/.mozilla/firefox/kudos
+cp /usr/share/kudos/user.js /root/.mozilla/firefox/kudos/user.js
+
+# Wait for the lease before the browser exists. Firefox resolves its start URL
+# once, at launch; a lease that lands a second later leaves a network-error page
+# on screen for a bridge that works, which is a whole boot cycle to tell apart
+# from a bridge that does not. The wait is bounded and both outcomes are stated:
+# the address it got, or that it is starting offline.
+guest_ip() { ifconfig eth0 2>/dev/null | sed -n 's/.*inet addr:\\([0-9.]*\\).*/\\1/p'; }
+waited=0
+while [ -z "\$(guest_ip)" ] && [ \$waited -lt ${DHCP_WAIT_S} ]; do
+    sleep 1
+    waited=\$((waited + 1))
+done
+if [ -n "\$(guest_ip)" ]; then
+    say "dhcp: eth0 is \$(guest_ip) after \${waited}s, dns \$(sed -n 's/^nameserver //p' /etc/resolv.conf | tr '\\n' ' ')"
+else
+    say "dhcp: NO LEASE after ${DHCP_WAIT_S}s — the browser starts offline"
+fi
+
+report_cpu
+report_memory "before the browser"
+run_stress_probe
+
 say "starting weston kiosk + firefox on ${FB_W}x${FB_H}"
-# The compositor+browser log goes to a FILE, not the console: the console
-# mirror folds and truncates, and the line that names a browser exit is
-# routinely longer than one mirrored line. The watcher below owns reporting.
+# The compositor+browser log goes to a FILE first so nothing is lost to a
+# console that folds and truncates, and is then STREAMED off the machine line by
+# line. Streaming rather than dumping on exit, because the failure this image
+# actually has does not exit the compositor: the browser's child processes die
+# while weston lives on showing their last frame, and a report conditioned on
+# the compositor exiting never fires at all.
 weston --backend=drm-backend.so > /tmp/kiosk.log 2>&1 &
 KIOSK_PID=\$!
 
 say "$MARKER"
 
-# The death report. If the compositor exits, the last screenful of its log IS
-# the diagnosis, and this is the only path that gets it off the machine. A
-# subshell cannot wait on init's child, so it polls: liveness every couple of
-# seconds is plenty for a death report.
 (
-    while kill -0 \$KIOSK_PID 2>/dev/null; do sleep 2; done
-    say "KIOSK-EXITED"
-    tail -40 /tmp/kiosk.log | fold -w ${CONSOLE_COLS} | while read -r l; do
-        say "kiosk: \$l"
+    tail -f /tmp/kiosk.log 2>/dev/null | fold -w ${CONSOLE_COLS} |
+        while read -r l; do say "kiosk: \$l"; done
+) &
+
+# The death watch, over both processes that can end the picture. The compositor
+# exiting and the browser exiting are different faults with different fixes, and
+# each names itself; memory is reported at every check that matters because an
+# exhausted guest does not announce a shortage — its allocations fail and its
+# libraries dereference the failure, which reads as a null-pointer bug in
+# whatever library happened to ask for memory first.
+(
+    checks=0
+    while true; do
+        sleep ${WATCH_INTERVAL_S}
+        checks=\$((checks + 1))
+        if ! kill -0 \$KIOSK_PID 2>/dev/null; then
+            say "KIOSK-EXITED after \$((checks * ${WATCH_INTERVAL_S}))s"
+            report_memory "at compositor exit"
+            break
+        fi
+        if ! pgrep firefox-esr >/dev/null 2>&1; then
+            say "BROWSER-GONE after \$((checks * ${WATCH_INTERVAL_S}))s"
+            report_memory "at browser exit"
+            break
+        fi
+        [ \$((checks % ${MEMORY_EVERY_CHECKS})) -eq 0 ] && report_memory "browser up"
     done
-    say "--- end of kiosk log ---"
 ) &
 
 # Let the compositor's own start-up chatter land first, so the report is the

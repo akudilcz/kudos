@@ -94,6 +94,18 @@ pub const Virtq = struct {
         return head;
     }
 
+    /// Whether a chain head is waiting, WITHOUT consuming it (§2.6.6). For a
+    /// caller that must know it can place a buffer before it commits to taking
+    /// one from its source — `popAvail` would consume a head the caller then
+    /// could not use. A queue the driver has not brought up, or whose rings do
+    /// not read, answers false: exactly the states in which `popAvail` has
+    /// nothing to give.
+    pub fn hasAvail(self: *const Virtq) bool {
+        if (!self.ready or self.size == 0) return false;
+        const idx = self.availIdx() catch return false;
+        return idx != self.last_avail;
+    }
+
     /// Bounds-checked read of descriptor `i` from the guest's table (§2.6.5).
     pub fn descAt(self: *const Virtq, i: u16) Error!Desc {
         if (i >= self.size) return Error.BadIndex;

@@ -563,6 +563,16 @@ its broadcast and multicast frames.
 **VIRT-030.** The Kudos system shall count bridged frames it discards
 (VIRT-028, VIRT-029), in each direction, per guest.
 
+**VIRT-031.** The Kudos system shall deliver frames a guest transmits (VIRT-027)
+that are addressed to the host or to another guest without their reaching the
+physical network.
+
+**VIRT-032.** The Kudos system shall forward a frame a guest transmits
+(VIRT-027) to every destination except the guest that transmitted it.
+
+**VIRT-033.** The Kudos system shall discard frames a guest transmits whose
+source is not that guest's link-layer address (VIRT-027).
+
 ## Agent
 
 **AGT-001.** The Kudos system shall provide an AI agent, available on demand,

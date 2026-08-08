@@ -55,6 +55,19 @@ pub const TCTL = 0x0400; // Transmit Control
 pub const RAL0 = 0x5400; // Receive Address Low (MAC bytes 0-3)
 pub const RAH0 = 0x5404; // Receive Address High (MAC bytes 4-5)
 
+/// Receive Control bits, named once because both drivers program the same
+/// receive filter and that filter is a contract, not a per-driver taste. kudos
+/// bridges guests onto this one NIC at layer 2 (VIRT-029), so the hardware must
+/// accept every address a guest answers to, not just this host's: UPE and MPE
+/// turn off the unicast and multicast filters, BAM keeps broadcast. Without
+/// MPE, multicast is discarded below any counter kudos keeps — a guest's IPv6
+/// neighbour discovery would go unanswered with nothing to show for it.
+pub const RCTL_EN: u32 = 1 << 1; // receiver enable
+pub const RCTL_UPE: u32 = 1 << 3; // unicast promiscuous
+pub const RCTL_MPE: u32 = 1 << 4; // multicast promiscuous
+pub const RCTL_BAM: u32 = 1 << 15; // accept broadcast
+pub const RCTL_SECRC: u32 = 1 << 26; // strip the Ethernet CRC
+
 /// The handful of register offsets the shared send/poll loop needs. Each driver's
 /// map differs (e1000 legacy vs igc per-queue offsets) but the *roles* are the
 /// same, so the shared code addresses them by role through this table.

@@ -34,6 +34,7 @@ pub const kernel = struct {
     pub const virtio_gpudev = @import("kernel/virt/virtio/gpudev.zig");
     pub const linuxload = @import("kernel/virt/linuxload.zig");
     pub const virtio_netdev = @import("kernel/virt/virtio/netdev.zig");
+    pub const netbridge = @import("kernel/virt/netbridge.zig");
     pub const virtio_inputdev = @import("kernel/virt/virtio/inputdev.zig");
     pub const klog = @import("kernel/debug/klog.zig");
     pub const taskstat = @import("kernel/sched/taskstat.zig");

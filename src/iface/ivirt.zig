@@ -125,7 +125,8 @@ const Slot = struct {
     /// the real NIC.
     net_tx: Ring(NetFrame, NET_RING_FRAMES) = .{},
     /// wire -> guest: producer the system loop's bridge (netDeliver), consumer
-    /// hypervisor (netTake), landed in the guest's receive queue on its core.
+    /// hypervisor (netPeek/netCommit), landed in the guest's receive queue on
+    /// its core.
     net_rx: Ring(NetFrame, NET_RING_FRAMES) = .{},
     /// Bytes each discarding path dropped on a full ring — counted, never
     /// silent. Each has a single writer (its ring's producer); readers load
@@ -328,9 +329,21 @@ pub fn netDeliver(id: Id, frame: []const u8) bool {
 }
 
 /// HYPERVISOR (guest core): copy the next wire frame for guest `id` into `buf`
-/// (NET_FRAME_BYTES long) and return its length, or null when none waits.
-pub fn netTake(id: Id, buf: []u8) ?usize {
-    return framePop(&slots[id].net_rx, buf);
+/// (NET_FRAME_BYTES long) and return its length, WITHOUT consuming it;
+/// `netCommit` retires it once it has landed in the guest's receive queue.
+/// Two calls rather than one because the guest's NIC can refuse a frame — its
+/// driver is not up yet, or it has published no free receive buffer — and a
+/// frame taken for a refusal would be destroyed instead of waiting in the ring
+/// for a poll when the driver has caught up.
+pub fn netPeek(id: Id, buf: []u8) ?usize {
+    const slot = slots[id].net_rx.peek() orelse return null;
+    @memcpy(buf[0..slot.len], slot.data[0..slot.len]);
+    return slot.len;
+}
+
+/// HYPERVISOR (guest core): retire the frame `netPeek` just returned.
+pub fn netCommit(id: Id) void {
+    slots[id].net_rx.drop();
 }
 
 /// Bridged frames dropped per direction since this slot was last reset.

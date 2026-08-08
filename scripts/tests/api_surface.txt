@@ -2054,6 +2054,11 @@ src/drivers/net/nic/intel.zig: pub const RCTL = 0x0100; // Receive Control
 src/drivers/net/nic/intel.zig: pub const TCTL = 0x0400; // Transmit Control
 src/drivers/net/nic/intel.zig: pub const RAL0 = 0x5400; // Receive Address Low (MAC bytes 0-3)
 src/drivers/net/nic/intel.zig: pub const RAH0 = 0x5404; // Receive Address High (MAC bytes 4-5)
+src/drivers/net/nic/intel.zig: pub const RCTL_EN: u32 = 1 << 1; // receiver enable
+src/drivers/net/nic/intel.zig: pub const RCTL_UPE: u32 = 1 << 3; // unicast promiscuous
+src/drivers/net/nic/intel.zig: pub const RCTL_MPE: u32 = 1 << 4; // multicast promiscuous
+src/drivers/net/nic/intel.zig: pub const RCTL_BAM: u32 = 1 << 15; // accept broadcast
+src/drivers/net/nic/intel.zig: pub const RCTL_SECRC: u32 = 1 << 26; // strip the Ethernet CRC
 src/drivers/net/nic/intel.zig: pub const RegMap = struct
 src/drivers/net/nic/intel.zig: pub const DescOps = struct
 src/drivers/net/nic/intel.zig: pub const Nic = struct
@@ -2136,7 +2141,7 @@ src/drivers/net/stack/net.zig: pub const PROTO_TCP = wire.PROTO_TCP;
 src/drivers/net/stack/net.zig: pub const PROTO_UDP = wire.PROTO_UDP;
 src/drivers/net/stack/net.zig: pub const IP_HLEN = wire.IP_HLEN;
 src/drivers/net/stack/net.zig: pub const UDP_HLEN = wire.UDP_HLEN;
-src/drivers/net/stack/net.zig: pub const ETH_HLEN = 14; // Ethernet II: dst(6) + src(6) + ethertype(2)
+src/drivers/net/stack/net.zig: pub const ETH_HLEN = inet.ETHER_HEADER_BYTES;
 src/drivers/net/stack/net.zig: pub const TCP_HLEN = 20; // TCP header with no options
 src/drivers/net/stack/net.zig: pub const ETH_IP_HLEN = ETH_HLEN + IP_HLEN; // start of the transport payload (34)
 src/drivers/net/stack/net.zig: pub fn dbg(s: []const u8) void
@@ -2165,6 +2170,10 @@ src/drivers/net/stack/net.zig: pub fn sendBroadcastUdp(src_port: u16, dst_port: 
 src/drivers/net/stack/net.zig: pub fn pseudoSum(dst: [4]u8, proto: u8, seg_len: usize) u32
 src/drivers/net/stack/net.zig: pub fn ping(dst: [4]u8, timeout_ms: u64) ?u64
 src/drivers/net/stack/net.zig: pub const UdpHandler = *const fn (src: [4]u8, payload: []const u8) void;
+src/drivers/net/stack/net.zig: pub const Port = ?usize;
+src/drivers/net/stack/net.zig: pub const Bridge = struct
+src/drivers/net/stack/net.zig: pub const MAX_BRIDGE_FRAME = inet.ETHER_FRAME_MAX;
+src/drivers/net/stack/net.zig: pub fn connectBridge(b: Bridge) void
 src/drivers/net/stack/net.zig: pub fn listenUdp(port: u16, handler: UdpHandler) void
 src/drivers/net/stack/net.zig: pub fn pump() void
 src/drivers/net/stack/net.zig: pub fn publish() void
@@ -2523,6 +2532,12 @@ src/iface/imouse.zig: pub var dropped_events: u64 = 0;
 src/iface/imouse.zig: pub fn aggregate(ev: MouseEvent) void
 src/iface/imouse.zig: pub fn inject(ev: MouseEvent) void
 src/iface/imouse.zig: pub fn poll() ?MouseEvent
+src/iface/inet.zig: pub const ETHER_FRAME_MAX: usize = 1514;
+src/iface/inet.zig: pub const ETHER_HEADER_BYTES: usize = 14;
+src/iface/inet.zig: pub const ETHER_ADDR_BYTES: usize = 6;
+src/iface/inet.zig: pub const ETHER_DST_OFF: usize = 0;
+src/iface/inet.zig: pub const ETHER_SRC_OFF: usize = 6;
+src/iface/inet.zig: pub const ETHER_GROUP_BIT: u8 = 1;
 src/iface/inet.zig: pub const FetchError = error{
 src/iface/inet.zig: pub const FetchDone = *const fn (ctx: *anyopaque, body: ?[]const u8) void;
 src/iface/inet.zig: pub const FetchProgress = struct { received: u64, total: ?u64 };
@@ -2550,9 +2565,13 @@ src/iface/ivirt.zig: pub const FetchProgress = struct { half: FetchHalf, done: u
 src/iface/ivirt.zig: pub const TX_CAP = 8192;
 src/iface/ivirt.zig: pub const RX_CAP = 256;
 src/iface/ivirt.zig: pub const INPUT_CAP = 64;
+src/iface/ivirt.zig: pub const ABS_RANGE: u32 = 0x7FFF;
 src/iface/ivirt.zig: pub const InputEvent = union(enum)
 src/iface/ivirt.zig: pub const FB_MAX_W = 1600;
 src/iface/ivirt.zig: pub const FB_MAX_H = 900;
+src/iface/ivirt.zig: pub const NET_FRAME_BYTES = @import("inet").ETHER_FRAME_MAX;
+src/iface/ivirt.zig: pub const NET_RING_FRAMES = 16;
+src/iface/ivirt.zig: pub const NetFrame = struct
 src/iface/ivirt.zig: pub fn setState(id: Id, s: State) void
 src/iface/ivirt.zig: pub fn state(id: Id) State
 src/iface/ivirt.zig: pub fn setFetchProgress(id: Id, half: FetchHalf, done: u64, total: u64) void
@@ -2569,6 +2588,13 @@ src/iface/ivirt.zig: pub fn conInput(id: Id, b: u8) bool
 src/iface/ivirt.zig: pub fn inputPost(id: Id, ev: InputEvent) bool
 src/iface/ivirt.zig: pub fn inputFetch(id: Id) ?InputEvent
 src/iface/ivirt.zig: pub fn droppedInput(id: Id) u64
+src/iface/ivirt.zig: pub fn netPost(id: Id, frame: []const u8) bool
+src/iface/ivirt.zig: pub fn netFetch(id: Id, buf: []u8) ?usize
+src/iface/ivirt.zig: pub fn netDeliver(id: Id, frame: []const u8) bool
+src/iface/ivirt.zig: pub fn netPeek(id: Id, buf: []u8) ?usize
+src/iface/ivirt.zig: pub fn netCommit(id: Id) void
+src/iface/ivirt.zig: pub fn droppedNetTx(id: Id) u64
+src/iface/ivirt.zig: pub fn droppedNetRx(id: Id) u64
 src/iface/ivirt.zig: pub fn conFetch(id: Id) ?u8
 src/iface/ivirt.zig: pub fn conPending(id: Id) bool
 src/iface/ivirt.zig: pub fn writtenTx(id: Id) u64
@@ -3064,10 +3090,12 @@ src/kernel/virt/guestlist.zig: pub fn byNumber(n: usize) ?*const Image
 src/kernel/virt/guestmem.zig: pub const GuestMem = struct
 src/kernel/virt/guestmem.zig: pub const CreateError = error{ NoGuestRam, NoEptTables, EptBuildFailed };
 src/kernel/virt/guestmem.zig: pub fn create(ram_bytes: u64, caps: vmxcaps.EptCaps) CreateError!GuestMem
+src/kernel/virt/gueststage.zig: pub fn name() []const u8
 src/kernel/virt/gueststage.zig: pub fn bzImage() []const u8
 src/kernel/virt/gueststage.zig: pub fn initramfs() []const u8
 src/kernel/virt/gueststage.zig: pub fn header() ?bzimage.BzInfo
 src/kernel/virt/gueststage.zig: pub fn staged() bool
+src/kernel/virt/gueststage.zig: pub fn ramBytes() u64
 src/kernel/virt/guestwalk.zig: pub fn translate(ram: []const u8, cr3: u64, vaddr: u64) ?u64
 src/kernel/virt/guestwalk.zig: pub fn fetch(ram: []const u8, cr3: u64, vaddr: u64, out: []u8) bool
 src/kernel/virt/i8254.zig: pub const COUNTER0_PORT: u16 = 0x40;
@@ -3105,6 +3133,7 @@ src/kernel/virt/layout.zig: pub const VIRTIO_MMIO_END: u64 =
 src/kernel/virt/layout.zig: pub fn cmdlineArg(comptime slot: VirtioSlot) []const u8
 src/kernel/virt/layout.zig: pub const WIRED_DEVICES = cmdlineArg(.gpu) ++ " " ++
 src/kernel/virt/layout.zig: pub const DEFAULT_RAM_BYTES: u64 = 128 * 1024 * 1024;
+src/kernel/virt/layout.zig: pub const MAX_RAM_BYTES: u64 = VIRTIO_MMIO_GPA - (VIRTIO_MMIO_GPA % PAGE_2M);
 src/kernel/virt/layout.zig: pub const Layout = struct
 src/kernel/virt/layout.zig: pub const PlanError = error{ NoFit, CmdlineTooLong, RamTooSmall };
 src/kernel/virt/layout.zig: pub fn plan(ram_bytes: u64, bz: bzimage.BzInfo, pm_len: usize, initrd_len: usize, cmdline_len: usize) PlanError!Layout
@@ -3126,6 +3155,10 @@ src/kernel/virt/mc146818.zig: pub const Cmos = struct
 src/kernel/virt/msrarea.zig: pub const ENTRY_SIZE: usize = 16;
 src/kernel/virt/msrarea.zig: pub const Entry = extern struct
 src/kernel/virt/msrarea.zig: pub fn encode(index: u32, data: u64) [ENTRY_SIZE]u8
+src/kernel/virt/netbridge.zig: pub const Port = ?ivirt.Id;
+src/kernel/virt/netbridge.zig: pub fn offer(from: Port, frame: []const u8) bool
+src/kernel/virt/netbridge.zig: pub fn poll(buf: []u8, from: *Port) ?usize
+src/kernel/virt/netbridge.zig: pub fn portAccepts(id: ivirt.Id, frame: []const u8) bool
 src/kernel/virt/uart16550.zig: pub const Uart = struct
 src/kernel/virt/vcpuid.zig: pub const Regs = struct { eax: u32, ebx: u32, ecx: u32, edx: u32 };
 src/kernel/virt/vcpuid.zig: pub const HYPERVISOR_VENDOR = "KVMKVMKVM\x00\x00\x00";
@@ -3181,7 +3214,7 @@ src/kernel/virt/virtio/inputdev.zig: pub const BTN_LEFT: u16 = 0x110;
 src/kernel/virt/virtio/inputdev.zig: pub const BTN_RIGHT: u16 = 0x111;
 src/kernel/virt/virtio/inputdev.zig: pub const BTN_MIDDLE: u16 = 0x112;
 src/kernel/virt/virtio/inputdev.zig: pub const Kind = enum
-src/kernel/virt/virtio/inputdev.zig: pub const ABS_MAX: u32 = 0x7FFF;
+src/kernel/virt/virtio/inputdev.zig: pub const ABS_MAX: u32 = ivirt.ABS_RANGE;
 src/kernel/virt/virtio/inputdev.zig: pub const InputDev = struct
 src/kernel/virt/virtio/inputdev.zig: pub fn fillConfig(kind: Kind, select: u8, subsel: u8, out: *[CONFIG_SIZE]u8) void
 src/kernel/virt/virtio/mmio.zig: pub const virtq = @import("virtq.zig");
@@ -3195,9 +3228,10 @@ src/kernel/virt/virtio/netdev.zig: pub const mmio = @import("mmio.zig");
 src/kernel/virt/virtio/netdev.zig: pub const virtq = @import("virtq.zig");
 src/kernel/virt/virtio/netdev.zig: pub const ivirt = @import("ivirt");
 src/kernel/virt/virtio/netdev.zig: pub const HDR_BYTES: usize = 12;
-src/kernel/virt/virtio/netdev.zig: pub const MAX_FRAME_BYTES: usize = 1514;
+src/kernel/virt/virtio/netdev.zig: pub const MAX_FRAME_BYTES: usize = ivirt.NET_FRAME_BYTES;
 src/kernel/virt/virtio/netdev.zig: pub const FrameSink = struct
 src/kernel/virt/virtio/netdev.zig: pub fn guestMac(id: ivirt.Id) [6]u8
+src/kernel/virt/virtio/netdev.zig: pub fn guestIdFor(mac: *const [6]u8) ?ivirt.Id
 src/kernel/virt/virtio/netdev.zig: pub const NetDev = struct
 src/kernel/virt/virtio/virtq.zig: pub const Desc = extern struct { addr: u64, len: u32, flags: u16, next: u16 };
 src/kernel/virt/virtio/virtq.zig: pub const F_NEXT: u16 = 1;
@@ -3217,9 +3251,13 @@ src/kernel/virt/virt.zig: pub fn status() Status
 src/kernel/virt/virt.zig: pub const GuestInfo = struct
 src/kernel/virt/virt.zig: pub fn snapshot(out: []GuestInfo) usize
 src/kernel/virt/virt.zig: pub const BootError = error{
+src/kernel/virt/virt.zig: pub const stagedRamBytes = gueststage.ramBytes;
+src/kernel/virt/virt.zig: pub const stagedName = gueststage.name;
 src/kernel/virt/virt.zig: pub fn bootStaged(ram_bytes: u64, cmdline: []const u8) BootError!ivirt.Id
 src/kernel/virt/virt.zig: pub fn guestStaged() bool
 src/kernel/virt/virt.zig: pub fn guestCore(id: ivirt.Id) ?u32
+src/kernel/virt/virt.zig: pub const bridgeOffer = netbridge.offer;
+src/kernel/virt/virt.zig: pub const bridgePoll = netbridge.poll;
 src/kernel/virt/virt.zig: pub const images = @import("guestlist.zig");
 src/kernel/virt/virt.zig: pub fn setStartError(name: []const u8) void
 src/kernel/virt/virt.zig: pub fn netbootBegin(image_no: u8) BootError!ivirt.Id

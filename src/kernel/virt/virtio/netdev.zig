@@ -47,10 +47,12 @@ const TRANSMITQ: u16 = 1;
 /// ignores the header on transmit and writes it all-zero on receive.
 pub const HDR_BYTES: usize = 12;
 
-/// Largest frame the seam carries: an Ethernet II frame of 14 header plus 1500
-/// payload bytes, no frame check sequence — the frame half of the 1526-byte
-/// receive buffers §5.1.6.3 requires of a driver that negotiated no offloads.
-pub const MAX_FRAME_BYTES: usize = 1514;
+/// Largest frame the seam carries — the network's own frame ceiling, taken from
+/// the mailbox the bridge moves frames through rather than restated here. The
+/// two must be the same number: a device ceiling above the ring's would hand the
+/// bridge frames it can only drop. It is also exactly what §5.1.6.3 asks of a
+/// driver that negotiated no offloads (the frame half of a 1526-byte buffer).
+pub const MAX_FRAME_BYTES: usize = ivirt.NET_FRAME_BYTES;
 
 /// struct virtio_net_config (§5.1.4): only the 6-byte `mac` field. Every later
 /// field (status, max_virtqueue_pairs, mtu, …) belongs to a feature this device
@@ -155,6 +157,15 @@ pub const NetDev = struct {
     /// its PIC line.
     pub fn irqLevel(self: *const NetDev) bool {
         return self.irq_level;
+    }
+
+    /// Whether the guest has published a receive buffer — whether `pushRx` has
+    /// anywhere to land a frame. Non-destructive, so a bridge can leave a frame
+    /// queued on its own side while the driver is down or out of buffers,
+    /// instead of taking one only to count it lost.
+    pub fn rxReady(self: *const NetDev) bool {
+        if (!self.bound) return false;
+        return self.transport.queues[RECEIVEQ].hasAvail();
     }
 
     /// The inbound half of the seam: land one Ethernet frame in the guest's

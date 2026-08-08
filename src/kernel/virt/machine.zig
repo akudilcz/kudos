@@ -37,6 +37,7 @@ const gpudev = @import("virtio/gpudev.zig");
 const netdev = @import("virtio/netdev.zig");
 const inputdev = @import("virtio/inputdev.zig");
 const ivirt = @import("ivirt");
+const netbridge = @import("netbridge.zig");
 
 // Serial port block (COM1) and the IRQ line the UART drives.
 const COM1_BASE: u16 = 0x3F8;
@@ -526,18 +527,27 @@ pub const Vm = struct {
         return .shutdown;
     }
 
+    /// netdev's FrameSink: one guest-transmitted Ethernet frame, posted to the
+    /// bridge mailbox. Runs on the guest's core; a full ring is a counted drop.
+    ///
+    /// This is the guest's bridge PORT, so it is where the port's source
+    /// address is enforced: a frame whose source is not this guest's own MAC is
+    /// refused (netdev counts it in `tx_dropped`). Without that check a guest
+    /// could claim a sibling's or the host's address, and since the bridge
+    /// forwards purely on destination, the replies would then be delivered to
+    /// the impersonated port. A guest has exactly one address (VIRT-027) and
+    /// nothing legitimate transmits from another.
+    fn sinkPut(ctx: *anyopaque, frame: []const u8) bool {
+        const self: *Vm = @ptrCast(@alignCast(ctx));
+        if (!netbridge.portAccepts(self.id, frame)) return false;
+        return ivirt.netPost(self.id, frame);
+    }
+
     /// Peek the highest-priority interrupt to inject before the next entry:
     /// sample the serial line into the PIC, fold in an expired LAPIC timer
     /// deadline, and arbitrate the PIC's ExtINT against the LAPIC. Non-destructive
     /// — `onCommitInterrupt` retires the winner only once the vCPU injects it, so
     /// a vector the guest cannot yet take is not acknowledged and lost.
-    /// netdev's FrameSink: one guest-transmitted Ethernet frame, posted to the
-    /// bridge mailbox. Runs on the guest's core; a full ring is a counted drop.
-    fn sinkPut(ctx: *anyopaque, frame: []const u8) bool {
-        const self: *Vm = @ptrCast(@alignCast(ctx));
-        return ivirt.netPost(self.id, frame);
-    }
-
     fn onPollInterrupt(ctx: *anyopaque, v: *vcpu.Vcpu) ?u8 {
         const self: *Vm = @ptrCast(@alignCast(ctx));
         _ = v;
@@ -558,13 +568,19 @@ pub const Vm = struct {
         };
 
         // …and the bridge's inbound Ethernet frames into the NIC's receive
-        // queue — same core rule. On a guest with no free receive buffer the
-        // frame is a counted drop in the device (rx_dropped) and the drain
-        // stops: the ring keeps the rest for a poll when the driver has caught
-        // up, instead of shredding a whole burst into drops.
+        // queue — same core rule. The device is asked FIRST whether it has a
+        // free receive buffer, and only then is a frame taken from the ring:
+        // this poll runs orders of magnitude more often than the system loop
+        // refills the ring, so taking a frame the guest cannot yet hold — while
+        // its driver is still coming up, or between buffer refills — would bleed
+        // the ring dry one frame per poll. Whatever the guest is not ready for
+        // waits where it is. A frame the device accepts a buffer for and still
+        // refuses (a chain too small for it) is a genuine loss, counted there.
         var net_buf: [ivirt.NET_FRAME_BYTES]u8 = undefined;
-        while (ivirt.netTake(self.id, &net_buf)) |len| {
-            if (!self.net.pushRx(net_buf[0..len])) break;
+        while (self.net.rxReady()) {
+            const len = ivirt.netPeek(self.id, &net_buf) orelse break;
+            _ = self.net.pushRx(net_buf[0..len]);
+            ivirt.netCommit(self.id);
         }
 
         // The legacy timer: convert the host TSC into PIT clock ticks and ask

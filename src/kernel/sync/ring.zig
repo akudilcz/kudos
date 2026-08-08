@@ -46,6 +46,28 @@ pub fn Ring(comptime T: type, comptime cap: usize) type {
             return val;
         }
 
+        /// Consumer: a pointer to the front element without consuming it, or
+        /// null if empty. For a consumer that can only commit to an element
+        /// after its destination has accepted it — `pop` would destroy the one
+        /// it could not place. The pointer stays valid until the consumer's own
+        /// `drop`: the producer writes at `head` and refuses to write a full
+        /// ring, so it can never touch the front slot while it is unconsumed.
+        pub fn peek(self: *Self) ?*const T {
+            const tail = @atomicLoad(usize, &self.tail, .monotonic);
+            const head = @atomicLoad(usize, &self.head, .acquire);
+            if (head == tail) return null; // empty
+            return &self.buf[tail & MASK];
+        }
+
+        /// Consumer: discard the front element, retiring what `peek` returned.
+        /// A no-op on an empty ring, so a `drop` without a live `peek` cannot
+        /// hand the producer a slot the consumer never read.
+        pub fn drop(self: *Self) void {
+            const tail = @atomicLoad(usize, &self.tail, .monotonic);
+            if (@atomicLoad(usize, &self.head, .acquire) == tail) return; // empty
+            @atomicStore(usize, &self.tail, tail +% 1, .release);
+        }
+
         /// Consumer: whether at least one element is available.
         pub fn isEmpty(self: *Self) bool {
             return @atomicLoad(usize, &self.head, .acquire) ==

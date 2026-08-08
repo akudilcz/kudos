@@ -140,7 +140,8 @@ pub fn init() bool {
     nic.write(RDBAH, @truncate(nic.rx_ring >> 32));
     nic.write(RDLEN, N_RX * @sizeOf(RxDesc));
     nic.write(RDH, 0);
-    // EN | BAM | UPE | SECRC, BSIZE=2048. Enable the receiver BEFORE handing it
+    // EN | BAM | UPE | MPE | SECRC, BSIZE=2048 (the BSIZE bits are zero).
+    // Enable the receiver BEFORE handing it
     // descriptors: RDT is written LAST, as the "go" signal, matching Linux
     // e1000_configure() (rctl setup first, the RDT write is the final step of
     // e1000_alloc_rx_buffers). Order matters on QEMU: an inbound frame that
@@ -148,7 +149,7 @@ pub fn init() bool {
     // write flushes that queue — writing RDT while EN was still 0 made that
     // flush a no-op and every later frame queued behind the parked one forever
     // (DHCP OFFERs included; the no-OFFER hang this order fixes).
-    nic.write(RCTL, 0x2 | 0x8 | 0x8000 | 0x4000000);
+    nic.write(RCTL, intel.RCTL_EN | intel.RCTL_UPE | intel.RCTL_MPE | intel.RCTL_BAM | intel.RCTL_SECRC);
     nic.write(RDT, N_RX - 1);
 
     // TX ring + buffers.

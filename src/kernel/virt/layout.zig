@@ -108,6 +108,15 @@ pub const WIRED_DEVICES = cmdlineArg(.gpu) ++ " " ++
 /// 2 MiB pages so the EPT builder uses large pages throughout.
 pub const DEFAULT_RAM_BYTES: u64 = 128 * 1024 * 1024;
 
+/// The most RAM a guest can have: everything below the device window, rounded
+/// down to a whole 2 MiB page. Guest RAM is the range [0, ram_bytes), so a guest
+/// larger than this would back the virtio-mmio registers — and the LAPIC hole
+/// above them — with ordinary memory instead of exiting to the MMIO router
+/// (`plan` rejects it). A guest wanting more needs RAM above the 4 GiB hole,
+/// which is a second memory region and a different memory map, not a bigger
+/// number here. Callers sizing a guest from its image clamp with this.
+pub const MAX_RAM_BYTES: u64 = VIRTIO_MMIO_GPA - (VIRTIO_MMIO_GPA % PAGE_2M);
+
 /// The resolved placement of every boot artifact in guest-physical memory.
 pub const Layout = struct {
     ram_bytes: u64,

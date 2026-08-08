@@ -21,6 +21,22 @@ const std = @import("std");
 /// import each other.
 pub const ETHER_FRAME_MAX: usize = 1514;
 
+/// The Ethernet II header: destination address, source address, ethertype.
+/// A frame shorter than this carries no addresses, so nothing can be decided
+/// about it — every consumer of this contract needs the same floor.
+pub const ETHER_HEADER_BYTES: usize = 14;
+
+/// Where the addresses sit inside that header, and how wide they are. The
+/// bridge's whole forwarding policy is read from these two fields, on both
+/// sides of a seam that may not share a packet-parsing module.
+pub const ETHER_ADDR_BYTES: usize = 6;
+pub const ETHER_DST_OFF: usize = 0;
+pub const ETHER_SRC_OFF: usize = 6;
+
+/// The group bit of an Ethernet address' first byte: set on broadcast and
+/// multicast destinations, clear on a unicast one (IEEE 802-2014 §9.2).
+pub const ETHER_GROUP_BIT: u8 = 1;
+
 /// Everything a fetch can fail with. Spelled out rather than inferred because a vtable
 /// needs a concrete error set — and because an app that prints these to a user should
 /// be able to see the whole list it must account for.

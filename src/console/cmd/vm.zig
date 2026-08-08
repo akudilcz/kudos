@@ -1,15 +1,20 @@
 //! `vm` — inspect and control the guest virtual machines.
 //!
 //!   vm            — subsystem status and a line per live guest
-//!   vm status     — same as bare `vm`
-//!   vm boot       — boot a guest and open its console window
+//!   vm list       — the bootable images, numbered
+//!   vm <n>        — boot image <n> and open its console window
 //!   vm stop <id>  — ask the guest in slot <id> to stop
 //!
-//! The guest (a tiny Linux + busybox serial console) is embedded into the kernel
-//! image at build time by scripts/virt/build_guest.sh; `vm boot` opens a VM
-//! window, which is what boots a guest and binds it to that window — so the dock
-//! tile and this command take the same path. Several guests run at once, each on
-//! its own core with its own window.
+//! The image numbers and the guest slot ids are different namespaces: `vm 1`
+//! boots the first IMAGE, while `vm stop 1` stops the guest in the second SLOT.
+//! Images are numbered from 1 because slots are numbered from 0 — the same
+//! number never means both things.
+//!
+//! One guest image is embedded into the kernel at build time — `-Dguest=<name>`
+//! picks which (the default is the busybox serial console; the list names it).
+//! `vm boot` opens a VM window, which is what boots a guest and binds it to that
+//! window — so the dock tile and this command take the same path. Several guests
+//! run at once, each on its own core with its own window.
 //!
 //! Closing a window is the ordinary way to shut a guest down and get its memory
 //! and its core back. `vm stop` is the scriptable equivalent for the guest alone:
@@ -24,31 +29,43 @@ const ivirt = @import("ivirt");
 /// capacity, so a full machine is always shown in full.
 const MAX_LISTED = 8;
 
-/// `vm [status|boot [n]|stop <id>]` — report or control the guest VMs.
-/// Bare `vm boot` lists the bootable images (VIRT-020); `vm boot <n>` boots
-/// list entry n — 1 is the built-in, 2.. fetch over the network (VIRT-019).
+/// `vm [<n>|list|status|stop <id>]` — report or control the guest VMs.
+/// `vm list` numbers the bootable images (VIRT-020); `vm <n>` boots entry n —
+/// 1 is the staged built-in, 2.. fetch over the network (VIRT-019). `boot` is
+/// accepted before the number as the long way of saying the same thing.
 pub fn run(c: console.Console, args: []const u8) void {
     const cmd = std.mem.trim(u8, args, " \t");
     if (cmd.len == 0 or std.mem.eql(u8, cmd, "status")) {
         printStatus(c);
-    } else if (std.mem.eql(u8, cmd, "boot")) {
+    } else if (std.mem.eql(u8, cmd, "list") or std.mem.eql(u8, cmd, "boot")) {
         writeList(c);
     } else if (std.mem.startsWith(u8, cmd, "boot")) {
         bootNumber(c, std.mem.trim(u8, cmd["boot".len..], " \t"));
     } else if (std.mem.startsWith(u8, cmd, "stop")) {
         stop(c, std.mem.trim(u8, cmd["stop".len..], " \t"));
+    } else if (isNumber(cmd)) {
+        bootNumber(c, cmd);
     } else {
-        c.write("usage: vm [status|boot [n]|stop <id>]\n");
+        c.write("usage: vm [<n>|list|status|stop <id>]   (`vm list` numbers the images)\n");
     }
+}
+
+/// Whether `s` is a bare image number, so an unrecognised word gets the usage
+/// line rather than a complaint about a number the user never typed.
+fn isNumber(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |ch| if (ch < '0' or ch > '9') return false;
+    return true;
 }
 
 /// The bootable-image list (VIRT-020), over any sink with `write` — shared
 /// with the SMP local variant. Entry 1 is the staged built-in; the rest are
 /// the network catalog (virt.images).
 pub fn writeList(w: anytype) void {
-    w.write("bootable guest images (`vm boot <n>`):\n");
+    w.write("bootable guest images (`vm <n>` boots one):\n");
     var buf: [200]u8 = undefined;
-    const first = std.fmt.bufPrint(&buf, "   1  built-in busybox (staged in this image){s}\n", .{
+    const first = std.fmt.bufPrint(&buf, "   1  {s} (staged in this image, boots from RAM){s}\n", .{
+        virt.stagedName(),
         if (virt.guestStaged()) "" else "  [NOT STAGED]",
     }) catch return;
     w.write(first);
@@ -60,17 +77,17 @@ pub fn writeList(w: anytype) void {
     }
 }
 
-/// `vm boot <n>`: entry 1 boots the built-in synchronously; a catalog entry
+/// `vm <n>`: entry 1 boots the built-in synchronously; a catalog entry
 /// posts the request to core 0, which fetches the image without blocking
 /// anything — its window opens on `fetching` and narrates from there.
 fn bootNumber(c: console.Console, arg: []const u8) void {
     const n = std.fmt.parseInt(u8, arg, 10) catch {
-        c.write("vm: boot takes a list number (see `vm boot`)\n");
+        c.write("vm: that is not an image number (see `vm list`)\n");
         return;
     };
     if (n == 1) return boot(c);
     if (virt.images.byNumber(n) == null) {
-        c.write("vm: no such image (see `vm boot`)\n");
+        c.write("vm: no such image (see `vm list`)\n");
         return;
     }
     if (!ivirt.postBootRequest(n)) {
@@ -125,7 +142,7 @@ fn printStatus(c: console.Console) void {
 /// The `vm stop` body over any sink with `write([]const u8)`.
 pub fn writeStop(w: anytype, arg: []const u8) void {
     if (arg.len == 0) {
-        w.write("usage: vm stop <id>   (see `vm` for the ids)\n");
+        w.write("usage: vm stop <id>   (see `vm` for the slot ids)\n");
         return;
     }
     const id = std.fmt.parseInt(usize, arg, 10) catch {

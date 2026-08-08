@@ -254,9 +254,10 @@ test "net bridge: delivery and transmit are independent directions (VIRT-029)" {
     try expect(ivirt.netPost(A, "to-the-wire"));
     try expect(ivirt.netDeliver(A, "to-the-guest"));
     var buf: [ivirt.NET_FRAME_BYTES]u8 = undefined;
-    const rx = ivirt.netTake(A, &buf) orelse return error.NoFrame;
+    const rx = ivirt.netPeek(A, &buf) orelse return error.NoFrame;
     try expect(std.mem.eql(u8, "to-the-guest", buf[0..rx]));
-    try expectEqual(@as(?usize, null), ivirt.netTake(A, &buf));
+    ivirt.netCommit(A);
+    try expectEqual(@as(?usize, null), ivirt.netPeek(A, &buf));
     const tx = ivirt.netFetch(A, &buf) orelse return error.NoFrame;
     try expect(std.mem.eql(u8, "to-the-wire", buf[0..tx]));
     resetAll();
@@ -271,7 +272,44 @@ test "net bridge: an oversized frame is refused and counted, never truncated (VI
     try expectEqual(@as(u64, 1), ivirt.droppedNetRx(A));
     var buf: [ivirt.NET_FRAME_BYTES]u8 = undefined;
     try expectEqual(@as(?usize, null), ivirt.netFetch(A, &buf));
-    try expectEqual(@as(?usize, null), ivirt.netTake(A, &buf));
+    try expectEqual(@as(?usize, null), ivirt.netPeek(A, &buf));
+    resetAll();
+}
+
+test "net bridge: a peeked frame stays queued until it is committed (VIRT-029)" {
+    resetAll();
+    // The guest's core peeks whenever it polls interrupts — far more often than
+    // the system loop refills the ring — and its NIC refuses frames for as long
+    // as the driver is down. A peek that consumed would bleed the ring dry one
+    // frame per poll, losing exactly the replies to a guest's first requests.
+    try expect(ivirt.netDeliver(A, "first"));
+    try expect(ivirt.netDeliver(A, "second"));
+    var buf: [ivirt.NET_FRAME_BYTES]u8 = undefined;
+    var refusals: usize = 0;
+    while (refusals < 8) : (refusals += 1) {
+        const len = ivirt.netPeek(A, &buf) orelse return error.FrameLost;
+        try expect(std.mem.eql(u8, "first", buf[0..len]));
+    }
+    ivirt.netCommit(A);
+    const len = ivirt.netPeek(A, &buf) orelse return error.FrameLost;
+    try expect(std.mem.eql(u8, "second", buf[0..len]));
+    ivirt.netCommit(A);
+    try expectEqual(@as(?usize, null), ivirt.netPeek(A, &buf));
+    // Nothing was refused into a counter: a frame held back is not a frame lost.
+    try expectEqual(@as(u64, 0), ivirt.droppedNetRx(A));
+    resetAll();
+}
+
+test "net bridge: committing an empty receive ring is a no-op" {
+    resetAll();
+    // A commit without a live peek must not hand the producer a slot no one
+    // read — the ring would then report space it does not have.
+    ivirt.netCommit(A);
+    ivirt.netCommit(A);
+    try expect(ivirt.netDeliver(A, "kept"));
+    var buf: [ivirt.NET_FRAME_BYTES]u8 = undefined;
+    const len = ivirt.netPeek(A, &buf) orelse return error.NoFrame;
+    try expect(std.mem.eql(u8, "kept", buf[0..len]));
     resetAll();
 }
 
@@ -293,9 +331,9 @@ test "net bridge: slots are independent and reset clears rings and counters" {
     resetAll();
     try expect(ivirt.netDeliver(A, "for-a"));
     var buf: [ivirt.NET_FRAME_BYTES]u8 = undefined;
-    try expectEqual(@as(?usize, null), ivirt.netTake(B, &buf));
+    try expectEqual(@as(?usize, null), ivirt.netPeek(B, &buf));
     ivirt.reset(A);
-    try expectEqual(@as(?usize, null), ivirt.netTake(A, &buf));
+    try expectEqual(@as(?usize, null), ivirt.netPeek(A, &buf));
     try expectEqual(@as(u64, 0), ivirt.droppedNetTx(A));
     try expectEqual(@as(u64, 0), ivirt.droppedNetRx(A));
     resetAll();

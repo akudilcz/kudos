@@ -63,10 +63,56 @@ test "leaf 7 subleaf 0: the features needing an unset VMX control are hidden" {
     try expect(g.ecx & (1 << 4) != 0); // a neighbouring ECX flag is untouched
 }
 
-test "leaf 7 subleaf 1: passes through unchanged" {
-    const host = Regs{ .eax = 0xABCD, .ebx = 0xFFFF_FFFF, .ecx = 0, .edx = 0 };
+test "leaf 7 subleaf 1: the newer AVX bits are hidden, the rest passes through" {
+    const host = Regs{ .eax = 0xFFFF_FFFF, .ebx = 0xABCD, .ecx = 0x1234, .edx = 0x5678 };
     const g = vcpuid.filter(host, 7, 1, TSC_HZ);
-    try expectEqual(host, g); // only subleaf 0 carries the masked EBX flags
+    try expect(g.eax & (1 << 4) == 0); // AVX_VNNI — YMM state
+    try expect(g.eax & (1 << 5) == 0); // AVX512_BF16 — ZMM state
+    try expect(g.eax & (1 << 6) != 0); // a neighbouring EAX flag is untouched
+    try expectEqual(host.ebx, g.ebx);
+    try expectEqual(host.ecx, g.ecx);
+    try expectEqual(host.edx, g.edx);
+}
+
+test "leaf 7 subleaf 2: still passes through unchanged" {
+    const host = Regs{ .eax = 0xABCD, .ebx = 0xFFFF_FFFF, .ecx = 0, .edx = 0 };
+    const g = vcpuid.filter(host, 7, 2, TSC_HZ);
+    try expectEqual(host, g);
+}
+
+test "no XSAVE-managed extension is advertised while XSAVE is hidden" {
+    // The invariant that makes the advertised processor one that could be
+    // built. AVX and everything after it keep their register state in an
+    // XSAVE-managed area, reachable only once XCR0 enables it — which takes
+    // XSETBV, which this vCPU does not virtualize. A guest told it has AVX2 on
+    // a machine with no XSAVE does not check twice: it dispatches, runs setup
+    // that never happened, and dies reading a low address inside whichever
+    // library asked first — a fault that names nothing.
+    //
+    // Driven from an all-ones host, so a NEW extension arriving in a masked
+    // register is caught here rather than in a guest three layers up.
+    const all = Regs{ .eax = 0xFFFF_FFFF, .ebx = 0xFFFF_FFFF, .ecx = 0xFFFF_FFFF, .edx = 0xFFFF_FFFF };
+
+    const one = vcpuid.filter(all, 1, 0, TSC_HZ);
+    try expect(one.ecx & (1 << 26) == 0); // XSAVE itself
+    try expect(one.ecx & (1 << 27) == 0); // OSXSAVE
+    try expect(one.ecx & (1 << 12) == 0); // FMA
+    try expect(one.ecx & (1 << 28) == 0); // AVX
+    try expect(one.ecx & (1 << 29) == 0); // F16C
+    try expect(one.ecx & (1 << 19) != 0); // SSE4.1 survives — the baseline stays
+
+    const seven = vcpuid.filter(all, 7, 0, TSC_HZ);
+    try expect(seven.ebx & (1 << 5) == 0); // AVX2
+    try expect(seven.ebx & (1 << 16) == 0); // AVX512F
+    try expect(seven.ebx & (1 << 31) == 0); // AVX512VL
+    try expect(seven.ecx & (1 << 11) == 0); // AVX512_VNNI
+    try expect(seven.edx & (1 << 24) == 0); // AMX_TILE — tile state is XSAVE state
+    try expect(seven.ebx & (1 << 3) != 0); // BMI1 needs no XSAVE state and survives
+
+    // And nothing to enumerate: a guest that reads leaf 0DH on a processor
+    // whose CPUID denies XSAVE must not be handed the host's components.
+    const state = vcpuid.filter(all, 0x0D, 0, TSC_HZ);
+    try expectEqual(Regs{ .eax = 0, .ebx = 0, .ecx = 0, .edx = 0 }, state);
 }
 
 test "leaf 0x80000001 EDX: RDTSCP is hidden, long mode survives" {

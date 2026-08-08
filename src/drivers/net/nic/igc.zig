@@ -251,13 +251,13 @@ pub fn init() bool {
     // Confirm the queue actually enabled before arming it (mirrors the TX poll);
     // on the real I226 an un-polled enable can leave RX silently dead.
     _ = wait.until({}, rxdctlEnabled, wait.noop, REG_WAIT_SPINS, "igc: RX queue enable (RXDCTL.ENABLE)");
-    // RCTL: EN | UPE | BAM | SECRC. LPE (bit5, long-packet enable) is deliberately
+    // RCTL: EN | UPE | MPE | BAM | SECRC. LPE (bit5, long-packet enable) is deliberately
     // OMITTED: RX buffers are a single 2KB descriptor each (SRRCTL BSIZEPACKET=2),
     // so a >2048B frame would be reported at its full length and the shared
     // intel.Nic.poll would @memcpy it out of a 2KB buffer -> overrun. Jumbo frames
     // are out of scope; the e1000 path omits LPE for the same
     // reason and is safe.
-    nic.write(RCTL, (1 << 1) | (1 << 3) | (1 << 15) | (1 << 26));
+    nic.write(RCTL, intel.RCTL_EN | intel.RCTL_UPE | intel.RCTL_MPE | intel.RCTL_BAM | intel.RCTL_SECRC);
     nic.write(RDT, N_RX - 1); // hand all descriptors to the controller
     if (gate.on(.net)) {
         klog.puts("igc: STATUS=");

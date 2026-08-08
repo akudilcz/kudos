@@ -22,7 +22,7 @@ const HELP =
     \\  calc            open the graphing calculator app
     \\  background PATH change the desktop background (.png, e.g. from /usbdisk)
     \\  show PATH [max] open a spinning 3D model window (.glb; max: maximised)
-    \\  vm SUBCOMMAND   guest VMs: status | boot [n] (no n: list the catalog) | stop <id>
+    \\  vm [N]          guest VMs: N boots image N | list | status | stop ID
     \\  ai [PROMPT]     talk to the AI agent (or /help inside for its commands)
     \\  run NAME        run a loaded .kudos application module
     \\  feature SUB     manage loaded .kudos feature modules (feature help)

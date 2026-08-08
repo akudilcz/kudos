@@ -39,7 +39,9 @@ pub const UDP_HLEN = wire.UDP_HLEN;
 
 // On-wire header sizes (bytes). Single source of truth for the offset arithmetic
 // in this module and in udp.zig / tcp.zig — referenced, never re-spelled inline.
-pub const ETH_HLEN = 14; // Ethernet II: dst(6) + src(6) + ethertype(2)
+// Ethernet II: dst(6) + src(6) + ethertype(2). The number itself lives in the
+// network contract, which the guest bridge above this layer sizes from too.
+pub const ETH_HLEN = inet.ETHER_HEADER_BYTES;
 pub const TCP_HLEN = 20; // TCP header with no options
 pub const ETH_IP_HLEN = ETH_HLEN + IP_HLEN; // start of the transport payload (34)
 
@@ -285,7 +287,17 @@ fn sendFrame(buf: []u8, dst: [6]u8, ethertype: u16, payload_len: usize) void {
     @memcpy(buf[0..6], &dst);
     @memcpy(buf[6..12], &cfg.our_mac);
     wbe16(buf[12..14], ethertype);
-    nic.send(buf[0 .. ETH_HLEN + payload_len]);
+    const frame = buf[0 .. ETH_HLEN + payload_len];
+    // This host is a bridge port like any other. A frame it addresses to a
+    // guest has to be switched there and NOT sent, because the wire's switch
+    // will not reflect it back down the port it arrived on — without this, an
+    // ARP reply to a guest, and every packet after it, would leave and never
+    // arrive. Broadcast is copied to the guests and still goes out (`offer`
+    // answers false for it), exactly as on the receive side.
+    if (bridge) |b| {
+        if (b.offer(b.ctx, null, frame)) return;
+    }
+    nic.send(frame);
 }
 
 /// Broadcast an ARP request asking who owns `target`.
@@ -521,17 +533,27 @@ const MAX_LISTENERS = 4;
 var listeners: [MAX_LISTENERS]struct { port: u16, handler: UdpHandler } = undefined;
 var listener_n: usize = 0;
 
+/// The bridge port a frame entered from, when that port is a guest — null for
+/// the wire and for this host's own stack. Which guest is the only thing
+/// forwarding needs from a frame's origin, because the one rule that depends on
+/// it is that no frame is ever sent back out the port it came in on, and
+/// neither non-guest port is one the guests' side can send back to. The stack
+/// treats a guest port as an opaque token: the numbering is the hypervisor's.
+pub const Port = ?usize;
+
 /// A guest NIC bridge: kudos' hypervisor shares the one physical NIC with its
 /// guests at layer 2, and this is the whole surface the stack sees of that.
-/// `offer` is shown every received frame BEFORE ethertype dispatch and returns
-/// true to consume it (a frame addressed to a guest is not kudos' to parse;
-/// broadcast is copied to guests AND left for the stack). `poll` yields the
-/// next guest-transmitted frame into `buf` — the pump puts each on the wire.
-/// The same rules as every RX-path handler: never block, never re-enter pump().
+/// `offer` is shown every frame entering the bridge, from either side, BEFORE
+/// ethertype dispatch; it copies the frame to whichever guests it belongs to
+/// and returns true when the frame is wholly theirs (a frame addressed to a
+/// guest is not kudos' to parse). Broadcast comes back false — it belongs to
+/// the guests AND to this stack. `poll` yields the next guest-transmitted frame
+/// into `buf` and reports its port. The same rules as every RX-path handler:
+/// never block, never re-enter pump().
 pub const Bridge = struct {
     ctx: *anyopaque,
-    offer: *const fn (ctx: *anyopaque, frame: []const u8) bool,
-    poll: *const fn (ctx: *anyopaque, buf: []u8) ?usize,
+    offer: *const fn (ctx: *anyopaque, from: Port, frame: []const u8) bool,
+    poll: *const fn (ctx: *anyopaque, buf: []u8, from: *Port) ?usize,
 };
 
 /// The buffer `Bridge.poll` fills — one whole Ethernet frame, the contract's
@@ -602,6 +624,33 @@ fn handleIp(frame_payload: []const u8) void {
 /// silent gap in the stream.
 var tx_dropped_reported: u64 = 0;
 
+/// Dispatch one received Ethernet frame to the protocol that owns it. The one
+/// body behind both of this host's ingress paths: the frames the NIC receives,
+/// and the frames the bridge switches here from a guest.
+fn dispatchFrame(frame: []const u8) void {
+    if (frame.len < ETH_HLEN) return;
+    const ethertype = rbe16(frame[12..14]);
+    const payload = frame[ETH_HLEN..];
+    switch (ethertype) {
+        ETH_ARP => handleArp(payload),
+        ETH_IP => handleIp(payload),
+        else => {},
+    }
+}
+
+/// What this host's bridge port makes of a frame's destination: `ours` alone,
+/// `shared` with the wire (broadcast and multicast are everyone's), or
+/// `elsewhere` — someone else's, which this stack must not parse. On the wire
+/// side the NIC's receive filter answers this in hardware; a frame arriving
+/// from a guest passes no hardware, so the same filter is spelled out here.
+const HostPort = enum { ours, shared, elsewhere };
+fn hostPort(frame: []const u8) HostPort {
+    if (frame.len < ETH_HLEN) return .elsewhere;
+    const dst = frame[inet.ETHER_DST_OFF..][0..inet.ETHER_ADDR_BYTES];
+    if (dst[0] & inet.ETHER_GROUP_BIT != 0) return .shared;
+    return if (std.mem.eql(u8, dst, &cfg.our_mac)) .ours else .elsewhere;
+}
+
 /// Read one frame from the NIC (if any) and dispatch it.
 pub fn pump() void {
     const drops = nic.txDropped();
@@ -626,17 +675,9 @@ pub fn pump() void {
         // both answering. Broadcast comes back false — copied to the guests AND
         // dispatched below, because an ARP request is everyone's.
         if (bridge) |b| {
-            if (b.offer(b.ctx, frame)) continue;
+            if (b.offer(b.ctx, null, frame)) continue;
         }
-        if (frame.len >= ETH_HLEN) {
-            const ethertype = rbe16(frame[12..14]);
-            const payload = frame[ETH_HLEN..];
-            switch (ethertype) {
-                ETH_ARP => handleArp(payload),
-                ETH_IP => handleIp(payload),
-                else => {},
-            }
-        }
+        dispatchFrame(frame);
     }
     // The guests' outbound frames, same per-pump bound for the same reason.
     // After the RX drain so a request the guest just answered goes out on the
@@ -645,8 +686,26 @@ pub fn pump() void {
         var sent: usize = 0;
         var buf: [MAX_BRIDGE_FRAME]u8 = undefined;
         while (sent < MAX_DRAIN_PER_PUMP) : (sent += 1) {
-            const len = b.poll(b.ctx, &buf) orelse break;
-            nic.send(buf[0..len]);
+            var from: Port = null;
+            const len = b.poll(b.ctx, &buf, &from) orelse break;
+            const frame = buf[0..len];
+            // A guest's frame enters the bridge exactly as a wire frame does,
+            // and has to be SWITCHED, not merely forwarded: an Ethernet switch
+            // never reflects a frame back down the port it arrived on, so a
+            // frame a guest addressed to kudos itself or to a sibling guest
+            // would be sent out and never come back. Offer it to the other
+            // guests first; what they wholly own goes no further.
+            if (b.offer(b.ctx, from, frame)) continue;
+            // Then this host's own port and the wire, as the frame's
+            // destination decides between them.
+            switch (hostPort(frame)) {
+                .ours => dispatchFrame(frame),
+                .shared => {
+                    dispatchFrame(frame);
+                    nic.send(frame);
+                },
+                .elsewhere => nic.send(frame),
+            }
         }
     }
     // Drive the async DHCP bind (a no-op once bound or if it was never started).

@@ -36,6 +36,73 @@ const ECX_XSAVE: u32 = 1 << 26; // XSAVE feature set (drives XSETBV/XSAVES)
 const ECX_OSXSAVE: u32 = 1 << 27; // OS has enabled XSAVE (CR4.OSXSAVE)
 const ECX_HYPERVISOR: u32 = 1 << 31; // running under a hypervisor
 
+// The vector extensions whose register state lives in an XSAVE-managed area,
+// and which therefore CANNOT be advertised while XSAVE is hidden. Their YMM and
+// ZMM registers are reachable only once XCR0 enables that state, which takes
+// XSETBV, which this vCPU does not virtualize.
+//
+// Advertising them anyway does not merely mislead: it describes a processor
+// that cannot exist, and software does not defend against impossible hardware.
+// A library dispatches on the AVX2 bit, takes a code path whose XSAVE-dependent
+// setup never ran, and calls through a table entry nothing filled in. The guest
+// cannot report that — it surfaces as a read of a very low address inside
+// whichever library asked first, so the same fault appears in a different
+// library on every run and names none of them.
+//
+// The alternative to hiding them is virtualizing XSAVE — XSETBV exits, XCR0
+// state and guest FPU save/restore — which is a real feature, not a mask.
+// Until then the advertised CPU stops at SSE, which every library handles as
+// its baseline.
+const ECX_FMA: u32 = 1 << 12; // fused multiply-add (YMM state)
+const ECX_AVX: u32 = 1 << 28; // Advanced Vector Extensions (YMM state)
+const ECX_F16C: u32 = 1 << 29; // 16-bit float conversion (YMM state)
+const ECX_XSAVE_DEPENDENT: u32 = ECX_FMA | ECX_AVX | ECX_F16C;
+
+// Leaf 07H subleaf 0, the same rule: every AVX2 and AVX-512 bit. The AVX-512
+// bits are spelled out even where no current host sets them, because the rule
+// is "no XSAVE state is advertised", not "no bit this laptop happens to have".
+const EBX7_AVX2: u32 = 1 << 5;
+const EBX7_AVX512F: u32 = 1 << 16;
+const EBX7_AVX512DQ: u32 = 1 << 17;
+const EBX7_AVX512_IFMA: u32 = 1 << 21;
+const EBX7_AVX512PF: u32 = 1 << 26;
+const EBX7_AVX512ER: u32 = 1 << 27;
+const EBX7_AVX512CD: u32 = 1 << 28;
+const EBX7_AVX512BW: u32 = 1 << 30;
+const EBX7_AVX512VL: u32 = 1 << 31;
+const EBX7_XSAVE_DEPENDENT: u32 = EBX7_AVX2 | EBX7_AVX512F | EBX7_AVX512DQ |
+    EBX7_AVX512_IFMA | EBX7_AVX512PF | EBX7_AVX512ER | EBX7_AVX512CD |
+    EBX7_AVX512BW | EBX7_AVX512VL;
+
+const ECX7_AVX512_VBMI: u32 = 1 << 1;
+const ECX7_AVX512_VBMI2: u32 = 1 << 6;
+const ECX7_AVX512_VNNI: u32 = 1 << 11;
+const ECX7_AVX512_BITALG: u32 = 1 << 12;
+const ECX7_AVX512_VPOPCNTDQ: u32 = 1 << 14;
+const ECX7_XSAVE_DEPENDENT: u32 = ECX7_AVX512_VBMI | ECX7_AVX512_VBMI2 |
+    ECX7_AVX512_VNNI | ECX7_AVX512_BITALG | ECX7_AVX512_VPOPCNTDQ;
+
+const EDX7_AVX512_4VNNIW: u32 = 1 << 2;
+const EDX7_AVX512_4FMAPS: u32 = 1 << 3;
+const EDX7_AVX512_VP2INTERSECT: u32 = 1 << 8;
+const EDX7_AMX_BF16: u32 = 1 << 22; // AMX tile state is XSAVE state too
+const EDX7_AVX512_FP16: u32 = 1 << 23;
+const EDX7_AMX_TILE: u32 = 1 << 24;
+const EDX7_AMX_INT8: u32 = 1 << 25;
+const EDX7_XSAVE_DEPENDENT: u32 = EDX7_AVX512_4VNNIW | EDX7_AVX512_4FMAPS |
+    EDX7_AVX512_VP2INTERSECT | EDX7_AMX_BF16 | EDX7_AVX512_FP16 |
+    EDX7_AMX_TILE | EDX7_AMX_INT8;
+
+// Leaf 07H subleaf 1 EAX carries the newer AVX bits, which this host DOES set.
+const EAX7_1_AVX_VNNI: u32 = 1 << 4;
+const EAX7_1_AVX512_BF16: u32 = 1 << 5;
+const EAX7_1_XSAVE_DEPENDENT: u32 = EAX7_1_AVX_VNNI | EAX7_1_AVX512_BF16;
+
+/// Leaf 0DH enumerates the XSAVE state components and save-area sizes. With
+/// XSAVE hidden it must report nothing: passing the host's answer through is
+/// what tells a guest that XSAVEOPT exists on a processor that has no XSAVE.
+const LEAF_XSAVE_STATE: u32 = 0x0D;
+
 // Leaf 01H EBX: the initial local-APIC ID lives in bits 31:24.
 const EBX_INITIAL_APIC_ID_MASK: u32 = 0xFF00_0000;
 
@@ -111,21 +178,39 @@ pub fn filter(host: Regs, leaf: u32, subleaf: u32, tsc_hz: u64) Regs {
             // Advertise the virtual platform: hypervisor present, x2APIC and
             // TSC-deadline (both emulated via MSR exits). Hide VMX (no nested
             // virtualization) and the XSAVE feature set — XSETBV/XSAVES are not
-            // virtualized and would exit-to-shutdown or #UD in the guest.
-            .ecx = (host.ecx | ECX_HYPERVISOR | ECX_X2APIC | ECX_TSC_DEADLINE) & ~(ECX_VMX | ECX_XSAVE | ECX_OSXSAVE),
+            // virtualized and would exit-to-shutdown or #UD in the guest — and
+            // with it every extension whose state XSAVE manages, so the
+            // advertised processor is one that could be built.
+            .ecx = (host.ecx | ECX_HYPERVISOR | ECX_X2APIC | ECX_TSC_DEADLINE) &
+                ~(ECX_VMX | ECX_XSAVE | ECX_OSXSAVE | ECX_XSAVE_DEPENDENT),
             // Hide what has no MSR backing: machine-check (MCE/MCA), the
             // ACPI thermal MSRs and the MTRRs. The local APIC stays
             // advertised — it is the emulated x2APIC.
             .edx = (host.edx | EDX_APIC) & ~(EDX_MCE | EDX_MCA | EDX_ACPI | EDX_MTRR),
         },
-        // Leaf 07H subleaf 0 carries the structured extended-feature EBX flags;
-        // higher subleaves report other data and pass through. Mask INVPCID.
-        LEAF_EXTENDED_FEATURES => if (subleaf == 0) .{
-            .eax = host.eax,
-            .ebx = host.ebx & ~EBX7_INVPCID,
-            .ecx = host.ecx & ~(ECX7_WAITPKG | ECX7_RDPID),
-            .edx = host.edx,
-        } else host,
+        // Leaf 07H subleaf 0 carries the structured extended-feature flags;
+        // subleaf 1 carries the newer AVX bits. Mask INVPCID and the two
+        // VMX-control-gated features, and every XSAVE-managed extension in
+        // both subleaves. Higher subleaves report other data and pass through.
+        LEAF_EXTENDED_FEATURES => switch (subleaf) {
+            0 => .{
+                .eax = host.eax,
+                .ebx = host.ebx & ~(EBX7_INVPCID | EBX7_XSAVE_DEPENDENT),
+                .ecx = host.ecx & ~(ECX7_WAITPKG | ECX7_RDPID | ECX7_XSAVE_DEPENDENT),
+                .edx = host.edx & ~EDX7_XSAVE_DEPENDENT,
+            },
+            1 => .{
+                .eax = host.eax & ~EAX7_1_XSAVE_DEPENDENT,
+                .ebx = host.ebx,
+                .ecx = host.ecx,
+                .edx = host.edx,
+            },
+            else => host,
+        },
+        // With XSAVE hidden there is no XSAVE state to enumerate. Reporting the
+        // host's components here is what leaves a guest believing in XSAVEOPT
+        // on a processor whose CPUID says XSAVE does not exist.
+        LEAF_XSAVE_STATE => .{ .eax = 0, .ebx = 0, .ecx = 0, .edx = 0 },
         // Extended features: mask RDTSCP; the rest (NX, long mode, 1 GiB pages)
         // pass through unchanged.
         LEAF_EXTENDED_FEATURES_80000001 => .{
