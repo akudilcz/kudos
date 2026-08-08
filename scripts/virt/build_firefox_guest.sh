@@ -47,6 +47,22 @@ START_URL="${START_URL:-https://en.wikipedia.org/wiki/Operating_system}"
 FB_W="${FB_W:-1600}"
 FB_H="${FB_H:-900}"
 
+# Whether the compositor starts the browser itself. The kiosk image wants it to;
+# a development run usually does not, because the browser then races anything
+# started by hand and every experiment costs a full rebuild instead of a line at
+# the guest's own shell. With AUTOSTART=0 the guest still comes up all the way —
+# compositor running, network up, probes reported — and stops at a shell with
+# `kiosk-firefox` waiting to be typed.
+AUTOSTART="${AUTOSTART:-1}"
+if [ "$AUTOSTART" = "1" ]; then
+    AUTOLAUNCH_SECTION="
+[autolaunch]
+path=/usr/bin/kiosk-firefox
+"
+else
+    AUTOLAUNCH_SECTION=""
+fi
+
 # The marker /init prints once the browser has been launched. The QEMU test
 # harness watches the serial console for it.
 MARKER="KUDOS-FIREFOX-UP"
@@ -360,10 +376,7 @@ cat > "$ROOTFS/etc/xdg/weston/weston.ini" <<EOF
 shell=kiosk-shell.so
 renderer=pixman
 idle-time=0
-
-[autolaunch]
-path=/usr/bin/kiosk-firefox
-
+$AUTOLAUNCH_SECTION
 [shell]
 locking=false
 EOF
@@ -540,6 +553,21 @@ run_stress_probe() {
     fi
 }
 
+# Can this image decode the icons its toolkit will ask for? GTK does not
+# degrade when it cannot: it asserts and aborts the process, and the message
+# blames an image format rather than the missing loader. The browser then dies
+# before painting with no line that names a cause — which is exactly how this
+# cost a day. Asking at boot turns it into one line, before anything depends
+# on the answer.
+report_icons() {
+    say "icons: cache \$(wc -c < "\${GDK_PIXBUF_MODULE_FILE:-/dev/null}" 2>/dev/null || echo 0) bytes, svg loader \$(ls /usr/lib/gdk-pixbuf-2.0/*/loaders/ 2>/dev/null | grep -c svg)"
+    if gdk-pixbuf-query-loaders 2>/dev/null | grep -q 'image/svg'; then
+        say "icons: svg decodable"
+    else
+        say "icons: NO SVG LOADER — GTK will abort on its first icon"
+    fi
+}
+
 # What the guest has left, and whether the kernel has killed anything for it.
 # The first suspect whenever a browser dies here: this guest's whole system is
 # in RAM (VIRT-004), so the tmpfs root is charged against the same budget the
@@ -558,7 +586,16 @@ report_memory() {
 # cannot decode, and the loader that decodes it is found only through this
 # cache. They are cheap, they are idempotent, and they must run in the guest
 # because each one interrogates the very libraries it indexes.
+PIXBUF_CACHE=\$(find /usr/lib/gdk-pixbuf-2.0 -name loaders.cache 2>/dev/null | head -1)
 gdk-pixbuf-query-loaders --update-cache 2>/dev/null
+# Name the cache explicitly rather than trusting the default path compiled into
+# the library. GTK aborts — not degrades — the first time it cannot decode an
+# icon, and its own Adwaita icons are SVG, so the one loader that must be found
+# is the one shipped by a different package (librsvg, whose module is spelled
+# libpixbufloader_svg.so with an underscore, unlike every built-in loader).
+# Losing it costs the whole browser: "Unrecognized image file format", then
+# Gtk:ERROR, then abort, with no line naming an icon.
+[ -n "\$PIXBUF_CACHE" ] && export GDK_PIXBUF_MODULE_FILE="\$PIXBUF_CACHE"
 glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null
 fc-cache -f 2>/dev/null
 # dbus identifies the machine by this file and logs an error on every
@@ -624,6 +661,7 @@ fi
 
 report_cpu
 run_cpu_conformance
+report_icons
 report_memory "before the browser"
 run_stress_probe
 
@@ -639,6 +677,12 @@ KIOSK_PID=\$!
 
 say "$MARKER"
 
+# With no autolaunch this guest exists to be driven by hand: say so, once, in
+# the place the person driving it is already looking.
+if [ "${AUTOSTART}" != "1" ]; then
+    say "no autostart — run  kiosk-firefox  at this shell to start the browser"
+fi
+
 (
     tail -f /tmp/kiosk.log 2>/dev/null | fold -w ${CONSOLE_COLS} |
         while read -r l; do say "kiosk: \$l"; done
@@ -650,7 +694,7 @@ say "$MARKER"
 # exhausted guest does not announce a shortage — its allocations fail and its
 # libraries dereference the failure, which reads as a null-pointer bug in
 # whatever library happened to ask for memory first.
-(
+[ "${AUTOSTART}" = "1" ] && (
     # Wait for the browser to EXIST before watching for it to vanish. The
     # compositor runs the control client first and takes a moment to launch
     # anything at all, so a watch that starts counting immediately reports a
