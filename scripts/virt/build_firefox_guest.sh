@@ -77,6 +77,11 @@ STRESS_S=15
 # first frame, so this only has to outlast a compositor round trip.
 CONTROL_S=5
 
+# How long the death watch waits for the browser to appear before concluding it
+# never did. It has to outlast the control client above plus a browser's own
+# start-up on a software rasteriser, which is unhurried.
+BROWSER_START_S=60
+
 # How often /init checks that the compositor and the browser are both still
 # alive. Every wait states a budget: a few seconds is fast enough that the death
 # report names the failure while its log lines are still on screen, and slow
@@ -290,6 +295,14 @@ tar xzf "$WORK/$MINIROOTFS" -C "$ROOTFS"
 
 echo "kudos-firefox" > "$ROOTFS/etc/hostname"
 
+# The guest conformance probe (guestcheck.c). Built here rather than shipped as
+# a package because it is ours and it is the guest's half of the contracts the
+# hypervisor makes: every CPUID feature it advertises can be executed, and a
+# page can be written, sealed executable, and run. Statically linked so it
+# depends on nothing in the image and can be dropped into any guest rootfs,
+# whatever libc it has.
+$CC_STD -static -O1 -o "$ROOTFS/usr/bin/guestcheck" "$SCRIPT_DIR/guestcheck.c"
+
 # The page the kiosk opens with when nothing external is reachable. It states
 # what it is proving, so a screenshot of it is self-describing.
 mkdir -p "$ROOTFS/usr/share/kudos"
@@ -395,6 +408,11 @@ chmod +x "$ROOTFS/usr/bin/kiosk-firefox"
 # one it does not start is a working set the guest does not have to find.
 mkdir -p "$ROOTFS/usr/share/kudos"
 cat > "$ROOTFS/usr/share/kudos/user.js" <<'EOF'
+// Firefox's own accessibility switch, alongside the two environment variables
+// /init exports. The browser reaches for org.a11y.Bus at start-up and exits
+// silently when the bus has no provider, and this image has none; a kiosk has
+// no screen reader to serve.
+user_pref("accessibility.force_disabled", 1);
 // One content process, not the default fleet: a kiosk shows one page.
 user_pref("dom.ipc.processCount", 1);
 // Run extensions in the parent. The separate WebExtensions process is pure
@@ -505,6 +523,19 @@ report_cpu() {
         tr '\\n' ' ')"
 }
 
+# Is the machine this guest was promised the machine it got? Every CPUID
+# feature is executed, and a page is written, sealed executable and run — the
+# just-in-time compiler's cycle, which every browser depends on. This is the
+# check that turns a whole class of hypervisor bug from "some application dies
+# somewhere, in a different library each time" into one line naming the
+# contract that was broken.
+run_cpu_conformance() {
+    guestcheck > /tmp/guestcheck.log 2>&1
+    rc=\$?
+    while read -r l; do say "\$l"; done < /tmp/guestcheck.log
+    [ \$rc -eq 0 ] || say "guestcheck: a guest contract is broken — fix the hypervisor, not the app"
+}
+
 # Does this guest execute ordinary userspace correctly? Fork storms and thread
 # churn are what a browser does constantly and what a hypervisor gets wrong
 # subtly: a mishandled segment base or saved register leaves a fresh process
@@ -563,6 +594,14 @@ export MOZ_ENABLE_WAYLAND=1
 # reporter is a second GTK program started at the worst possible moment, and
 # when it fails it buries the failure that summoned it.
 export MOZ_CRASHREPORTER_DISABLE=1
+# No accessibility. Firefox asks the session bus for org.a11y.Bus at start-up,
+# dbus reports activating it, and the browser then exits without printing
+# anything at all — the whole failure, on a bus whose provider (at-spi2) is not
+# in this image. Nothing here reads an accessibility tree, so the subsystem is
+# removed rather than supplied: NO_AT_BRIDGE stops GTK's bridge from loading and
+# GTK_A11Y=none stops the toolkit asking for a backend in the first place.
+export NO_AT_BRIDGE=1
+export GTK_A11Y=none
 mkdir -p "\$XDG_RUNTIME_DIR"
 chmod 700 "\$XDG_RUNTIME_DIR"
 
@@ -607,6 +646,7 @@ else
 fi
 
 report_cpu
+run_cpu_conformance
 report_memory "before the browser"
 run_stress_probe
 
@@ -634,22 +674,41 @@ say "$MARKER"
 # libraries dereference the failure, which reads as a null-pointer bug in
 # whatever library happened to ask for memory first.
 (
-    checks=0
-    while true; do
-        sleep ${WATCH_INTERVAL_S}
-        checks=\$((checks + 1))
-        if ! kill -0 \$KIOSK_PID 2>/dev/null; then
-            say "KIOSK-EXITED after \$((checks * ${WATCH_INTERVAL_S}))s"
-            report_memory "at compositor exit"
-            break
-        fi
-        if ! pgrep firefox-esr >/dev/null 2>&1; then
-            say "BROWSER-GONE after \$((checks * ${WATCH_INTERVAL_S}))s"
-            report_memory "at browser exit"
-            break
-        fi
-        [ \$((checks % ${MEMORY_EVERY_CHECKS})) -eq 0 ] && report_memory "browser up"
+    # Wait for the browser to EXIST before watching for it to vanish. The
+    # compositor runs the control client first and takes a moment to launch
+    # anything at all, so a watch that starts counting immediately reports a
+    # death that has not happened — which is worse than no report, because it
+    # is read as evidence. "Never started" and "started, then died" are
+    # different faults and each says so.
+    appeared=0
+    waited=0
+    while [ \$waited -lt ${BROWSER_START_S} ]; do
+        sleep 1
+        waited=\$((waited + 1))
+        if pgrep firefox-esr >/dev/null 2>&1; then appeared=1; break; fi
     done
+    if [ \$appeared -eq 0 ]; then
+        say "BROWSER-NEVER-STARTED within ${BROWSER_START_S}s"
+        report_memory "browser never started"
+    else
+        say "browser up after \${waited}s"
+        checks=0
+        while true; do
+            sleep ${WATCH_INTERVAL_S}
+            checks=\$((checks + 1))
+            if ! kill -0 \$KIOSK_PID 2>/dev/null; then
+                say "KIOSK-EXITED after \$((checks * ${WATCH_INTERVAL_S}))s"
+                report_memory "at compositor exit"
+                break
+            fi
+            if ! pgrep firefox-esr >/dev/null 2>&1; then
+                say "BROWSER-GONE after \$((checks * ${WATCH_INTERVAL_S}))s of running"
+                report_memory "at browser exit"
+                break
+            fi
+            [ \$((checks % ${MEMORY_EVERY_CHECKS})) -eq 0 ] && report_memory "browser up"
+        done
+    fi
 ) &
 
 # Let the compositor's own start-up chatter land first, so the report is the
