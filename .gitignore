@@ -33,3 +33,5 @@ __pycache__/
 # glTF validator per-asset reports (transient)
 *.gltf.report.json
 *.glb.report.json
+# Added by code-review-graph
+.code-review-graph/

@@ -7,6 +7,14 @@
         "--script",
         "${CLAUDE_PROJECT_DIR:-.}/scripts/tools/netdebug-mcp/server.py"
       ]
+    },
+    "code-review-graph": {
+      "command": "/home/andrew/.local/bin/code-review-graph",
+      "args": [
+        "serve"
+      ],
+      "cwd": "/home/andrew/kudos",
+      "type": "stdio"
     }
   }
 }
