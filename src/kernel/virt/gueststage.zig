@@ -46,3 +46,32 @@ pub fn staged() bool {
     const h = header() orelse return false;
     return h.xlf_kernel_64;
 }
+
+/// How much RAM the staged guest needs, derived from the image itself rather
+/// than fixed for one of them: a busybox initramfs and a browser initramfs
+/// differ by two orders of magnitude, and a guest given a constant sized for the
+/// smaller one dies unpacking its own root filesystem.
+///
+/// Two terms, both about the initramfs, because a kudos guest has no disk
+/// (VIRT-004) and its whole system lives in RAM:
+///   - the tmpfs it unpacks INTO. A gzipped cpio of a real userland lands near
+///     UNPACK_RATIO times its packed size (measured on the Firefox image:
+///     662 MiB from 236 MiB).
+///   - room for that userland to RUN in — heap, page cache, a browser's own
+///     working set — which is the same size again, generously.
+/// A floor keeps the small guests exactly where they were.
+pub fn ramBytes() u64 {
+    const packed_len = initramfs().len;
+    const rootfs = packed_len * UNPACK_RATIO;
+    return @max(MIN_RAM_BYTES, rootfs * RUNTIME_MULTIPLE);
+}
+
+/// Bytes a gzipped cpio initramfs unpacks to, per byte packed.
+const UNPACK_RATIO: usize = 3;
+/// Total RAM per byte of unpacked root filesystem: the tree itself plus the room
+/// its userland needs to run.
+const RUNTIME_MULTIPLE: usize = 3;
+/// The floor, which is what every guest smaller than a browser gets: a busybox
+/// initramfs boot fits comfortably in 128 MiB and several such guests stay far
+/// inside the frame allocator's budget.
+const MIN_RAM_BYTES: u64 = 128 * 1024 * 1024;

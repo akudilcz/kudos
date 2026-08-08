@@ -34,10 +34,9 @@ const layout = @import("layout.zig");
 
 /// The virtio devices a catalog guest is wired to, as the discovery arguments
 /// the guest needs to find them: there is no PCI bus and no device tree in a
-/// kudos guest, so a device nobody names is a device nobody sees. Same
-/// generator the staged guest's command line uses (virt.STAGED_CMDLINE), so
-/// "which slots are wired" keeps one home.
-const DEVICES = layout.cmdlineArg(.gpu) ++ " " ++ layout.cmdlineArg(.net);
+/// kudos guest, so a device nobody names is a device nobody sees. The list has
+/// one home (layout.WIRED_DEVICES), shared with the staged guest's command line.
+const DEVICES = layout.WIRED_DEVICES;
 
 /// VM-exit dieting, appended to every catalog cmdline: each flag stops the
 /// guest banging on a device we emulate one trap at a time. Under a NESTED
@@ -154,16 +153,30 @@ pub const CATALOG = [_]Image{
     // and dropbear sshd, root/kudos on the ttyS0 getty. Useful on the serial
     // console alone today, and ready to DHCP + answer ssh the moment the
     // hypervisor grows a virtio-net device. Served by the operator
-    // (scripts/virt/serve_ssh_guest.sh): 10.0.2.2 is QEMU slirp's address for
+    // (scripts/virt/serve_guest.sh): 10.0.2.2 is QEMU slirp's address for
     // the host, right whenever kudos itself runs under QEMU on the machine
     // that serves the pair; kudos on real hardware (lemon) needs the serving
     // machine's LAN address here instead — edit, rebuild, reflash.
     .{
         .name = "kudos lab Linux (bash + sshd, runs from RAM)",
-        .kernel_url = "http://10.0.2.2:8000/bzImage",
-        .initramfs_url = "http://10.0.2.2:8000/initramfs.cpio.gz",
+        .kernel_url = "http://10.0.2.2:8000/ssh/bzImage",
+        .initramfs_url = "http://10.0.2.2:8000/ssh/initramfs.cpio.gz",
         .ram_mb = 512,
         .approx_mb = 14,
+        .cmdline = "console=tty0 console=ttyS0 " ++ DEVICES ++ " " ++ EXIT_DIET,
+    },
+    .{
+        // The browser image (scripts/virt/build_firefox_guest.sh), served the
+        // same way as the lab image above. Its RAM is the one entry sized from
+        // a measurement rather than a guess: the initramfs unpacks to ~630 MiB
+        // of root filesystem in tmpfs, and Firefox's own working set with a
+        // page loaded is about the same again — 3 GiB leaves the browser room
+        // to grow while staying under layout.zig's guest-RAM ceiling.
+        .name = "kudos Firefox (Wayland kiosk on llvmpipe, runs from RAM)",
+        .kernel_url = "http://10.0.2.2:8000/firefox/bzImage",
+        .initramfs_url = "http://10.0.2.2:8000/firefox/initramfs.cpio.gz",
+        .ram_mb = 3072,
+        .approx_mb = 238,
         .cmdline = "console=tty0 console=ttyS0 " ++ DEVICES ++ " " ++ EXIT_DIET,
     },
 };

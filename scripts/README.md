@@ -110,6 +110,23 @@ QEMU; never reboots lemon); `make check-hw` is the FINAL one.
   regenerates `test/drivers/storage/fixtures/fat*.img.gz` for the host FAT tests.
 - All artifacts land in `build/logs/` (persistent — survives a power-cycle).
 
+## virt/ — the Linux guests kudos boots
+Each builder produces a kernel + initramfs pair into `assets/virt/`, on the host
+and as a plain user. They differ only in what userland they carry, so the kernel
+fragment is shared and each adds what its userland needs on top.
+- `guest_kernel.config` — the kconfig fragment all three share: serial console,
+  virtio-mmio discovery, virtio-gpu. Merged onto `tinyconfig`.
+- `build_guest.sh` — the staged built-in guest (busybox on a serial console),
+  the one `make test-guest-qemu` boots.
+- `build_ssh_guest.sh` — the lab image: Alpine + bash + dropbear, for logging
+  into a guest over the network; `test_ssh_guest.sh` exercises it.
+- `build_firefox_guest.sh` — the browser image: Alpine + Mesa's llvmpipe + a
+  Wayland kiosk + Firefox, rendering into the guest's virtio-gpu scanout.
+- `serve_guest.sh` — serves `assets/virt/` over HTTP for `vm boot`: every built
+  image at once, each under its own directory, as the catalog URLs name them.
+- `pack_initramfs.py` — the shared packer: reproducible newc cpio, root:root
+  ownership and the `/dev/console` node an unprivileged build tree cannot hold.
+
 ## tools/ · grub/ · shaders/
 - `tools/netdebug-mcp/` — the `kudos-netdebug` MCP server + `kmir.py` (the KMR1
   client library `debug/netdebug.py` also uses).

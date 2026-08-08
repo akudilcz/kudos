@@ -62,19 +62,34 @@ pub fn build(b: *std.Build) void {
     // guest build — empty blobs are wired instead so the kernel still compiles and
     // `vm boot` reports no guest is staged. A generated empty file is the stand-in
     // (b.path of a missing file would fail the embed at compile time).
+    // WHICH guest is staged: `-Dguest=<name>` picks assets/virt/<name>/ (the
+    // images the other build_*_guest.sh scripts produce), and the default is the
+    // busybox pair build_guest.sh drops at the top of assets/virt/. Staging is
+    // how a guest boots with NO download: the image is in memory the moment
+    // kudos is, which for a browser-sized initramfs is the difference between
+    // booting and spending half an hour pulling 236 MiB through the TCP stack.
+    const guest_name = b.option([]const u8, "guest", "stage assets/virt/<name>/ as the built-in guest (default: assets/virt/)");
+    const guest_dir = if (guest_name) |n| b.fmt("assets/virt/{s}", .{n}) else "assets/virt";
+    const guest_bzimage_rel = b.fmt("{s}/bzImage", .{guest_dir});
+    const guest_initramfs_rel = b.fmt("{s}/initramfs.cpio.gz", .{guest_dir});
     const guest_present = blk: {
         const io = b.graph.io;
-        std.Io.Dir.cwd().access(io, b.pathFromRoot("assets/virt/bzImage"), .{}) catch break :blk false;
-        std.Io.Dir.cwd().access(io, b.pathFromRoot("assets/virt/initramfs.cpio.gz"), .{}) catch break :blk false;
+        std.Io.Dir.cwd().access(io, b.pathFromRoot(guest_bzimage_rel), .{}) catch break :blk false;
+        std.Io.Dir.cwd().access(io, b.pathFromRoot(guest_initramfs_rel), .{}) catch break :blk false;
         break :blk true;
     };
+    // An explicitly named guest that is not there is a mistake, not a tree that
+    // never ran the guest build: fail rather than silently staging nothing and
+    // leaving `vm boot 1` to report the absence three steps later.
+    if (guest_name != null and !guest_present)
+        std.debug.panic("-Dguest={s}: no bzImage + initramfs.cpio.gz in {s}/", .{ guest_name.?, guest_dir });
     const empty_guest = b.addWriteFiles();
     const guest_bzimage_path: std.Build.LazyPath = if (guest_present)
-        b.path("assets/virt/bzImage")
+        b.path(guest_bzimage_rel)
     else
         empty_guest.add("guest_bzimage.absent", "");
     const guest_initramfs_path: std.Build.LazyPath = if (guest_present)
-        b.path("assets/virt/initramfs.cpio.gz")
+        b.path(guest_initramfs_rel)
     else
         empty_guest.add("guest_initramfs.absent", "");
 
@@ -754,6 +769,7 @@ pub fn build(b: *std.Build) void {
         .{ .n = "virtio_gpu", .s = "src/kernel/virt/virtio/gpu.zig", .t = "test/kernel/virt/virtio/virtio_gpu_test.zig" }, // virtio-gpu 2D command model
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/virtio/virtio_gpudev_test.zig" }, // the display adapter: 2D model behind the transport
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/virtio/virtio_netdev_test.zig" }, // the network adapter: rx/tx queues behind the transport, frames over the FrameSink seam
+        .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/virtio/virtio_inputdev_test.zig" }, // keyboard + tablet: config selectors and evdev events behind the transport
         .{ .n = "vmslots", .s = "src/kernel/virt/vmslots.zig" }, // VM slot retirement handshake (window ↔ vCPU)
         .{ .n = "vspace", .s = "src/kernel/memory/vspace.zig" }, // 4-level address-space builder (MEM-001; session isolation)
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/guestlist_test.zig" }, // the `vm boot` network-image catalog (VIRT-019/020)

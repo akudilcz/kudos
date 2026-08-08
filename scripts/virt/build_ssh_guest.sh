@@ -4,7 +4,7 @@
 # bash, GNU coreutils, udhcpc (busybox) and dropbear sshd. Runs on the host
 # (this laptop / CI), NOT inside kudos. Artifacts land in assets/virt/ssh/
 # (git-ignored except the checksum record); serve them with
-# scripts/virt/serve_ssh_guest.sh and boot them with the "kudos lab Linux"
+# scripts/virt/serve_guest.sh and boot them with the "kudos lab Linux"
 # catalog entry (src/kernel/virt/guestlist.zig); gate any change with
 # scripts/virt/test_ssh_guest.sh.
 #
