@@ -716,6 +716,7 @@ pub fn build(b: *std.Build) void {
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/drivers/storage/bootlog_test.zig" }, // flight recorder: boot trace mirrored to the stick's ring file (DIAG-014)
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/sched/taskstat_test.zig" }, // ps read-side view: label slices stay bounded however torn the snapshot
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/sched/lockorder_test.zig" }, // scheduler lock-lattice policy (ascending-only, no recursion)
+        .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/sched/stackcanary_test.zig" }, // stack-overflow detection on guard-page-less heap stacks (MEM-011)
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/debug/deadman_test.zig" }, // wedge-fuse policy (alive/due windows; the IRQ glue is thin)
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/debug/spinwait_test.zig" }, // bounded-spin budget policy (expiry + report-once gate)
         .{ .n = "multiboot2", .s = "src/kernel/boot/multiboot2.zig" }, // GRUB info-blob tag walk (malformed-blob guards)

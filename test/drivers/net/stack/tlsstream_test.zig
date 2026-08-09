@@ -117,6 +117,41 @@ test "end of stream is a zero-length read, not a failure (NET-016)" {
     try expectEqual(@as(usize, 0), try tlsstream.readAvailable(&fake.reader, &buf));
 }
 
+test "a peer that drips one byte per window is eventually cut off (NET-020)" {
+    const stall: u64 = 15_000;
+    const total: u64 = 120_000;
+
+    // Progress renews the per-byte budget, deliberately — a big download must
+    // not be punished for being big. Walk a peer that answers just inside every
+    // stall window and confirm the SESSION budget is what finally ends it,
+    // because the renewable one never will.
+    var now: u64 = 0;
+    var stall_deadline: u64 = stall;
+    var ended_at: ?u64 = null;
+    while (now < 10 * total) : (now += stall - 1) {
+        switch (tlsstream.verdict(now, stall_deadline, total)) {
+            .keep_waiting => stall_deadline = now + stall, // a byte arrived
+            .stalled => return error.StalledDespiteProgress,
+            .too_long => {
+                ended_at = now;
+                break;
+            },
+        }
+    }
+    try expect(ended_at != null);
+    try expect(ended_at.? >= total);
+}
+
+test "a quiet peer is stalled, not merely slow (NET-020)" {
+    // Inside both budgets: wait.
+    try expect(tlsstream.verdict(10, 100, 1000) == .keep_waiting);
+    // Past the per-byte budget only: the peer went quiet.
+    try expect(tlsstream.verdict(150, 100, 1000) == .stalled);
+    // Past the total: that verdict wins, because it is the one that cannot be
+    // renewed and so the one that guarantees the session ends.
+    try expect(tlsstream.verdict(1500, 9999, 1000) == .too_long);
+}
+
 test "a decrypt failure is named as one, never as the API's wrapper (NET-017)" {
     // The client reports every read fault as ReadFailed and puts the real cause
     // in read_err. Naming only the wrapper is what made a corrupted record and

@@ -25,6 +25,7 @@ pub const kernel = struct {
     pub const spinwait = @import("kernel/debug/spinwait.zig");
     pub const debug = @import("kernel/debug/debug.zig");
     pub const lockorder = @import("kernel/sched/lockorder.zig");
+    pub const stackcanary = @import("kernel/sched/stackcanary.zig");
     pub const heap = @import("kernel/memory/heap.zig");
     pub const pmm = @import("kernel/memory/pmm.zig");
     pub const gueststage = @import("kernel/virt/gueststage.zig");

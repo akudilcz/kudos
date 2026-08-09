@@ -50,6 +50,33 @@ pub fn readAvailable(r: *std.Io.Reader, buf: []u8) std.Io.Reader.Error!usize {
     return n;
 }
 
+/// What a transport waiting for the next byte should do now.
+pub const Wait = enum {
+    /// Nothing has arrived yet and both budgets still allow waiting.
+    keep_waiting,
+    /// No byte within the per-byte budget: the peer has gone quiet.
+    stalled,
+    /// The session has outlived its total budget however much progress it made.
+    too_long,
+};
+
+/// Decide between waiting, giving up on a quiet peer, and giving up on a session
+/// that will not end (spec NET-020).
+///
+/// TWO budgets, and the second exists because the first cannot express it. The
+/// stall budget is renewed on every byte, deliberately, so a large download is
+/// not punished for being large — but that makes it renewable forever by a peer
+/// sending one byte just inside each window. Since a request holds the whole
+/// network stack for its duration, "forever" would not be one slow transfer; it
+/// would be every other network user on the machine queued behind a session that
+/// never ends. The total budget is never renewed, so it is the one that
+/// terminates.
+pub fn verdict(now_ms: u64, stall_deadline_ms: u64, session_deadline_ms: u64) Wait {
+    if (now_ms >= session_deadline_ms) return .too_long;
+    if (now_ms >= stall_deadline_ms) return .stalled;
+    return .keep_waiting;
+}
+
 /// Name what actually went wrong (spec NET-017).
 ///
 /// The client reports every read fault as `ReadFailed` and records the real

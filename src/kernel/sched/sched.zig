@@ -34,6 +34,7 @@ const lapic = @import("../apic/lapic.zig");
 const tsc = @import("../cpu/tsc.zig");
 const SpinLock = @import("../sync/spinlock.zig").SpinLock;
 const counter = @import("../debug/counter.zig");
+const stackcanary = @import("stackcanary.zig");
 const ioapic = @import("../apic/ioapic.zig");
 
 const task_value = @import("task.zig");
@@ -332,6 +333,20 @@ pub fn spawnStacked(name: []const u8, entry: *const fn () void, stack: []u8) !*T
     return spawnOnStack(null, name, entry, stack, false);
 }
 
+/// Task stacks that overflowed into their canary (spec MEM-011). Any non-zero
+/// value is a defect, not a statistic. The detection itself lives in the pure
+/// `stackcanary` module, where it is tested rather than trusted.
+var cnt_stack_overflow = counter.Counter{ .mod = .sched, .name = "stack.overflow" };
+var cnt_stack_overflow_registered = false;
+
+fn armCanary(stack: []u8) void {
+    if (!cnt_stack_overflow_registered) {
+        cnt_stack_overflow_registered = true;
+        counter.register(&cnt_stack_overflow);
+    }
+    stackcanary.arm(stack);
+}
+
 fn spawnOnStack(affinity: ?u32, name: []const u8, entry: *const fn () void, stack: []u8, stack_owned: bool) !*Task {
     const a = heap.allocator();
     const t = try a.create(Task);
@@ -348,6 +363,7 @@ fn spawnOnStack(affinity: ?u32, name: []const u8, entry: *const fn () void, stac
     };
     t.context.cr3 = kernel_cr3;
     t.bootstrap_entry = @intFromPtr(entry);
+    armCanary(stack);
     const n = @min(name.len, t.name.len - 1);
     @memcpy(t.name[0..n], name[0..n]);
 
@@ -579,6 +595,23 @@ pub fn schedule() void {
     // Charge the time this core just spent running `prev` before switching away
     // (time accounting for `ps`).
     accountElapsed(pc, prev);
+
+    // The outgoing task's stack canary (spec MEM-011). Checked HERE because it
+    // is the one moment we know `prev` is not running: the deepest frame it will
+    // ever reach has already been reached. A heap task stack has no guard page,
+    // so an overflow does not fault — it silently overwrites the allocation
+    // below and surfaces later, somewhere unrelated, as a wild jump. This turns
+    // that into one line naming the task, at the first switch after it happened.
+    if (!stackcanary.intact(prev.stack)) {
+        cnt_stack_overflow.inc();
+        var buf: [96]u8 = undefined;
+        klog.puts(std.fmt.bufPrint(&buf, "sched: STACK OVERFLOW in task '{s}' — heap below it is corrupt\n", .{
+            std.mem.sliceTo(&prev.name, 0),
+        }) catch "sched: STACK OVERFLOW\n");
+        // Re-arm so the next switch reports a NEW overflow rather than this one
+        // again — the damage is already done and repeating it hides what follows.
+        armCanary(prev.stack);
+    }
 
     // Everything that touches this core's queue or its idle bit happens under one
     // lock — including the decision to go idle, which is only sound alongside the

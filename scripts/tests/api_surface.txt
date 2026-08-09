@@ -2263,6 +2263,8 @@ src/drivers/net/stack/tlsclient.zig: pub fn eof(c: Client) bool
 src/drivers/net/stack/tlskeys.zig: pub fn Handshake(comptime P: type) type
 src/drivers/net/stack/tlskeys.zig: pub fn handshake(
 src/drivers/net/stack/tlsstream.zig: pub fn readAvailable(r: *std.Io.Reader, buf: []u8) std.Io.Reader.Error!usize
+src/drivers/net/stack/tlsstream.zig: pub const Wait = enum
+src/drivers/net/stack/tlsstream.zig: pub fn verdict(now_ms: u64, stall_deadline_ms: u64, session_deadline_ms: u64) Wait
 src/drivers/net/stack/tlsstream.zig: pub fn describeRead(read_err: ?TlsClient.ReadError, fallback: anyerror) []const u8
 src/drivers/net/stack/tls.zig: pub const Session = struct
 src/drivers/net/stack/tls.zig: pub fn open(host: []const u8) inet.FetchError!Session
@@ -3029,6 +3031,10 @@ src/kernel/sched/sleep.zig: pub fn armPreemption(pc: *percpu.PerCpu, next: *Task
 src/kernel/sched/sleep.zig: pub fn abandonSleeper(t: *Task) void
 src/kernel/sched/sleep.zig: pub fn sleepUntilTsc(deadline_tsc: u64) void
 src/kernel/sched/sleep.zig: pub fn releaseDueSleepers(pc: *percpu.PerCpu) void
+src/kernel/sched/stackcanary.zig: pub const VALUE: u64 = 0xC0FFEE_57AC_C0DE;
+src/kernel/sched/stackcanary.zig: pub const BYTES = @sizeOf(u64);
+src/kernel/sched/stackcanary.zig: pub fn arm(stack: []u8) void
+src/kernel/sched/stackcanary.zig: pub fn intact(stack: []const u8) bool
 src/kernel/sched/taskstat.zig: pub fn cpuPercentSince(pc: *percpu.PerCpu) u32
 src/kernel/sched/taskstat.zig: pub const TaskInfo = struct
 src/kernel/sched/taskstat.zig: pub fn taskCpuMs(t: *const Task) u64

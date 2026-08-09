@@ -104,6 +104,9 @@ allocating memory.
 **MEM-010.** The Kudos system shall detect a task's stack overflow as a fault
 (MEM-005), never letting it overwrite memory outside that stack.
 
+**MEM-011.** The Kudos system shall report a task that has overflowed its stack,
+naming the task.
+
 ## Peripherals
 
 **PER-001.** The Kudos system shall support a USB mouse.
@@ -189,6 +192,9 @@ requests originate from more than one task.
 
 **NET-019.** The Kudos system shall continue rendering the desktop (DSK-001) at
 its stated frame rate (PERF-003) while a network request is outstanding.
+
+**NET-020.** The Kudos system shall end an encrypted connection (NET-010) that
+exceeds a stated total duration, however much progress it makes.
 
 ## Images
 

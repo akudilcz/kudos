@@ -34,6 +34,18 @@ const inet = @import("inet");
 /// handshake round trips.
 const TLS_STALL_MS: u64 = 15_000;
 
+/// Ceiling on a whole TLS session, however much progress it makes (spec
+/// NET-020).
+///
+/// The stall budget above is deliberately renewed on every byte, so a large
+/// download is not punished for being large. On its own that is a hole: a peer
+/// sending one byte every fourteen seconds renews it forever, and because a
+/// request now HOLDS the network stack for its duration, "forever" is not just
+/// this transfer — it is every other network user on the machine, waiting behind
+/// a session that will never finish. Two minutes is far beyond any legitimate
+/// exchange kudos makes and far short of indefinite.
+const TLS_SESSION_MS: u64 = 120_000;
+
 /// The client asserts its input buffer holds a whole ciphertext record, so this
 /// is a floor, not a preference (TlsClient.min_buffer_len).
 const RECORD_LEN: usize = TlsClient.min_buffer_len;
@@ -51,7 +63,7 @@ const SOCKET_WRITE_LEN: usize = RECORD_LEN;
 /// Why a transport call failed. `std.Io` reports only ReadFailed/WriteFailed —
 /// the cause is recorded here, the way std's own stream adapters do it, so a
 /// stall is never confused with a reset or an orderly close.
-const TransportError = error{ TlsTcpStall, TlsTcpReset, TlsTcpSend };
+const TransportError = error{ TlsTcpStall, TlsTcpReset, TlsTcpSend, TlsSessionTooLong };
 
 /// The ciphertext transport: kudos' one TCP connection presented as the
 /// Reader/Writer pair the TLS client drives. It moves BYTES ON THE WIRE; every
@@ -68,6 +80,8 @@ const Transport = struct {
     consumed: usize = 0,
     /// Renewed on progress; see TLS_STALL_MS.
     deadline_ms: u64,
+    /// NOT renewed, ever: the whole session's ceiling (TLS_SESSION_MS).
+    session_deadline_ms: u64 = 0,
     err: ?TransportError = null,
     read_buf: [RECORD_LEN]u8 = undefined,
     write_buf: [SOCKET_WRITE_LEN]u8 = undefined,
@@ -78,6 +92,7 @@ const Transport = struct {
     fn init(self: *Transport, deadline_ms: u64) void {
         self.consumed = 0;
         self.deadline_ms = deadline_ms;
+        self.session_deadline_ms = timer.millis() + TLS_SESSION_MS;
         self.err = null;
         self.reader = .{
             .vtable = &.{ .stream = streamIn },
@@ -110,9 +125,16 @@ const Transport = struct {
                 return error.ReadFailed;
             }
             if (tcp.finished()) return error.EndOfStream;
-            if (timer.millis() >= self.deadline_ms) {
-                self.err = error.TlsTcpStall;
-                return error.ReadFailed;
+            switch (tlsstream.verdict(timer.millis(), self.deadline_ms, self.session_deadline_ms)) {
+                .keep_waiting => {},
+                .stalled => {
+                    self.err = error.TlsTcpStall;
+                    return error.ReadFailed;
+                },
+                .too_long => {
+                    self.err = error.TlsSessionTooLong;
+                    return error.ReadFailed;
+                },
             }
             _ = tcp.pumpUntil(self.consumed, self.deadline_ms);
         }
@@ -214,6 +236,7 @@ pub const Session = struct {
             if (self.state.client.read_err != null) " (client)" else "",
             if (self.state.transport.err) |t| switch (t) {
                 error.TlsTcpStall => " (transport: peer went silent)",
+                error.TlsSessionTooLong => " (transport: session exceeded its total budget)",
                 error.TlsTcpReset => " (transport: connection reset)",
                 error.TlsTcpSend => " (transport: send failed)",
             } else "",
@@ -332,6 +355,7 @@ pub fn open(host: []const u8) inet.FetchError!Session {
             @errorName(e),
             if (state.transport.err) |t| switch (t) {
                 error.TlsTcpStall => " (transport: peer went silent)",
+                error.TlsSessionTooLong => " (transport: session exceeded its total budget)",
                 error.TlsTcpReset => " (transport: connection reset)",
                 error.TlsTcpSend => " (transport: send failed)",
             } else "",
