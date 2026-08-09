@@ -16,6 +16,7 @@
 
 const std = @import("std");
 const TlsClient = @import("tlsclient.zig");
+const tlsstream = @import("tlsstream.zig");
 const tcp = @import("tcp.zig");
 const roots = @import("roots.zig");
 const timer = @import("../../../kernel/timer/timer.zig");
@@ -98,6 +99,11 @@ const Transport = struct {
     /// complete one.
     fn streamIn(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
         const self: *Transport = @alignCast(@fieldParentPtr("reader", r));
+        // This call's verdict, not a previous one's. `err` is only ever read
+        // after a failure, and leaving a stale value latched made every later
+        // failure in the session report the FIRST one's cause — a reset arriving
+        // after an earlier stall read as "peer went silent".
+        self.err = null;
         while (tcp.received().len <= self.consumed) {
             if (tcp.wasReset()) {
                 self.err = error.TlsTcpReset;
@@ -125,6 +131,7 @@ const Transport = struct {
     /// not matter and each slice can go out as it stands.
     fn drainOut(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
         const self: *Transport = @alignCast(@fieldParentPtr("writer", w));
+        self.err = null; // this call's verdict, not a previous one's (see streamIn)
         var total: usize = 0; // everything sent, buffered bytes included
         const buffered = w.buffered();
         if (buffered.len != 0) {
@@ -188,13 +195,23 @@ pub const Session = struct {
     }
 
     /// Name what went wrong on the trace before collapsing it to the one error
-    /// the fetch API carries. Without this a decrypt failure, a silent peer and
-    /// a reset all read as "TlsFailed", which is where debugging https stops.
+    /// the fetch API carries (spec NET-017). Without this a decrypt failure, a
+    /// silent peer and a reset all read as "TlsFailed", which is where debugging
+    /// https stops.
+    ///
+    /// THREE layers have to be asked, because each hides the one below it. The
+    /// std client reports every read fault as `ReadFailed` and records the real
+    /// cause in `read_err` — so `@errorName(e)` alone turns a `TlsBadRecordMac`
+    /// into "ReadFailed", which is a fact about the API and not about the
+    /// failure. Below that, the transport records whether the byte stream itself
+    /// stalled, reset, or failed to send. A session that spent a day being
+    /// diagnosed as a network problem was a decrypt failure the whole time.
     fn fail(self: *Session, what: []const u8, e: anyerror) inet.FetchError {
-        var buf: [96]u8 = undefined;
-        klog.puts(std.fmt.bufPrint(&buf, "tls: {s} failed: {s}{s}\n", .{
+        var buf: [160]u8 = undefined;
+        klog.puts(std.fmt.bufPrint(&buf, "tls: {s} failed: {s}{s}{s}\n", .{
             what,
-            @errorName(e),
+            tlsstream.describeRead(self.state.client.read_err, e),
+            if (self.state.client.read_err != null) " (client)" else "",
             if (self.state.transport.err) |t| switch (t) {
                 error.TlsTcpStall => " (transport: peer went silent)",
                 error.TlsTcpReset => " (transport: connection reset)",
@@ -231,8 +248,30 @@ pub const Session = struct {
     /// is still caught one layer up by HTTP framing: a short Content-Length body
     /// or an unterminated chunked stream. Other TLS errors (a real decrypt
     /// failure, a transport reset mid-record) still propagate as TlsFailed.
+    /// Returns as soon as ANY plaintext is available — it does NOT wait for
+    /// `buf` to fill (spec NET-016).
+    ///
+    /// `readSliceShort` was the wrong primitive here, and expensively so: it
+    /// returns short if and only if the stream ENDED, so with the 16 KiB buffer
+    /// both callers pass, a 900-byte response made this wait for 15484 bytes
+    /// that were never coming. The whole response sat decrypted in memory while
+    /// the transport counted out its 15-second silence budget and reported "peer
+    /// went silent" — about a peer that had answered in full. It also made
+    /// server-sent events over HTTPS (NET-014) impossible, because no event
+    /// could be delivered until 16 KiB of them had accumulated.
+    ///
+    /// `peek(1)` is the primitive that says "wait for SOME plaintext": it fills
+    /// until at least one byte is decrypted, then `buffered` hands over
+    /// everything the client already has and `toss` consumes it.
+    ///
+    /// `readVec` is NOT usable here, and the reason is worth stating because it
+    /// reads like it should be: the client decrypts ONE record per call into its
+    /// OWN buffer and returns 0, so a caller treating 0 as end-of-stream — which
+    /// http.zig's body loop does, correctly — sees an empty response body while
+    /// the data sits decrypted one layer down.
     pub fn read(self: *Session, buf: []u8) inet.FetchError!usize {
-        return self.state.client.reader.readSliceShort(buf) catch |e| self.fail("read", e);
+        return tlsstream.readAvailable(&self.state.client.reader, buf) catch |e|
+            self.fail("read", e);
     }
 };
 

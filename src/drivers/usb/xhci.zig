@@ -2695,21 +2695,21 @@ fn processKeyboard(hid: *Hid) void {
         // injected bypassing the ascii!=0 gate. The last_keys press-diff already
         // makes these edge-triggered.
         if (u == 0x3A) {
-            keyboard.inject(.{ .ascii = 0, .key = .f1, .evdev = evdev });
+            _ = keyboard.inject(.{ .ascii = 0, .key = .f1, .evdev = evdev });
         } else if (u == 0x43) {
-            keyboard.inject(.{ .ascii = 0, .key = .f10, .evdev = evdev });
+            _ = keyboard.inject(.{ .ascii = 0, .key = .f10, .evdev = evdev });
         } else if (u == 0x45) {
-            keyboard.inject(.{ .ascii = 0, .key = .f12, .evdev = evdev });
+            _ = keyboard.inject(.{ .ascii = 0, .key = .f12, .evdev = evdev });
         } else {
             const ascii = keyboard.hidToAscii(u, kp.shift);
             // A key that types no character still went down: it carries no ascii
             // and no name, and reaches only the consumers that read key codes.
-            keyboard.inject(.{ .ascii = ascii, .key = .none, .evdev = evdev });
+            _ = keyboard.inject(.{ .ascii = ascii, .key = .none, .evdev = evdev });
         }
     }
     // Releases type nothing by definition, so they carry no ascii at all.
     for (kp.released[0..kp.released_count]) |u| {
-        keyboard.inject(.{ .ascii = 0, .key = .none, .evdev = keyboard.hidToEvdev(u), .down = false });
+        _ = keyboard.inject(.{ .ascii = 0, .key = .none, .evdev = keyboard.hidToEvdev(u), .down = false });
     }
     // Modifiers live in the report's bitmap, never in its key array: each bit
     // that changed is one key edge of its own.
@@ -2719,7 +2719,7 @@ fn processKeyboard(hid: *Hid) void {
         const mask = @as(u8, 1) << bit;
         if (changed & mask != 0) {
             const usage: u8 = keyboard.MOD_USAGE_FIRST + @as(u8, bit);
-            keyboard.inject(.{
+            _ = keyboard.inject(.{
                 .ascii = 0,
                 .key = .none,
                 .evdev = keyboard.hidToEvdev(usage),

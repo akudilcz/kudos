@@ -10,7 +10,7 @@ test "buildChatRequest emits model, stream flag + usage option, messages, and op
     defer arena_i.deinit();
     const a = arena_i.allocator();
     const msgs = [_]openrouter.Msg{
-        .{ .role = "system", .content = "you are openclaw" },
+        .{ .role = "system", .content = "you are the kudos agent" },
         .{ .role = "user", .content = "hi \"there\"" },
     };
     const body = try openrouter.buildChatRequest(a, "x/y", &msgs, true, "[{\"type\":\"function\"}]");

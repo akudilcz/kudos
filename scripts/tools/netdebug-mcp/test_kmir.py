@@ -29,18 +29,35 @@ class FakeGuest:
             "screenshot.png": [os.urandom(200_000), 7],
             "hello.txt": [b"hello, kudos!", 3],
         }
-        self.seen_rids = []  # last 8, as in fileproto.Dedup
+        self.seen_rids = []  # last 8 (rid, result) pairs, as in fileproto.Dedup
         self.keys = []
         self.mouse = []
         self.shots = 0
         self.shot_lands_at = None
+        # A bounded input ring, as the real machine has. `room` is how many more
+        # keystrokes it will take before it starts refusing; the real one drains
+        # continuously, so a test sets this to model a machine under pressure.
+        self.room = 1 << 30
+        self.title = "terminal"
+        self.focus_asks = 0
 
     def _dedup(self, rid):
-        if rid in self.seen_rids:
-            return True
-        self.seen_rids.append(rid)
+        """The recorded result for `rid` if already dispatched, else None."""
+        for r, result in self.seen_rids:
+            if r == rid:
+                return result
+        return None
+
+    def _record(self, rid, result=0):
+        self.seen_rids.append((rid, result))
         del self.seen_rids[:-8]
-        return False
+
+    def _take_key(self, ch):
+        if self.room <= 0:
+            return False
+        self.room -= 1
+        self.keys.append(ch)
+        return True
 
     def _tick(self):
         # An armed SHOT lands as a NEW screenshot.png after its delay.
@@ -79,15 +96,35 @@ class FakeGuest:
             gen = self.files[name][1] + 1 if name in self.files else 1
             self.files[name] = [data, gen]
             return kmir.HDR.pack(kmir.MAGIC, kmir.OP_WRITE_R, 0, rid) + struct.pack("<I", gen)
-        if op in (kmir.OP_KEY, kmir.OP_MOUSE, kmir.OP_SHOT):
-            if not self._dedup(rid):
+        if op == kmir.OP_FOCUS:
+            # Not deduped: focusing a named window is idempotent, and a caller
+            # polling for confirmation must be told where focus is NOW.
+            self.focus_asks += 1
+            if body:
+                self.title = body.decode()
+            return kmir.HDR.pack(kmir.MAGIC, kmir.OP_FOCUS_R, 0, rid) + self.title.encode()
+        if op in (kmir.OP_KEY, kmir.OP_TEXT, kmir.OP_MOUSE, kmir.OP_SHOT):
+            result = self._dedup(rid)
+            if result is None:
+                result = 0
                 if op == kmir.OP_KEY:
-                    self.keys.append(body[0])
+                    # A refused key is NOT recorded and NOT acked, so the retry
+                    # of the identical datagram is a fresh attempt.
+                    if not self._take_key(body[0]):
+                        return kmir.HDR.pack(kmir.MAGIC, kmir.OP_ERR, 0, rid) + bytes([kmir.ERR_BUSY])
+                elif op == kmir.OP_TEXT:
+                    for i, ch in enumerate(body):
+                        if not self._take_key(ch):
+                            break
+                        result = i + 1
                 elif op == kmir.OP_MOUSE:
                     self.mouse.append(struct.unpack("<hhB", body[:5]))
                 else:
                     self.shots += 1
                     self.shot_lands_at = time.time() + 0.7
+                self._record(rid, result)
+            if op == kmir.OP_TEXT:
+                return kmir.HDR.pack(kmir.MAGIC, kmir.OP_TEXT_R, 0, rid) + struct.pack("<H", result)
             return kmir.HDR.pack(kmir.MAGIC, op | 0x80, 0, rid)
         return None
 
@@ -147,6 +184,41 @@ def main():
         assert g2 > g1, (g1, g2)
         assert guest.files["marker.txt"][0] == b"round 2"
 
+        # ── TEXT: a whole command line, byte-exact, through a machine that
+        # keeps running out of room (DIAG-019/DIAG-020) ─────────────────────
+        #
+        # This is the case one-key-per-datagram got wrong. A dropped byte does
+        # not truncate a command, it CHANGES it — "rm -rf /tmp/x" losing its 'x'
+        # is a different command that still runs — so the count in the reply
+        # exists to make a short delivery impossible to mistake for a complete
+        # one, and the client resends from exactly where kudos stopped.
+        guest.keys.clear()
+        guest.room = 5  # far less than the line: forces several resumptions
+        line = "firefox --profile /tmp/p https://en.wikipedia.org/wiki/Main_Page\n"
+
+        def refill():
+            # A real desktop drains its ring continuously; this stands in for it.
+            while not stop.is_set():
+                guest.room = max(guest.room, 5)
+                time.sleep(0.005)
+
+        refiller = threading.Thread(target=refill, daemon=True)
+        refiller.start()
+        typed = c.inject_text(line)
+        assert typed == len(line), (typed, len(line))
+        assert bytes(guest.keys) == line.encode(), bytes(guest.keys)
+
+        # A single key against a FULL machine is refused, not acked — and the
+        # client waits it out rather than reporting a keystroke that never landed.
+        guest.room = 0
+        c.inject_key(ord("Z"))
+        assert guest.keys[-1] == ord("Z"), bytes(guest.keys[-4:])
+
+        # ── FOCUS: name the window instead of clicking it (DIAG-021/022) ────
+        assert c.focused_window() == "terminal", c.focused_window()
+        assert c.focus_window("linux") == "linux", c.focus_window("linux")
+        assert c.focused_window() == "linux"
+
         # ── SHOT flow: trigger → generation bump → byte-exact download ──────
         old_gen = guest.files["screenshot.png"][1]
         path = c.screenshot(d)
@@ -158,7 +230,7 @@ def main():
     stop.set()
     t.join(timeout=2)
     print("netdebug lossy-loopback test PASSED (20% drop, 10% dup, 10% reorder; "
-          "exactly-once inject + WRITE + SHOT flow)")
+          "exactly-once inject + flow-controlled TEXT + FOCUS + WRITE + SHOT flow)")
 
 
 if __name__ == "__main__":

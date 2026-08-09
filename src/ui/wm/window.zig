@@ -51,6 +51,18 @@ pub const Window = struct {
     // Minimised: hidden from rendering and hit-testing until restored from the
     // dock (spec R26). Geometry and app state are untouched while hidden.
     minimized: bool = false,
+    /// This window's content is a function of the CLOCK, not of anything that
+    /// marks damage — a spinning model redraws at whatever angle the time says
+    /// when the pixel is shaded (spec DSK-021).
+    ///
+    /// Such a window cannot take a partial repaint. Damage is a bounding box and
+    /// the rasteriser scissors to it, so an unrelated rect that merely overlaps
+    /// this window repaints a STRIP of it at the current angle while the rest
+    /// still holds a strip from an older one — the frame tears into bands that
+    /// heal and re-tear as it turns. The window manager expands damage to cover
+    /// the whole of any animating window it touches; the flag is what tells it
+    /// which windows those are.
+    animates: bool = false,
 
     /// Width of the app content area (outer width minus the two side borders).
     pub fn contentW(self: *const Window) usize {

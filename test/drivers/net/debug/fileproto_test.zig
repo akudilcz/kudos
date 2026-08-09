@@ -100,15 +100,28 @@ test "injection request encoders have the documented layout" {
 
 test "Dedup remembers the last CAP ids and evicts the oldest" {
     var d = Dedup{};
-    try std.testing.expect(!d.seen(0)); // id 0 is a valid, initially-unseen id
+    try std.testing.expect(d.seen(0) == null); // id 0 is a valid, initially-unseen id
     for (0..Dedup.CAP) |i| {
         const rid: u16 = @intCast(i);
-        try std.testing.expect(!d.seen(rid));
-        d.record(rid);
-        try std.testing.expect(d.seen(rid));
+        try std.testing.expect(d.seen(rid) == null);
+        d.record(rid, 0);
+        try std.testing.expect(d.seen(rid) != null);
     }
-    d.record(1000); // evicts id 0 (the oldest)
-    try std.testing.expect(d.seen(1000));
-    try std.testing.expect(!d.seen(0));
-    try std.testing.expect(d.seen(1));
+    d.record(1000, 0); // evicts id 0 (the oldest)
+    try std.testing.expect(d.seen(1000) != null);
+    try std.testing.expect(d.seen(0) == null);
+    try std.testing.expect(d.seen(1) != null);
+}
+
+test "Dedup replays the recorded answer, not merely the fact of the id (DIAG-020)" {
+    var d = Dedup{};
+    d.record(7, 96);
+    d.record(8, 0);
+
+    // A retransmitted TEXT must be answered with the count its FIRST dispatch
+    // produced. Remembering only that the id was seen would answer 0, and the
+    // caller would resend a line the machine had already taken.
+    try std.testing.expectEqual(@as(?u16, 96), d.seen(7));
+    try std.testing.expectEqual(@as(?u16, 0), d.seen(8));
+    try std.testing.expectEqual(@as(?u16, null), d.seen(9));
 }

@@ -124,6 +124,23 @@ test "markFbDirty -> takeFbDirty true once, then false" {
     resetAll();
 }
 
+test "fbDirty reports a waiting flush without consuming it (VIRT-035)" {
+    // The two readers run in one frame, in this order: the damage pass asks
+    // fbDirty to decide whether to render, then the render's upload asks
+    // takeFbDirty. A consuming peek would answer the first question and destroy
+    // the answer to the second — the window would repaint from the texture it
+    // already had, so the guest's new frame would be skipped and shown only on
+    // the NEXT flush, one frame late, forever.
+    resetAll();
+    try expect(!ivirt.fbDirty(A));
+    ivirt.markFbDirty(A);
+    try expect(ivirt.fbDirty(A));
+    try expect(ivirt.fbDirty(A)); // still there: peeking is not taking
+    try expect(ivirt.takeFbDirty(A)); // the render pass still gets its flush
+    try expect(!ivirt.fbDirty(A)); // and the take cleared it for both readers
+    resetAll();
+}
+
 test "fetch progress: set by hypervisor, read by app, cleared by reset" {
     resetAll();
     // Unset: nothing known, kernel half by default.

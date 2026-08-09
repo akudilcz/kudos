@@ -1,5 +1,5 @@
 //! Host driver that runs the REAL agent loop end-to-end on the development
-//! machine: openclaw's `loop.run` wired to a real HTTP chat transport (pointed
+//! machine: the agent's `loop.run` wired to a real HTTP chat transport (pointed
 //! at a stub OpenRouter) and a real tool registry — compile via the real
 //! factory over HTTP, run/load/invoke via the real kernel loader and hot-load
 //! core, sources read back from the factory workspace. It differs from the

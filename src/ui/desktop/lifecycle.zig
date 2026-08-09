@@ -221,7 +221,7 @@ pub fn spawnVmWindow(d: *Desktop, id: ivirt.Id) !void {
 /// Open the dedicated AI agent window (spec AGT-002; F10). Structurally a
 /// terminal — same core binding, SMP session, render and close-defer path —
 /// but created in ai_mode, so every committed line is a turn for the on-demand
-/// openclaw agent (AGT-001) rather than a shell command.
+/// agent (AGT-001) rather than a shell command.
 pub fn spawnAgent(d: *Desktop) !void {
     const n = d.spawn_count;
     d.spawn_count += 1;
@@ -280,6 +280,10 @@ pub fn spawnModel(d: *Desktop, name: []const u8, maximized: bool) !void {
     const title = try std.fmt.allocPrint(d.a, "{s}", .{base});
     const win = try addWindowLocked(d, x, y, MODEL_W, MODEL_H, title);
     errdefer destroyWindow(d, win);
+    // The model's pose is read from the clock at draw time, so a repaint of
+    // PART of this window mixes two instants (DSK-021). Damage covering any of
+    // it must cover all of it.
+    win.animates = true;
     const mv = try ModelView.create(d.a, win, name);
     errdefer {
         mv.deinit();

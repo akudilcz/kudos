@@ -35,3 +35,7 @@ __pycache__/
 *.glb.report.json
 # Added by code-review-graph
 .code-review-graph/
+
+# The sealed agent credential (AGT-017). Ciphertext, but a secret is a secret:
+# it is produced locally by scripts/agent/sealkey.sh and never committed.
+secrets/

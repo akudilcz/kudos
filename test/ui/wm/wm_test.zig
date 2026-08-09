@@ -201,3 +201,150 @@ test "a grip drag records a clamped resize request; separate drags coalesce dama
     _ = a2;
     try expect(w.takeSceneDamage() != null);
 }
+
+// DIAG-021/022: naming a window instead of clicking one. A remote injector's
+// keystrokes go wherever focus happens to be, and the only alternative — click
+// the title bar — needs coordinates that change whenever a window moves.
+
+test "focusByTitle takes the FRONT-MOST match, and reports it (DIAG-021)" {
+    var w = testWm(std.testing.allocator);
+    defer freeAll(&w);
+    const old = try w.addWindow(10, 10, 200, 150, "terminal 1");
+    const newer = try w.addWindow(50, 50, 200, 150, "terminal 2");
+    _ = try w.addWindow(90, 90, 200, 150, "linux #0");
+
+    // Substring, and front-most-first: with two terminals open the caller means
+    // the one they last used, not the oldest still on screen.
+    try expect(w.focusByTitle("terminal") == newer);
+    try expect(w.focused == newer);
+    try expect(old != newer);
+    try std.testing.expectEqualStrings("terminal 2", w.focusedTitle());
+}
+
+test "focusByTitle leaves focus alone when nothing matches (DIAG-021)" {
+    var w = testWm(std.testing.allocator);
+    defer freeAll(&w);
+    _ = try w.addWindow(10, 10, 200, 150, "terminal");
+    const front = try w.addWindow(50, 50, 200, 150, "linux #0");
+
+    // A miss must not move focus. Guessing — falling back to the topmost, say —
+    // would type the caller's command into whatever window happened to be there,
+    // which is worse than typing it nowhere.
+    try expect(w.focusByTitle("firefox") == null);
+    try expect(w.focused == front);
+    // An empty needle is the query form and never matches, or every call would
+    // match the first window it looked at.
+    try expect(w.focusByTitle("") == null);
+    try expect(w.focused == front);
+}
+
+test "focusByTitle skips minimised windows (DIAG-021)" {
+    var w = testWm(std.testing.allocator);
+    defer freeAll(&w);
+    const visible = try w.addWindow(10, 10, 200, 150, "linux #0");
+    const hidden = try w.addWindow(50, 50, 200, 150, "linux #1");
+    // A third window on top, so minimising the second does NOT hand focus down
+    // and raise the survivor — which would put the visible match above the
+    // hidden one and let a scan that ignores `minimized` pass anyway. The
+    // hidden window has to be found FIRST for the skip to mean anything.
+    _ = try w.addWindow(90, 90, 200, 150, "clock");
+    w.minimise(hidden);
+
+    // Focusing a hidden window would route every following keystroke somewhere
+    // the caller cannot see it land — a worse outcome than no match at all.
+    try expect(w.focusByTitle("linux") == visible);
+    try expect(w.focused == visible);
+}
+
+// DSK-021: a window whose pixels come from the clock cannot take a partial
+// repaint. Damage is a bounding box and the rasteriser scissors to it, so an
+// unrelated rect that merely overlaps such a window would repaint a STRIP of it
+// at the current instant while the rest still shows an older one — the frame
+// tears into bands that heal and re-tear as the model turns.
+
+test "damage touching an animating window expands to cover it whole (DSK-021)" {
+    var w = testWm(std.testing.allocator);
+    defer freeAll(&w);
+    const spinner = try w.addWindow(200, 200, 300, 200, "duck.glb");
+    spinner.animates = true;
+    _ = w.takeSceneDamage(); // clear the first-frame full repaint
+
+    // A cursor-sized rect in the middle of the spinner — the shape of a pointer
+    // move, which is the cheapest and most frequent damage there is.
+    w.markRect(300, 280, 12, 20);
+    const d = w.takeSceneDamage().?;
+    try expect(!d.full);
+    try expectEqual(@as(i32, 200), d.x);
+    try expectEqual(@as(i32, 200), d.y);
+    try expectEqual(@as(u32, 300), d.w);
+    try expectEqual(@as(u32, 200), d.h);
+}
+
+test "an animating window it does not touch leaves damage alone (DSK-021)" {
+    var w = testWm(std.testing.allocator);
+    defer freeAll(&w);
+    // Deliberately overlapping in Y and disjoint in X, so the HORIZONTAL test is
+    // the only thing excluding this window. Placed diagonally away instead, the
+    // vertical test alone excludes it and a broken horizontal test still passes
+    // — which is exactly how the first version of this test could not fail.
+    const spinner = try w.addWindow(400, 0, 200, 100, "duck.glb");
+    spinner.animates = true;
+    _ = w.takeSceneDamage();
+
+    // Expanding unconditionally would cost a full-window software repaint on
+    // every keystroke anywhere on screen — the throttle exists precisely
+    // because that repaint is expensive.
+    w.markRect(10, 10, 20, 20);
+    const d = w.takeSceneDamage().?;
+    try expectEqual(@as(i32, 10), d.x);
+    try expectEqual(@as(i32, 10), d.y);
+    try expectEqual(@as(u32, 20), d.w);
+    try expectEqual(@as(u32, 20), d.h);
+}
+
+test "an animating window disjoint in Y also leaves damage alone (DSK-021)" {
+    var w = testWm(std.testing.allocator);
+    defer freeAll(&w);
+    // The mirror of the case above: overlapping in X, disjoint in Y, so the
+    // VERTICAL test is the only thing excluding it. Both axes need their own
+    // case or one of the two guards can be deleted with every test still green.
+    const spinner = try w.addWindow(0, 400, 200, 100, "duck.glb");
+    spinner.animates = true;
+    _ = w.takeSceneDamage();
+
+    w.markRect(10, 10, 20, 20);
+    const d = w.takeSceneDamage().?;
+    try expectEqual(@as(u32, 20), d.w);
+    try expectEqual(@as(u32, 20), d.h);
+}
+
+test "a minimised animating window never expands damage (DSK-021)" {
+    var w = testWm(std.testing.allocator);
+    defer freeAll(&w);
+    const spinner = try w.addWindow(200, 200, 300, 200, "duck.glb");
+    spinner.animates = true;
+    _ = try w.addWindow(0, 0, 50, 50, "clock");
+    w.minimise(spinner);
+    _ = w.takeSceneDamage();
+
+    // A hidden window draws nothing, so it cannot tear — and expanding to its
+    // geometry would enlarge every repaint for a window that is not on screen.
+    w.markRect(300, 280, 12, 20);
+    const d = w.takeSceneDamage().?;
+    try expectEqual(@as(u32, 12), d.w);
+    try expectEqual(@as(u32, 20), d.h);
+}
+
+test "a non-animating window never expands damage (DSK-021)" {
+    var w = testWm(std.testing.allocator);
+    defer freeAll(&w);
+    _ = try w.addWindow(200, 200, 300, 200, "terminal");
+    _ = w.takeSceneDamage();
+
+    // The ordinary case: a terminal repaints only what changed, and must keep
+    // doing so — this is the whole point of scissored damage.
+    w.markRect(300, 280, 12, 20);
+    const d = w.takeSceneDamage().?;
+    try expectEqual(@as(u32, 12), d.w);
+    try expectEqual(@as(u32, 20), d.h);
+}

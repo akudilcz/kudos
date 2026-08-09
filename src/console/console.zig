@@ -61,10 +61,15 @@ pub const Console = struct {
     /// The desktop's allocator: pixels handed over via `setBackground` and
     /// buffers a backgrounded fetch retains are owned by it.
     a: std.mem.Allocator,
-    /// Whether this console is the dedicated AI agent window (spec AGT-002),
-    /// where every committed line is a turn for the agent. A plain value —
-    /// fixed for the window's life.
+    /// Whether this console is CURRENTLY in an agent session (AGT-018), where
+    /// every committed line is a turn for the agent rather than a shell command.
+    /// A snapshot: `setAiMode` moves the hosting terminal in and out of it, so a
+    /// console value taken before the change does not describe the one after.
     ai_mode: bool,
+    /// Enter or leave the agent session on the hosting terminal (AGT-018) — what
+    /// makes `ai` turn THIS terminal into the chat rather than opening another
+    /// window beside it, and `/quit` hand it back to the shell.
+    setAiModeFn: *const fn (ctx: *anyopaque, on: bool) void,
 
     /// Write one character to the grid.
     pub fn put(self: Console, ch: u8) void {
@@ -101,6 +106,10 @@ pub const Console = struct {
     /// Hand the desktop a decoded background image (see Desktop.setBackgroundFn).
     pub fn setBackground(self: Console, img: png.Image) bool {
         return self.desktop.setBackgroundFn(self.desktop.ctx, img);
+    }
+    /// Enter or leave the agent session on this terminal (AGT-018).
+    pub fn setAiMode(self: Console, on: bool) void {
+        self.setAiModeFn(self.ctx, on);
     }
     /// Close this console's own window (`exit`, the agent's `/quit`).
     pub fn close(self: Console) void {

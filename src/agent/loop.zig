@@ -1,4 +1,4 @@
-//! The openclaw agent loop: the tool-calling cycle that turns a user request
+//! The agent loop: the tool-calling cycle that turns a user request
 //! into actions. It is written over injected capabilities — a chat transport, a
 //! tool executor, and an output sink — so the same logic runs in the kernel
 //! (real HTTPS, the tool registry, the terminal) and in a host test (scripted
@@ -93,9 +93,9 @@ fn reportExhausted(sink: Sink, bud: *const budget.Budget, now_ms: u64, what: bud
     var stmt_buf: [128]u8 = undefined;
     const text = std.fmt.bufPrint(
         &msg_buf,
-        "\n[openclaw: budget exhausted ({s}) — {s}]\n",
+        "\n[agent: budget exhausted ({s}) — {s}]\n",
         .{ what.label(), bud.statement(now_ms, &stmt_buf) },
-    ) catch "\n[openclaw: budget exhausted]\n";
+    ) catch "\n[agent: budget exhausted]\n";
     sink.write(sink.ctx, text);
 }
 

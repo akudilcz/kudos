@@ -291,3 +291,59 @@ test "arrow keys encode as their VT100 cursor sequences" {
     try expectEqual(@as(?[]const u8, null), vmconsole.keySequence('a')); // characters go as themselves
     try expectEqual(@as(?[]const u8, null), vmconsole.keySequence('\t')); // Tab is already its own byte
 }
+
+// VIRT-036: keystrokes reach the guest in the order they were typed. The
+// mailbox ring is sized for a human; a machine delivers a whole command line at
+// once, and a byte lost in the middle of one arrives as a MISTYPED command
+// rather than a missing one — the failure that is hardest to attribute.
+
+test "the serial queue hands bytes to the guest in order (VIRT-036)" {
+    var q = vmconsole.SerialQueue{};
+    for ("firefox\n") |b| try expect(q.offer(b));
+
+    var got: [8]u8 = undefined;
+    var n: usize = 0;
+    while (q.next()) |b| {
+        got[n] = b;
+        n += 1;
+        q.advance();
+    }
+    try expectEqualSlices(u8, "firefox\n", got[0..n]);
+    try expect(q.isEmpty());
+}
+
+test "a byte the guest refuses stays at the head and blocks the rest (VIRT-036)" {
+    var q = vmconsole.SerialQueue{};
+    for ("abc") |b| try expect(q.offer(b));
+
+    // next() must NOT consume: the guest's ring can still refuse the byte, and
+    // one taken out of the queue and then refused is simply gone. Peeking twice
+    // has to give the same byte.
+    try expectEqual(@as(?u8, 'a'), q.next());
+    try expectEqual(@as(?u8, 'a'), q.next());
+    q.advance();
+    // And the queue is FIFO under a stall: a later byte must never overtake the
+    // one still waiting, or the guest reads a scrambled line.
+    try expectEqual(@as(?u8, 'b'), q.next());
+    try expect(q.offer('d'));
+    try expectEqual(@as(?u8, 'b'), q.next());
+}
+
+test "a full serial queue refuses rather than overwriting (VIRT-036)" {
+    var q = vmconsole.SerialQueue{};
+    var sent: usize = 0;
+    // BOUNDED, and the bound is part of the assertion. A queue that never
+    // refuses is exactly the bug this test exists to catch, and an unbounded
+    // `while (q.offer(...))` would not fail against it — it would spin forever,
+    // which reads as a wedged machine rather than as a failing test.
+    while (sent <= vmconsole.SerialQueue.CAP and q.offer('x')) sent += 1;
+    try expectEqual(vmconsole.SerialQueue.CAP, sent);
+
+    // Dropping the NEWEST byte truncates the command; dropping the oldest to
+    // make room would splice two commands together and run the result. The
+    // refusal is what lets the caller count the loss instead of discovering it
+    // in the guest's shell history.
+    try expect(sent > 0);
+    try expect(!q.offer('y'));
+    try expectEqual(@as(?u8, 'x'), q.next());
+}

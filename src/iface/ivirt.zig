@@ -266,6 +266,15 @@ pub fn conInput(id: Id, b: u8) bool {
     return false;
 }
 
+/// APP: count one keystroke that never reached the guest because the window's
+/// own queue was full too (VIRT-036). The mailbox owns the "keystrokes this
+/// guest never got" tally, and a loss one hop upstream of the ring is still
+/// that loss — counting it anywhere else would split the count in two.
+pub fn countInputDrop(id: Id) void {
+    const s = &slots[id];
+    @atomicStore(u64, &s.dropped_rx, s.dropped_rx + 1, .monotonic);
+}
+
 /// APP: queue one input event for the guest's keyboard or pointer. Returns
 /// false and counts the drop when the guest is not draining them.
 pub fn inputPost(id: Id, ev: InputEvent) bool {
@@ -421,6 +430,20 @@ pub fn fb(id: Id) ?Fb {
 /// HYPERVISOR (at RESOURCE_FLUSH): the guest finished drawing a frame.
 pub fn markFbDirty(id: Id) void {
     @atomicStore(bool, &slots[id].fb_dirty, true, .release);
+}
+
+/// APP (damage pass): whether VM `id` has an unconsumed flush waiting, WITHOUT
+/// consuming it.
+///
+/// The desktop asks two separate questions a frame, in this order: "did anything
+/// change?" — which decides whether to render at all — and then, inside the
+/// render, "is there a new scanout to upload?". Only the second may consume the
+/// flag. A graphical guest emits no serial output at all, so this peek is the
+/// ONLY evidence that its window changed; without it the window holds whatever
+/// it last drew until some unrelated damage forces a frame, and the guest's
+/// painting appears on screen only when a neighbouring window is dragged.
+pub fn fbDirty(id: Id) bool {
+    return @atomicLoad(bool, &slots[id].fb_dirty, .acquire);
 }
 
 /// APP (once per frame): whether VM `id`'s scanout changed since the last take.

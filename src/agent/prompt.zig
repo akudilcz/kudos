@@ -1,4 +1,4 @@
-//! The openclaw system prompt. The capability list handed to the model is
+//! The agent's system prompt. The capability list handed to the model is
 //! GENERATED from `abi.Api` at comptime, so the documentation the model writes
 //! against can never drift from the real ABI — a host test asserts every field
 //! appears. When the ABI grows a capability, the prompt grows with it for free.
@@ -35,7 +35,7 @@ fn std_eql(a: []const u8, b: []const u8) bool {
 
 /// The full system prompt. A comptime constant — no allocation.
 pub const SYSTEM: []const u8 =
-    \\You are openclaw, the on-demand agent inside kudos, a real-time OS.
+    \\You are the kudos agent, the on-demand agent inside kudos, a real-time OS.
     \\You help the user by writing small programs and running them.
     \\
     \\When asked to build something, write ONE self-contained Zig source file for
@@ -72,7 +72,7 @@ pub const SYSTEM: []const u8 =
 /// extends the running kernel — it registers shell commands — so improvements
 /// the user can then invoke are features.
 pub const IMPROVE_SYSTEM: []const u8 =
-    \\You are openclaw, the on-demand agent inside kudos, a real-time OS. In this
+    \\You are the kudos agent, the on-demand agent inside kudos, a real-time OS. In this
     \\session you improve kudos itself by adding a new FEATURE it can run right
     \\now, without a reboot.
     \\

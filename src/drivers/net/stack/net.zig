@@ -12,6 +12,7 @@
 
 const std = @import("std");
 const wire = @import("wire.zig");
+const netown = @import("netown.zig");
 const nic = @import("../nic/nic.zig");
 const timer = @import("../../../kernel/timer/timer.zig");
 const cfg = @import("config.zig");
@@ -60,6 +61,67 @@ const MAX_DRAIN_PER_PUMP: usize = 32;
 var txpkt: [FRAME_BUF]u8 = undefined; // data path (IP/TCP/UDP we originate)
 var ctrlpkt: [FRAME_BUF]u8 = undefined; // control path (ARP/ICMP), so a mid-send ARP
 // resolution cannot clobber a half-built data packet in txpkt.
+
+// ── Who may drive the stack (spec NET-018) ───────────────────────────────────
+//
+// EVERY global in this file and in tcp.zig — txpkt, the ARP cache, the one TCP
+// connection, and the NIC's single RX staging buffer — is written without a
+// lock, because the stack was built for one driver and its comments still say
+// so. That stopped being true when the system task and the command worker both
+// became floating tasks: `net.pump()` runs from the session loop AND from
+// `tcp.pumpUntil` inside a fetch, so two cores could poll the NIC at once. The
+// second overwrote the frame the first was still parsing, `recv_buf` took a
+// splice of two segments, and kudos ACKed bytes it had never correctly stored.
+// The peer therefore never retransmitted, and the corruption surfaced far away
+// — as a TLS record that would not authenticate, or as a fault that retired the
+// system task's core and took the desktop with it.
+//
+// The rule is now explicit: a task CLAIMS the stack for the length of an
+// operation, and everyone else leaves it alone until it is released. Claiming
+// is a try, never a wait — the claimant is the only one who pumps while it
+// holds the stack, so a blocked caller could not be woken by anyone else
+// anyway, and a spinning render loop is the thing this exists to prevent.
+var stack_holder: ?*anyopaque = null;
+
+/// How deep we are inside `pump()`. Non-zero above 1 means a send re-entered the
+/// receive path to resolve an address; the tail-of-pump sends run at depth 1
+/// only, so an inner pump can never transmit over a frame an outer one staged.
+var pump_depth: usize = 0;
+
+/// This caller's identity. Null before the scheduler exists (the boot stack is
+/// then the single thread of control and owns the stack by default), which the
+/// claim/skip rules below treat as "nobody else can be running".
+///
+/// The `schedulerLive` guard is NOT optional, and omitting it cost a boot:
+/// `currentTask` masks interrupts and reads per-CPU state, and this is reached
+/// from the trace path — which runs from the very first klog line, long before
+/// per-CPU state exists. The machine came up mute, with no trace to say why.
+/// `sched.setActivity` guards the same call for the same reason.
+fn me() ?*anyopaque {
+    if (!sched.schedulerLive()) return null;
+    return @ptrCast(sched.currentTask());
+}
+
+/// Take the stack for this task, or report that someone else has it. The holder
+/// must `releaseStack` on every path out, including error paths. The policy is
+/// netown's; this adds only the atomic exchange.
+pub fn claimStack() bool {
+    const task = me();
+    if (!netown.mayClaim(@atomicLoad(?*anyopaque, &stack_holder, .acquire), task)) return false;
+    const t = task orelse return true; // no scheduler: one thread of control
+    return @cmpxchgStrong(?*anyopaque, &stack_holder, null, t, .acq_rel, .acquire) == null;
+}
+
+pub fn releaseStack() void {
+    @atomicStore(?*anyopaque, &stack_holder, null, .release);
+}
+
+/// True when ANOTHER task is driving the stack, so this one must not touch it.
+/// The steady loops test this and skip — they render instead of racing, which
+/// is why a request no longer stops the desktop.
+pub fn stackHeldByOther() bool {
+    return netown.mustSkip(@atomicLoad(?*anyopaque, &stack_holder, .acquire), me());
+}
 /// Emit `s` to klog only when `.net` logging is enabled.
 pub fn dbg(s: []const u8) void {
     if (gate.on(.net)) klog.puts(s);
@@ -391,6 +453,12 @@ fn nextHop(dst: [4]u8) ?[4]u8 {
 /// Build the IPv4 header and send the transport payload already placed at
 /// txPayload(). Returns false if the next hop can't be resolved.
 pub fn sendIp(dst: [4]u8, proto: u8, payload_len: usize) bool {
+    // The payload is already staged in the SHARED txpkt. A task that does not
+    // hold the stack must not send it — netdebug's trace and the KMR1 reply both
+    // reach here from the render loop, and either one landing between another
+    // task's stage and its send puts a frame on the wire whose header and body
+    // come from different packets. The caller counts the refusal and retries.
+    if (stackHeldByOther()) return false;
     const hop = nextHop(dst) orelse return false;
     const mac = resolveMac(hop) orelse return false;
 
@@ -408,6 +476,10 @@ pub fn sendIp(dst: [4]u8, proto: u8, payload_len: usize) bool {
 /// falls back to broadcast rather than losing the line.
 pub fn sendUdpTo(dst: [4]u8, src_port: u16, dst_port: u16, payload: []const u8) bool {
     if (!present) return false;
+    // Checked BEFORE staging, not just in sendIp: buildUdp writes into the shared
+    // txpkt, so a refusal after the write has already corrupted whatever the
+    // stack's holder had staged there.
+    if (stackHeldByOther()) return false;
     const len = wire.buildUdp(txpkt[ETH_IP_HLEN..], src_port, dst_port, payload);
     return sendIp(dst, PROTO_UDP, len);
 }
@@ -417,6 +489,7 @@ pub fn sendUdpTo(dst: [4]u8, src_port: u16, dst_port: u16, payload: []const u8) 
 /// address. Used by DHCP (RFC 2131) and by the trace before a collector is known.
 /// Returns true once posted.
 pub fn sendBroadcastUdp(src_port: u16, dst_port: u16, payload: []const u8) bool {
+    if (stackHeldByOther()) return false; // shared txpkt — see sendUdpTo
     // UDP header + payload into the transport region (the shared wire.buildUdp).
     const len = wire.buildUdp(txpkt[ETH_IP_HLEN..], src_port, dst_port, payload);
 
@@ -653,6 +726,18 @@ fn hostPort(frame: []const u8) HostPort {
 
 /// Read one frame from the NIC (if any) and dispatch it.
 pub fn pump() void {
+    // Another task is mid-request and owns every global this touches — the NIC's
+    // staging buffer, the ARP cache, the TCP connection. Skipping is not a lost
+    // pump: the holder pumps for both of us, and it is the only one that safely
+    // can. Racing it here is what retired the system task's core.
+    if (stackHeldByOther()) return;
+    // Depth, because a send can legitimately re-enter this: `resolveMac` spins
+    // the receive path waiting for an ARP reply, and it MUST make progress there
+    // or the address never resolves. What must not happen is the inner pump
+    // sending while an outer one has already staged a frame in the shared
+    // txpkt — so the sends at the tail below run at depth 1 only.
+    pump_depth += 1;
+    defer pump_depth -= 1;
     const drops = nic.txDropped();
     if (drops != tx_dropped_reported) {
         tx_dropped_reported = drops;
@@ -679,6 +764,11 @@ pub fn pump() void {
         }
         dispatchFrame(frame);
     }
+    // The acknowledgement the drain owes the peer, sent HERE — outside the
+    // receive dispatch (spec NET-019). Inside it, the send could resolve ARP,
+    // and resolving spins the receive path for up to a second while the
+    // compositor waits. Cumulative, so one send settles the whole drain.
+    if (pump_depth == 1) tcp.serviceDeferredAck();
     // The guests' outbound frames, same per-pump bound for the same reason.
     // After the RX drain so a request the guest just answered goes out on the
     // tick it was made, and through the same single NIC everything else uses.
@@ -747,6 +837,8 @@ fn vtPing(_: *anyopaque, dst: [4]u8, timeout_ms: u64) ?u64 {
 fn vtFetch(_: *anyopaque, a: std.mem.Allocator, url: []const u8) inet.FetchError![]u8 {
     // One HTTP client (http.zig) serves both schemes; the URL's scheme selects
     // plain TCP vs TLS beneath it.
+    if (!claimStack()) return error.Busy;
+    defer releaseStack();
     return http.request(a, .GET, url, &.{}, "");
 }
 
@@ -832,12 +924,22 @@ fn vtFetchProgress(_: *anyopaque) ?inet.FetchProgress {
 fn vtPost(_: *anyopaque, a: std.mem.Allocator, url: []const u8, headers: []const inet.Header, body: []const u8) inet.FetchError![]u8 {
     // Same single client, POST verb: the caller's headers pass through verbatim
     // (NET-013); https URLs go over TLS transparently.
+    if (!claimStack()) return error.Busy;
+    defer releaseStack();
     return http.request(a, .POST, url, headers, body);
 }
 
 fn vtPostStream(_: *anyopaque, a: std.mem.Allocator, url: []const u8, headers: []const inet.Header, body: []const u8, sink: inet.BodySink) inet.FetchError!void {
     // Same single client, streaming delivery: decoded body bytes reach the
     // sink as they arrive (NET-014 — server-sent events).
+    //
+    // The claim covers the WHOLE request, handshake to last byte, because every
+    // global the request touches — the connection, the receive buffer, the TX
+    // staging — is shared and none of it is locked. Holding it for the duration
+    // is what lets the render loop skip the stack instead of racing it, so the
+    // desktop keeps drawing while the agent waits on the network (NET-018).
+    if (!claimStack()) return error.Busy;
+    defer releaseStack();
     return http.requestStream(a, .POST, url, headers, body, sink);
 }
 

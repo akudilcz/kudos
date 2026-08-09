@@ -16,6 +16,7 @@
 
 const std = @import("std");
 const keymap = @import("keymap");
+const Ring = @import("ring").Ring;
 
 pub const COLS = 80;
 pub const ROWS = 25;
@@ -546,3 +547,47 @@ fn decGraphics(b: u8) u8 {
         else => b,
     };
 }
+
+/// Keystrokes typed at a VM console window that its guest's serial ring has not
+/// taken yet (spec VIRT-036).
+///
+/// The mailbox ring is sized for a human at a keyboard. A machine delivers a
+/// command line in one burst, far faster than a busy guest's tty drains, and a
+/// byte lost there does not look lost — it looks like a command that was
+/// mistyped. This queue holds the overflow on the WINDOW, which can wait,
+/// rather than on the sender, which cannot see the loss.
+///
+/// EVERY byte enters here, including one the guest could take immediately.
+/// That is what makes the order structural rather than a rule someone has to
+/// remember: with no fast path there is nothing for a later byte to overtake,
+/// so a command line arrives delayed or truncated, never scrambled.
+pub const SerialQueue = struct {
+    /// Depth: one long command line's worth. Beyond that the sender is faster
+    /// than the guest by more than a burst, which is a loss worth reporting
+    /// rather than an overflow worth absorbing.
+    pub const CAP = 256;
+
+    q: Ring(u8, CAP) = .{},
+
+    /// Take one byte for the guest. False = the queue is full and this byte is
+    /// lost; the caller counts it (the mailbox owns that counter).
+    pub fn offer(self: *SerialQueue, b: u8) bool {
+        return self.q.push(b);
+    }
+
+    /// The next byte owed to the guest, or null when it is caught up. Does not
+    /// consume — the guest's ring may still refuse it, and a byte taken out of
+    /// this queue and then refused would be gone.
+    pub fn next(self: *SerialQueue) ?u8 {
+        return if (self.q.peek()) |p| p.* else null;
+    }
+
+    /// Confirm the guest took the byte `next` reported.
+    pub fn advance(self: *SerialQueue) void {
+        self.q.drop();
+    }
+
+    pub fn isEmpty(self: *SerialQueue) bool {
+        return self.q.isEmpty();
+    }
+};

@@ -2,7 +2,10 @@
 # scripts/tests/stackframes.sh (which owns the budget and the rule: entries
 # may only shrink, never grow, and a fixed entry must be deleted).
 #
-# Every entry is a live stack-overflow hazard on a 128 KiB task stack and a
+# Every entry is a live stack-overflow hazard — task stacks are sched.STACK_SIZE
+# (512 KiB, raised from 128 KiB when a TLS handshake was found to keep ~105 KiB
+# live across two frames and run off the end) and carry NO guard page, so an
+# overflow corrupts the heap below instead of faulting. Each is a
 # candidate for the same fix that removed the machine.Vm and pngenc frames:
 # no huge locals or by-value giants — initialize in place through the owning
 # pointer, or heap the object where the contract already allows it.
@@ -22,7 +25,10 @@ drivers.net.stack.tlsclient.init 51688
 # with it. Was 54272 under the previous vendored client.
 drivers.net.stack.tlsclient.KeyShare.init 53176
 drivers.gpu.base.pngenc.initCompressInto 99328
-ui.desktop.render.renderGles 52224
+# The desktop's whole-scene GL frame. Listed under `render.renderGles` until the
+# compiler began inlining it into its only caller — the frame did not shrink or
+# move, it was renamed, so this entry replaces that one rather than joining it.
+ui.desktop.desktop.Desktop.render 49512
 ui.desktop.render.GlesComp.init 49152
 crypto.ml_kem.Kyber(...).SecretKey.decaps 45056
 main_root.run 41984

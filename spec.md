@@ -177,6 +177,19 @@ body and caller-supplied headers.
 **NET-015.** The Kudos system shall fail an HTTPS connection loudly when its clock
 cannot establish certificate validity (NET-011), never bypassing verification.
 
+**NET-016.** The Kudos system shall deliver received stream bytes to a reader as
+soon as any are available, never waiting for the reader's buffer to fill.
+
+**NET-017.** The Kudos system shall report the cause of a failed encrypted
+connection (NET-010), distinguishing a cryptographic failure from a transport
+failure.
+
+**NET-018.** The Kudos system shall use its network stack correctly when
+requests originate from more than one task.
+
+**NET-019.** The Kudos system shall continue rendering the desktop (DSK-001) at
+its stated frame rate (PERF-003) while a network request is outstanding.
+
 ## Images
 
 **IMG-001.** The Kudos system shall decode PNG images into its native pixel
@@ -289,6 +302,9 @@ speed.
 
 **DSK-020.** The Kudos system shall open a new terminal (APP-001) via a global
 keyboard shortcut, regardless of window focus.
+
+**DSK-021.** The Kudos system shall redraw a window whose content varies with
+time in whole, never in part, in any frame that redraws any of it.
 
 ## Heads-up display
 
@@ -576,6 +592,12 @@ source is not that guest's link-layer address (VIRT-027).
 **VIRT-034.** The Kudos system shall present each guest the floating-point and
 vector register values it last held, on every resumption of that guest.
 
+**VIRT-035.** The Kudos system shall repaint the VM console window (VIRT-010) on
+every frame the guest draws into its scanout (VIRT-013).
+
+**VIRT-036.** The Kudos system shall deliver keystrokes to the guest serial port
+(VIRT-011) in the order they were typed.
+
 ## Agent
 
 **AGT-001.** The Kudos system shall provide an AI agent, available on demand,
@@ -627,6 +649,25 @@ available to the agent (AGT-001) alongside its own (AGT-006).
 
 **AGT-016.** The Kudos system shall serve its own tools (AGT-013) and consume
 external tools (AGT-014) at the same time.
+
+**AGT-017.** The Kudos system shall hold the agent's service credentials
+(AGT-003) encrypted, decrypting them with a passphrase at the point of use.
+
+**AGT-018.** The Kudos system shall open an interactive agent session (AGT-002)
+when the agent is invoked without a prompt.
+
+**AGT-019.** The Kudos system shall accept session commands within an agent
+session (AGT-018), distinguished from conversation turns by a leading solidus.
+
+**AGT-020.** The Kudos system shall list its agent session commands (AGT-019) on
+request.
+
+**AGT-021.** The Kudos system shall ask for the passphrase (AGT-017) when it is
+requested to decrypt the credentials without one.
+
+**AGT-022.** The Kudos system shall refuse a conversation turn (AGT-001) while
+the service credentials (AGT-017) are still encrypted, stating how to decrypt
+them.
 
 ## Diagnostics
 
@@ -683,6 +724,18 @@ USB mass-storage drive (PER-003) when one is present.
 
 **DIAG-018.** The Kudos system shall accept reboot and shutdown commands remotely
 over netdebug (DIAG-004).
+
+**DIAG-019.** The Kudos system shall refuse, rather than acknowledge, a remotely
+injected keystroke (DIAG-008) it has no room to accept.
+
+**DIAG-020.** The Kudos system shall accept a whole string of keystrokes in one
+netdebug (DIAG-004) request, reporting how many of them it accepted.
+
+**DIAG-021.** The Kudos system shall focus the window named by a substring of its
+title on command over netdebug (DIAG-004).
+
+**DIAG-022.** The Kudos system shall report the focused window's title over
+netdebug (DIAG-004).
 
 ## Testing
 

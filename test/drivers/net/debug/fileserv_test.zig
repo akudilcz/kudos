@@ -17,7 +17,7 @@ fn newSim() sim.RamdiskSim {
 
 /// Recording injection sink: counts + last values per op.
 const SinkSim = struct {
-    keys_buf: [16]u8 = undefined,
+    keys_buf: [256]u8 = undefined,
     keys_len: usize = 0,
     mouse_calls: usize = 0,
     last_dx: i16 = 0,
@@ -41,13 +41,45 @@ const SinkSim = struct {
     mcp_fs: ?*sim.RamdiskSim = null,
     mcp_response: []const u8 = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}",
 
-    fn key(ctx: *anyopaque, ascii: u8, named: u8) void {
+    /// How many more keystrokes this sink will take before refusing, standing in
+    /// for a full input ring. Effectively unlimited unless a test lowers it.
+    room: usize = std.math.maxInt(usize),
+    /// The needle of the last focus request, and the title the sink reports back.
+    focus_buf: [32]u8 = undefined,
+    focus_len: usize = 0,
+    focus_calls: usize = 0,
+    title: []const u8 = "terminal",
+
+    fn key(ctx: *anyopaque, ascii: u8, named: u8) bool {
         const self: *SinkSim = @ptrCast(@alignCast(ctx));
+        if (self.room == 0) return false;
+        self.room -= 1;
         if (self.keys_len < self.keys_buf.len) {
             self.keys_buf[self.keys_len] = ascii;
             self.keys_len += 1;
         }
         self.last_named = named;
+        return true;
+    }
+    fn text(ctx: *anyopaque, s: []const u8) u16 {
+        for (s, 0..) |ch, i| {
+            if (!key(ctx, ch, fileproto.KEY_NONE)) return @intCast(i);
+        }
+        return @intCast(s.len);
+    }
+    fn focus(ctx: *anyopaque, needle: []const u8, out: []u8) []const u8 {
+        const self: *SinkSim = @ptrCast(@alignCast(ctx));
+        self.focus_calls += 1;
+        if (needle.len > 0) {
+            self.focus_len = @min(needle.len, self.focus_buf.len);
+            @memcpy(self.focus_buf[0..self.focus_len], needle[0..self.focus_len]);
+            // The real desktop applies the change on its next input pass; this
+            // sink stands in for one that already has.
+            self.title = "linux #0";
+        }
+        const n = @min(self.title.len, out.len);
+        @memcpy(out[0..n], self.title[0..n]);
+        return out[0..n];
     }
     fn mouse(ctx: *anyopaque, dx: i16, dy: i16, buttons: u8) void {
         const self: *SinkSim = @ptrCast(@alignCast(ctx));
@@ -112,6 +144,8 @@ const SinkSim = struct {
 
     const vtable = fileproto.Inject.VTable{
         .key = key,
+        .text = text,
+        .focus = focus,
         .mouse = mouse,
         .mouseAbs = mouseAbs,
         .shot = shot,
@@ -489,4 +523,140 @@ test "MCP request runs against the registry, writes the response, replies with i
     const n2 = srv.reply(req[0..rn], &out);
     try std.testing.expectEqual(@as(usize, 1), srv.sink.mcp_calls); // not re-run
     try std.testing.expectEqual(fileproto.OP_MCP_R, fileproto.parseHeader(out[0..n2]).?.op);
+}
+
+// DIAG-019/020/021/022: the flow-controlled injection path. The old protocol
+// ACKed every keystroke unconditionally, so a caller counting ACKs believed it
+// had typed a line the machine had only partly heard — and a truncated command
+// is indistinguishable from a mistyped one at the far end.
+
+test "a keystroke the machine has no room for is refused, not ACKed (DIAG-019)" {
+    var srv = Server{ .s = newSim() };
+    srv.sink.room = 0; // a full input ring
+    var req: [16]u8 = undefined;
+    var out: [64]u8 = undefined;
+
+    const rn = fileproto.writeKeyReq(&req, 7, 'x', fileproto.KEY_NONE);
+    const n = srv.reply(req[0..rn], &out);
+    try std.testing.expectEqual(fileproto.OP_ERR, fileproto.parseHeader(out[0..n]).?.op);
+    try std.testing.expectEqual(fileproto.ERR_BUSY, out[fileproto.HDR_LEN]);
+    try std.testing.expectEqual(@as(usize, 0), srv.sink.keys_len);
+}
+
+test "a refused keystroke is not recorded, so the same request retries (DIAG-019)" {
+    var srv = Server{ .s = newSim() };
+    srv.sink.room = 0;
+    var req: [16]u8 = undefined;
+    var out: [64]u8 = undefined;
+    const rn = fileproto.writeKeyReq(&req, 7, 'x', fileproto.KEY_NONE);
+
+    _ = srv.reply(req[0..rn], &out); // refused while full
+
+    // Room appears, and the caller sends the SAME datagram again. Dedup must not
+    // suppress it: nothing was dispatched the first time, so suppressing here
+    // would ACK a keystroke that was never delivered — the exact failure this
+    // whole path exists to remove.
+    srv.sink.room = 4;
+    const n = srv.reply(req[0..rn], &out);
+    try std.testing.expectEqual(fileproto.OP_KEY_R, fileproto.parseHeader(out[0..n]).?.op);
+    try std.testing.expectEqual(@as(usize, 1), srv.sink.keys_len);
+    try std.testing.expectEqual(@as(u8, 'x'), srv.sink.keys_buf[0]);
+}
+
+test "TEXT types the whole string in one request and reports the count (DIAG-020)" {
+    var srv = Server{ .s = newSim() };
+    var req: [128]u8 = undefined;
+    var out: [64]u8 = undefined;
+
+    const line = "firefox --profile /tmp/p https://en.wikipedia.org\n";
+    const rn = fileproto.writeTextReq(&req, 11, line);
+    const n = srv.reply(req[0..rn], &out);
+    try std.testing.expectEqual(fileproto.OP_TEXT_R, fileproto.parseHeader(out[0..n]).?.op);
+    try std.testing.expectEqual(@as(usize, fileproto.HDR_LEN + 2), n);
+    try std.testing.expectEqual(
+        @as(u16, line.len),
+        std.mem.readInt(u16, out[fileproto.HDR_LEN..][0..2], .little),
+    );
+    try std.testing.expectEqualStrings(line, srv.sink.keys_buf[0..srv.sink.keys_len]);
+}
+
+test "TEXT accepted bytes are a PREFIX, and the count says where to resume (DIAG-020)" {
+    var srv = Server{ .s = newSim() };
+    srv.sink.room = 3; // room for "abc" and no more
+    var req: [64]u8 = undefined;
+    var out: [64]u8 = undefined;
+
+    const rn = fileproto.writeTextReq(&req, 12, "abcdefg");
+    _ = srv.reply(req[0..rn], &out);
+    try std.testing.expectEqual(@as(u16, 3), std.mem.readInt(u16, out[fileproto.HDR_LEN..][0..2], .little));
+    // A PREFIX, never a subset: the caller resumes from index 3, so skipping a
+    // byte in the middle and taking a later one would deliver a scrambled line
+    // while reporting the same count.
+    try std.testing.expectEqualStrings("abc", srv.sink.keys_buf[0..srv.sink.keys_len]);
+
+    srv.sink.room = 16;
+    const rn2 = fileproto.writeTextReq(&req, 13, "defg");
+    _ = srv.reply(req[0..rn2], &out);
+    try std.testing.expectEqualStrings("abcdefg", srv.sink.keys_buf[0..srv.sink.keys_len]);
+}
+
+test "a retransmitted TEXT replays its count without typing again (DIAG-020)" {
+    var srv = Server{ .s = newSim() };
+    srv.sink.room = 3;
+    var req: [64]u8 = undefined;
+    var out: [64]u8 = undefined;
+    const rn = fileproto.writeTextReq(&req, 14, "abcdefg");
+
+    const n1 = srv.reply(req[0..rn], &out);
+    try std.testing.expectEqual(@as(u16, 3), std.mem.readInt(u16, out[fileproto.HDR_LEN..][0..2], .little));
+
+    // The reply was lost, so the caller sends the same datagram again. It must
+    // get the SAME count back: recomputing it would type the accepted prefix a
+    // second time, and answering 0 would make the caller resend a line the
+    // machine already has.
+    srv.sink.room = 16;
+    const n2 = srv.reply(req[0..rn], &out);
+    try std.testing.expectEqual(n1, n2);
+    try std.testing.expectEqual(@as(u16, 3), std.mem.readInt(u16, out[fileproto.HDR_LEN..][0..2], .little));
+    try std.testing.expectEqualStrings("abc", srv.sink.keys_buf[0..srv.sink.keys_len]);
+}
+
+test "FOCUS names a window by a substring of its title (DIAG-021)" {
+    var srv = Server{ .s = newSim() };
+    var req: [64]u8 = undefined;
+    var out: [256]u8 = undefined;
+
+    const rn = fileproto.writeFocusReq(&req, 15, "linux");
+    const n = srv.reply(req[0..rn], &out);
+    try std.testing.expectEqual(fileproto.OP_FOCUS_R, fileproto.parseHeader(out[0..n]).?.op);
+    try std.testing.expectEqualStrings("linux", srv.sink.focus_buf[0..srv.sink.focus_len]);
+}
+
+test "FOCUS reports the focused window's title, and an empty needle only asks (DIAG-022)" {
+    var srv = Server{ .s = newSim() };
+    var req: [64]u8 = undefined;
+    var out: [256]u8 = undefined;
+
+    // The query form: no needle, so nothing is requested and the answer is
+    // whatever holds focus now. This is how a caller confirms the change it
+    // asked for actually landed — the desktop applies it on its own core.
+    const rn = fileproto.writeFocusReq(&req, 16, "");
+    const n = srv.reply(req[0..rn], &out);
+    try std.testing.expectEqualStrings("terminal", out[fileproto.HDR_LEN..n]);
+    try std.testing.expectEqual(@as(usize, 0), srv.sink.focus_len);
+}
+
+test "FOCUS is NOT deduped — asking again reports the CURRENT window (DIAG-022)" {
+    var srv = Server{ .s = newSim() };
+    var req: [64]u8 = undefined;
+    var out: [256]u8 = undefined;
+
+    // Focusing a named window is idempotent, so a retransmit may safely re-run —
+    // and it must, or a caller polling for confirmation would be answered from a
+    // cache that still names the window focus has since left.
+    const rn = fileproto.writeFocusReq(&req, 17, "linux");
+    _ = srv.reply(req[0..rn], &out);
+    const n = srv.reply(req[0..rn], &out);
+    try std.testing.expectEqualStrings("linux #0", out[fileproto.HDR_LEN..n]);
+    try std.testing.expectEqual(@as(usize, 2), srv.sink.focus_calls);
 }

@@ -70,7 +70,10 @@ var ring: Ring(KeyEvent, KEY_RING_DEPTH) = .{};
 /// the ring. A remote injection can preempt a USB poll mid-push (netdebug
 /// injects with interrupts live) — masking IF around the push keeps the ring
 /// single-producer, the same pattern sched.wake uses.
-pub fn inject(ev: KeyEvent) void {
+/// Returns whether the ring took it. A live keyboard has nowhere to put a
+/// refused press and only counts it; a REMOTE injector does — it can slow down
+/// and send the key again — so the answer travels back to whoever can act on it.
+pub fn inject(ev: KeyEvent) bool {
     // Receipt stamp for the PERF-008 input-latency measurement: the moment the
     // event enters the system, regardless of producer (USB poll, netdebug, agent).
     var stamped = ev;
@@ -79,6 +82,7 @@ pub fn inject(ev: KeyEvent) void {
     const pushed = ring.push(stamped);
     cpu.irqRestore(if_was_on);
     if (!pushed) cnt_inject_drops.inc();
+    return pushed;
 }
 
 /// Dequeue the next key event for the consumer (the desktop poll loop), or null

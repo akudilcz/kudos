@@ -50,6 +50,27 @@ pub const OP_RINGTAIL_R: u8 = 0x8e;
 /// bound by the single-datagram cap.
 pub const OP_MCP: u8 = 0x0f;
 pub const OP_MCP_R: u8 = 0x8f;
+/// A whole string of keystrokes in one datagram; the reply is the u16 count of
+/// LEADING bytes the machine took.
+///
+/// OP_KEY carries one byte per round trip, so a 144-character command line is
+/// 144 datagrams — 144 chances to lose one, and 144 windows in which a full
+/// input ring can swallow a byte and leave a corrupt command behind. This op
+/// makes the same line one or two round trips, and makes the loss impossible to
+/// miss rather than impossible to see: a short count is not an error, it is the
+/// machine saying how much it had room for, and the caller resends from there.
+pub const OP_TEXT: u8 = 0x10;
+pub const OP_TEXT_R: u8 = 0x90;
+/// Focus the front-most visible window whose title contains the body's needle,
+/// and reply with the title of the window focused AFTER the request is parked.
+/// An EMPTY needle changes nothing and only reports — the query form.
+///
+/// Injected input goes wherever focus happens to be, so every remote typing
+/// session begins with a guess about which window that is. Clicking a title bar
+/// to fix it needs coordinates that change whenever a window moves; naming the
+/// window does not.
+pub const OP_FOCUS: u8 = 0x11;
+pub const OP_FOCUS_R: u8 = 0x91;
 /// The ramdisk file the OP_MCP handler writes its JSON-RPC response into. One
 /// well-known name, shared by the kernel handler and the remote client.
 pub const MCP_RESPONSE_FILE = "mcp-response.json";
@@ -70,6 +91,11 @@ pub const STATUS_CAP: usize = 160;
 pub const ERR_UNKNOWN_NAME: u8 = 1;
 pub const ERR_GENERATION: u8 = 2;
 pub const ERR_BAD_REQUEST: u8 = 3;
+/// The request was well-formed and the machine had no room for it — retry it.
+/// Distinct from every other error because it is the only one where sending the
+/// SAME bytes again is the correct response; the request is not recorded as
+/// dispatched, so the retransmit is a fresh attempt rather than a re-ACK.
+pub const ERR_BUSY: u8 = 4;
 
 pub const HDR_LEN: usize = 8;
 
@@ -180,6 +206,22 @@ pub fn writeKeyReq(buf: []u8, request_id: u16, ascii: u8, named: u8) usize {
     return n + 2;
 }
 
+/// A TEXT request carries the string raw, so one datagram holds MAX_CHUNK of it;
+/// the caller sends what fits and resumes from the reply's count.
+pub fn writeTextReq(buf: []u8, request_id: u16, s: []const u8) usize {
+    const n = writeHeader(buf, OP_TEXT, request_id);
+    const take = @min(s.len, @min(@as(usize, MAX_CHUNK), buf.len - n));
+    @memcpy(buf[n .. n + take], s[0..take]);
+    return n + take;
+}
+
+pub fn writeFocusReq(buf: []u8, request_id: u16, needle: []const u8) usize {
+    const n = writeHeader(buf, OP_FOCUS, request_id);
+    const take = @min(needle.len, buf.len - n);
+    @memcpy(buf[n .. n + take], needle[0..take]);
+    return n + take;
+}
+
 pub fn writeMouseReq(buf: []u8, request_id: u16, dx: i16, dy: i16, buttons: u8) usize {
     const n = writeHeader(buf, OP_MOUSE, request_id);
     std.mem.writeInt(i16, buf[n..][0..2], dx, .little);
@@ -238,15 +280,25 @@ pub const Dedup = struct {
     /// Window capacity — the one home for the size (tests import it).
     pub const CAP = 64;
     rids: [CAP]u16 = undefined,
+    /// What each recorded request answered. Only OP_TEXT has an answer worth
+    /// remembering (its accepted count); every other deduped op records 0. A
+    /// retransmit must replay the SAME count — recomputing it would inject the
+    /// accepted prefix a second time, and answering 0 would make the caller
+    /// resend a line the machine already took.
+    results: [CAP]u16 = undefined,
     n: usize = 0,
 
-    pub fn seen(self: *const Dedup, rid: u16) bool {
-        for (self.rids[0..@min(self.n, self.rids.len)]) |r| if (r == rid) return true;
-        return false;
+    /// The recorded answer for `rid` if this request has already been
+    /// dispatched, else null.
+    pub fn seen(self: *const Dedup, rid: u16) ?u16 {
+        const live = @min(self.n, self.rids.len);
+        for (self.rids[0..live], self.results[0..live]) |r, res| if (r == rid) return res;
+        return null;
     }
 
-    pub fn record(self: *Dedup, rid: u16) void {
+    pub fn record(self: *Dedup, rid: u16, result: u16) void {
         self.rids[self.n % self.rids.len] = rid;
+        self.results[self.n % self.results.len] = result;
         self.n += 1;
     }
 };
@@ -262,7 +314,24 @@ pub const Inject = struct {
     pub const VTable = struct {
         /// `ascii` is the character (0 when the press has none); `named` is a
         /// KEY_* code for keys that have no character at all (F11/F12).
-        key: *const fn (ctx: *anyopaque, ascii: u8, named: u8) void,
+        /// FALSE when the input queue had no room — the caller must not ACK a
+        /// keystroke the machine did not take.
+        key: *const fn (ctx: *anyopaque, ascii: u8, named: u8) bool,
+        /// Inject `s` as consecutive keystrokes and return how many LEADING
+        /// bytes were taken. A short count is the queue filling up, not an
+        /// error; the caller resends the remainder. Never reorders or skips: the
+        /// accepted bytes are always a prefix, or a command line would arrive
+        /// scrambled rather than truncated.
+        text: *const fn (ctx: *anyopaque, s: []const u8) u16,
+        /// Ask the desktop to focus the front-most visible window whose title
+        /// contains `needle` (empty = report only), and fill `out` with the title
+        /// of the currently-focused window, returning the used slice.
+        ///
+        /// The focus change is a REQUEST: the desktop owns the window list and
+        /// runs on its own core, so it applies the change on its next input
+        /// pass. The title reported here is therefore the one in effect as the
+        /// reply is built — a caller confirms by asking again.
+        focus: *const fn (ctx: *anyopaque, needle: []const u8, out: []u8) []const u8,
         mouse: *const fn (ctx: *anyopaque, dx: i16, dy: i16, buttons: u8) void,
         /// Absolute pointer placement — bypasses the acceleration curve (see OP_MOUSE_ABS).
         mouseAbs: *const fn (ctx: *anyopaque, x: i16, y: i16, buttons: u8) void,
@@ -302,8 +371,14 @@ pub const Inject = struct {
         mcp: *const fn (ctx: *anyopaque, body: []const u8) void,
     };
 
-    pub fn key(self: Inject, ascii: u8, named: u8) void {
-        self.vtable.key(self.ctx, ascii, named);
+    pub fn key(self: Inject, ascii: u8, named: u8) bool {
+        return self.vtable.key(self.ctx, ascii, named);
+    }
+    pub fn text(self: Inject, s: []const u8) u16 {
+        return self.vtable.text(self.ctx, s);
+    }
+    pub fn focus(self: Inject, needle: []const u8, out: []u8) []const u8 {
+        return self.vtable.focus(self.ctx, needle, out);
     }
     pub fn mouse(self: Inject, dx: i16, dy: i16, buttons: u8) void {
         self.vtable.mouse(self.ctx, dx, dy, buttons);
@@ -348,8 +423,11 @@ pub fn buildReply(fs: iramdisk.IRamdisk, dedup: *Dedup, sink: Inject, req: []con
     const hdr = parseHeader(req) orelse return 0;
     const body = req[HDR_LEN..];
     switch (hdr.op) {
-        OP_KEY, OP_MOUSE, OP_MOUSE_ABS, OP_SHOT, OP_REBOOT, OP_SHUTDOWN, OP_STATS, OP_RINGTAIL => {
-            if (!dedup.seen(hdr.request_id)) {
+        // OP_TEXT rides this group for its dedup, but answers with a COUNT rather
+        // than a bare ACK — see the reply assembly at the end of the branch.
+        OP_KEY, OP_TEXT, OP_MOUSE, OP_MOUSE_ABS, OP_SHOT, OP_REBOOT, OP_SHUTDOWN, OP_STATS, OP_RINGTAIL => {
+            const result: u16 = dedup.seen(hdr.request_id) orelse blk: {
+                var taken: u16 = 0;
                 switch (hdr.op) {
                     OP_KEY => {
                         if (body.len < 1) return writeErr(out, hdr.request_id, ERR_BAD_REQUEST);
@@ -358,8 +436,15 @@ pub fn buildReply(fs: iramdisk.IRamdisk, dedup: *Dedup, sink: Inject, req: []con
                         // them, so an ASCII-only injector cannot run the WM tests natively.
                         // Absent = KEY_NONE, which keeps every existing 1-byte client working.
                         const named: u8 = if (body.len >= 2) body[1] else KEY_NONE;
-                        sink.key(body[0], named);
+                        // A refused keystroke is NOT recorded as dispatched and NOT
+                        // ACKed: the ACK has to mean the machine took the key, or a
+                        // caller counting ACKs believes it typed a line the machine
+                        // only heard part of. ERR_BUSY sends the caller round again
+                        // with the same request_id, which the dedup window will not
+                        // suppress because nothing was recorded.
+                        if (!sink.key(body[0], named)) return writeErr(out, hdr.request_id, ERR_BUSY);
                     },
+                    OP_TEXT => taken = sink.text(body),
                     OP_MOUSE => {
                         if (body.len < 5) return writeErr(out, hdr.request_id, ERR_BAD_REQUEST);
                         sink.mouse(
@@ -394,9 +479,28 @@ pub fn buildReply(fs: iramdisk.IRamdisk, dedup: *Dedup, sink: Inject, req: []con
                     },
                     else => unreachable,
                 }
-                dedup.record(hdr.request_id);
-            }
-            return writeHeader(out, hdr.op | 0x80, hdr.request_id);
+                dedup.record(hdr.request_id, taken);
+                break :blk taken;
+            };
+            const n = writeHeader(out, hdr.op | 0x80, hdr.request_id);
+            if (hdr.op != OP_TEXT) return n;
+            // TEXT answers with the count — replayed verbatim on a retransmit, so
+            // the caller resumes from the same byte whether or not the first reply
+            // survived the wire.
+            std.mem.writeInt(u16, out[n..][0..2], result, .little);
+            return n + 2;
+        },
+        // NOT deduped: focusing a named window is idempotent — the second request
+        // finds the same window already focused and changes nothing — so a
+        // retransmit may safely re-run, and re-running is what makes the reply's
+        // title CURRENT rather than a cached snapshot of where focus used to be.
+        OP_FOCUS => {
+            const n = writeHeader(out, OP_FOCUS_R, hdr.request_id);
+            var buf: [STATUS_CAP]u8 = undefined;
+            const title = sink.focus(body, &buf);
+            const take = @min(title.len, @min(STATUS_CAP, out.len - n));
+            @memcpy(out[n..][0..take], title[0..take]);
+            return n + take;
         },
         // NOT deduped: PING and VERSION are read-only, so answering a retransmit is
         // correct and answering it AGAIN is the point — every probe must get a
@@ -423,9 +527,9 @@ pub fn buildReply(fs: iramdisk.IRamdisk, dedup: *Dedup, sink: Inject, req: []con
             // Run the JSON-RPC request against the agent's registry (dedup-guarded
             // so a retransmit does not re-run a tools/call's side effects), then
             // reply with the response file's generation — the client READs it.
-            if (!dedup.seen(hdr.request_id)) {
+            if (dedup.seen(hdr.request_id) == null) {
                 sink.mcp(body);
-                dedup.record(hdr.request_id);
+                dedup.record(hdr.request_id, 0);
             }
             var gen: u32 = 0;
             for (0..fs.count()) |i| {

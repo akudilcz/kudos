@@ -388,16 +388,41 @@ def _client(guest_ip: str):
 
 @mcp.tool()
 def netdebug_inject_key(text: str, guest_ip: str = "") -> dict:
-    """Type `text` into the running kudos desktop, one keystroke per
-    character (ASCII only in v1 — no arrows/modifiers; '\n' presses Enter).
-    Exactly-once even over a lossy link: the guest dedups by request_id.
+    """Type `text` into the focused window of the running kudos desktop (ASCII
+    only — no arrows/modifiers; '\n' presses Enter).
+
+    Delivery is confirmed, not assumed: kudos replies with how much of the string
+    it had room for, and this resends the remainder until every byte is in. A
+    machine that is momentarily full costs a retry; it never costs a silently
+    truncated command.
+
+    Use netdebug_select_window first when it matters WHERE the text lands.
 
     Returns {typed} (character count).
     """
+    return {"typed": _client(guest_ip).inject_text(text)}
+
+
+@mcp.tool()
+def netdebug_select_window(title: str, guest_ip: str = "") -> dict:
+    """Focus the front-most visible kudos window whose title CONTAINS `title`,
+    and return the title that ended up focused.
+
+    Injected keys go to whatever holds focus, so this is what makes typing
+    deterministic — the alternative is clicking a title bar at coordinates that
+    change whenever a window moves. Pass an empty `title` to ask where focus is
+    without moving it.
+
+    Raises if nothing matches: a miss leaves focus alone rather than guessing,
+    because typing a command into the wrong window is worse than typing it
+    nowhere.
+
+    Returns {focused}.
+    """
     client = _client(guest_ip)
-    for ch in text:
-        client.inject_key(ord(ch))
-    return {"typed": len(text)}
+    if not title:
+        return {"focused": client.focused_window()}
+    return {"focused": client.focus_window(title)}
 
 
 @mcp.tool()

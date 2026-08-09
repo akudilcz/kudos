@@ -156,14 +156,60 @@ pub fn takeSpawnRequest() ?[]const u8 {
     return spawn_request[0..n];
 }
 
+/// Longest window-title substring a focus request may name, and the longest
+/// title reported back. Both are window titles, so one size serves both.
+const FOCUS_TITLE_CAP: usize = 64;
+
+/// The focus mailbox, the same shape and for the same reason as the spawn
+/// request above: this module is the remote-request inbox, and the desktop —
+/// which alone owns the window list, on its own core — services it.
+///
+/// The reported title travels the OTHER way, published by the desktop whenever
+/// focus moves. A remote injector needs it because injected keys go to whatever
+/// is focused: without it, "type this into the VM window" is a guess, and a
+/// wrong guess types a command into a terminal or a browser at random.
+var focus_request: [FOCUS_TITLE_CAP]u8 = undefined;
+var focus_request_len: usize = 0;
+var focused_title: [FOCUS_TITLE_CAP]u8 = undefined;
+var focused_title_len: usize = 0;
+
+/// Ask the desktop to focus the front-most visible window whose title contains
+/// `needle`. Overwrites any unconsumed prior request — the newest intent wins,
+/// and a request the desktop has not yet seen is not one anybody is waiting on.
+pub fn requestFocus(needle: []const u8) void {
+    const n = @min(needle.len, focus_request.len);
+    @memcpy(focus_request[0..n], needle[0..n]);
+    focus_request_len = n;
+}
+
+/// Consume a pending focus request (desktop input loop), or null.
+pub fn takeFocusRequest() ?[]const u8 {
+    if (focus_request_len == 0) return null;
+    const n = focus_request_len;
+    focus_request_len = 0;
+    return focus_request[0..n];
+}
+
+/// The desktop: publish the title of the window that now has focus.
+pub fn publishFocus(title: []const u8) void {
+    const n = @min(title.len, focused_title.len);
+    @memcpy(focused_title[0..n], title[0..n]);
+    focused_title_len = n;
+}
+
+/// The title last published by the desktop — empty before it has published any.
+pub fn focusedTitle() []const u8 {
+    return focused_title[0..focused_title_len];
+}
+
 /// Injection dedup state (fileproto.Dedup; recorded on successful dispatch).
 var dedup = fileproto.Dedup{};
 
 /// The real injection sink: keystrokes into the keyboard driver, motion into
 /// the mouse aggregator (TSC-stamped like a live HID report), SHOT into the
 /// sticky flag above.
-fn sinkKey(_: *anyopaque, ascii: u8, named: u8) void {
-    keyboard.inject(.{
+fn sinkKey(_: *anyopaque, ascii: u8, named: u8) bool {
+    return keyboard.inject(.{
         .ascii = ascii,
         .key = switch (named) {
             fileproto.KEY_F1 => .f1,
@@ -172,6 +218,17 @@ fn sinkKey(_: *anyopaque, ascii: u8, named: u8) void {
             else => .none,
         },
     });
+}
+
+/// A whole string of keystrokes, stopping at the first the ring will not take
+/// and reporting how many went in. Stopping — not skipping — is the contract:
+/// the accepted bytes must be a PREFIX, because the caller resumes from the
+/// count, and a gap in the middle would arrive as a silently mistyped command.
+fn sinkText(_: *anyopaque, s: []const u8) u16 {
+    for (s, 0..) |ch, i| {
+        if (!keyboard.inject(.{ .ascii = ch, .key = .none })) return @intCast(i);
+    }
+    return @intCast(s.len);
 }
 fn sinkMouse(_: *anyopaque, dx: i16, dy: i16, buttons: u8) void {
     imouse.aggregate(.{ .dx = dx, .dy = dy, .buttons = buttons, .t_tsc = tsc.rdtsc() });
@@ -184,6 +241,18 @@ fn sinkMouseAbs(_: *anyopaque, x: i16, y: i16, buttons: u8) void {
 }
 fn sinkShot(_: *anyopaque) void {
     shot_requested = true;
+}
+
+/// Park the focus request (if any) and answer with the focus in effect NOW. The
+/// two are deliberately out of step: the desktop applies the request on its next
+/// input pass, so the caller confirms by asking again with an empty needle —
+/// which is a query and parks nothing.
+fn sinkFocus(_: *anyopaque, needle: []const u8, out: []u8) []const u8 {
+    if (needle.len > 0) requestFocus(needle);
+    const t = focusedTitle();
+    const n = @min(t.len, out.len);
+    @memcpy(out[0..n], t[0..n]);
+    return out[0..n];
 }
 
 /// The agent registers this to serve MCP over netdebug (AGT-011/AGT-013): it
@@ -298,6 +367,8 @@ fn sinkRingtail(_: *anyopaque, kib: u16) void {
 
 const sink_vtable = fileproto.Inject.VTable{
     .key = sinkKey,
+    .text = sinkText,
+    .focus = sinkFocus,
     .mouse = sinkMouse,
     .mouseAbs = sinkMouseAbs,
     .shot = sinkShot,

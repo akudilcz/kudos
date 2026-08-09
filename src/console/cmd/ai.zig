@@ -1,4 +1,4 @@
-//! `ai <prompt>` / `ai /command` — the openclaw agent console.
+//! `ai` / `ai <prompt>` — the kudos agent console.
 //!
 //! A Claude-Code-style surface: type a natural-language prompt and the agent
 //! streams a reply, calling tools (compile an app, ...) inline as it works; or
@@ -18,6 +18,8 @@ const loop = @import("../../agent/loop.zig");
 const tools = @import("../../agent/tools.zig");
 const prompt = @import("../../agent/prompt.zig");
 const config = @import("../../agent/config.zig");
+const credential = @import("../../agent/credential.zig");
+const buildinfo = @import("buildinfo");
 const openrouter = @import("../../agent/openrouter.zig");
 const abi = @import("abi");
 const inet = @import("inet");
@@ -38,9 +40,6 @@ const features = hotload.features;
 
 const CFG_PATH = "/usbdisk/AI.CFG";
 const DEFAULT_MODEL = "moonshotai/kimi-k3";
-/// Longest credential accepted from AI.CFG `key=` (an OpenRouter key is about
-/// 73 characters; the bound is generous).
-const MAX_API_KEY_LEN = 128;
 const HISTORY_TURNS = 32;
 /// Cap on the feature output captured into one tool result — a chatty feature
 /// must not burn the request's token budget. Overflow is truncated LOUDLY.
@@ -91,28 +90,15 @@ fn llmUrl() []const u8 {
     return if (g_llm_len != 0) g_llm_buf[0..g_llm_len] else openrouter.CHAT_COMPLETIONS_URL;
 }
 
-// The service credential, stored ready to send as an Authorization value
-// ("Bearer <key>", AGT-004). Zero length = no usable key — chat refuses LOUDLY
-// (runLoop) rather than posting an unauthorised request.
-var g_auth_buf: ["Bearer ".len + MAX_API_KEY_LEN]u8 = undefined;
-var g_auth_len: usize = 0;
-
-fn setApiKey(key: []const u8) void {
-    // A key too long for the buffer cannot be sent; leaving it unset makes the
-    // refusal loud at chat time instead of sending a truncated credential.
-    const s = std.fmt.bufPrint(&g_auth_buf, "Bearer {s}", .{key}) catch return;
-    g_auth_len = s.len;
-}
-
 /// loop.Chat transport: POST the request to the LLM service over HTTPS and
 /// stream the response body into `sink` as it arrives (AGT-003/AGT-005), with
 /// the credential on every request (AGT-004).
 fn chatSend(_: *anyopaque, request: []const u8, sink: inet.BodySink) anyerror!void {
     const n = inet.instance orelse return error.NoNetwork;
-    if (g_auth_len == 0) return error.NoApiKey;
+    if (!credential.isUnlocked()) return error.NoApiKey;
     const hdrs = [_]inet.Header{
         .{ .name = "Content-Type", .value = "application/json" },
-        .{ .name = "Authorization", .value = g_auth_buf[0..g_auth_len] },
+        .{ .name = "Authorization", .value = credential.authorization() },
     };
     try n.postStream(heap.allocator(), llmUrl(), &hdrs, request, sink);
 }
@@ -516,7 +502,7 @@ fn toolInjectText(_: *anyopaque, args_json: []const u8, out: *std.array_list.Man
     defer arena.deinit();
     const v = (try parseToolArgs(arena.allocator(), args_json, out)) orelse return;
     const text = jsonStr(v, "text") orelse return out.appendSlice("inject_text needs text");
-    for (text) |ch| keyboard.inject(.{ .ascii = ch, .key = .none });
+    for (text) |ch| _ = keyboard.inject(.{ .ascii = ch, .key = .none });
     try tools.printTo(out, "injected {d} characters", .{text.len});
 }
 
@@ -645,6 +631,8 @@ fn isRemoteTool(name: []const u8) bool {
 }
 
 /// Route a call to a federated tool back to the bound MCP server (AGT-014) and
+
+/// Route a call to a federated tool back to the bound MCP server (AGT-014) and
 /// append its text result.
 fn callRemoteTool(name: []const u8, args_json: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
     const req = try mcp.buildToolCall(heap.allocator(), 2, name, args_json);
@@ -697,11 +685,13 @@ var g_loop_ctx: u8 = 0;
 // ── slash commands ────────────────────────────────────────────────────────────
 fn cmdHelp(c: console.Console) void {
     c.write(
-        \\openclaw — the kudos AI agent
+        \\ai — the kudos agent
         \\  <prompt>        talk to the agent (it writes, compiles, hot-loads
         \\                  and exercises apps & features)
         \\  /improve [focus] budgeted self-improvement run: build, load & try
         \\                  one new feature (optionally about <focus>)
+        \\  /login [pass]   decrypt the service credential (asks if given
+        \\                  no passphrase); required once per boot before chat
         \\  /help           this help
         \\  /reset          clear the conversation
         \\  /status         model, endpoints, network, ABI
@@ -722,7 +712,11 @@ fn cmdStatus(c: console.Console) void {
     c.write(std.fmt.bufPrint(&buf, "model:   {s}\nllm:     {s}\nkey:     {s}\nfactory: {s}\nnetwork: {s}\nABI:     v{d}\nbudget:  chat: {d} turns, {d} tool calls, {d} tokens, {d} s\n         improve: {d} turns, {d} tool calls, {d} tokens, {d} s\n", .{
         model(),
         llmUrl(),
-        if (g_auth_len != 0) "configured" else "MISSING — set key= in " ++ CFG_PATH,
+        switch (credential.from()) {
+            .sealed => "sealed into this build (AGT-017)",
+            .cfg_file => "from " ++ CFG_PATH,
+            .none => "MISSING — /login to decrypt, or set key= in " ++ CFG_PATH,
+        },
         if (g_ep.host_len != 0) g_ep.host[0..g_ep.host_len] else "(set factory= in " ++ CFG_PATH ++ ")",
         if (up) "up" else "down",
         abi.ABI_VERSION,
@@ -762,18 +756,81 @@ fn loadConfig() config.Config {
     return config.parse(text);
 }
 
+/// `/login` was typed with no passphrase and one was asked for: the NEXT line
+/// is that passphrase, not a prompt for the model.
+var g_awaiting_passphrase: bool = false;
+
+/// The greeting an agent session opens with (AGT-018). It names the two things
+/// a first-time user needs — where the commands are, and that the credential
+/// starts encrypted — because the session opens straight into its conversation
+/// and there is nowhere else to learn them.
+fn banner() []const u8 {
+    return if (credential.isSealedIntoBuild())
+        \\kudos agent — /help for commands, /quit to leave
+        \\the service credential is encrypted; /login to decrypt it
+        \\
+        \\
+    else
+        \\kudos agent — /help for commands, /quit to leave
+        \\
+        \\
+    ;
+}
+
+/// What to say when a chat is attempted with no usable credential — the two
+/// cases need opposite actions from the user.
+fn lockedMessage() []const u8 {
+    return if (credential.isSealedIntoBuild())
+        "the service credential is encrypted — decrypt it first:\n\n    /login <passphrase>\n\n"
+    else
+        "no credential: seal one into the build (scripts/agent/sealkey.sh) or set key= in " ++ CFG_PATH ++ "\n";
+}
+
 /// `ai ...` — the shell command entry (core-0 table).
 pub fn run(c: console.Console, args: []const u8) void {
     g_console = c;
     const cfg = loadConfig();
     if (cfg.factory) |f| setEndpoints(f);
-    if (cfg.api_key) |k| setApiKey(k);
+    // An unattended build may open its own seal; otherwise the credential waits
+    // for `/login`. Either way a stick that carries its own `key=` overrides it
+    // below — whoever plugged the stick in is the later decision.
+    if (credential.from() == .none) credential.tryBakedPassphrase();
+    if (cfg.api_key) |k| {
+        credential.useConfigKey(k);
+    }
     if (cfg.url) |u| setBuf(&g_llm_buf, &g_llm_len, u);
     if (cfg.model) |m| if (g_model_len == 0) setModel(m);
     if (cfg.mcp) |u| setBuf(&g_mcp_url_buf, &g_mcp_url_len, u);
     if (cfg.token) |tk| setBuf(&g_token_buf, &g_token_len, tk);
 
-    switch (aiconsole.parse(args)) {
+    // A `/login` with no passphrase asked for one; this line IS the answer, so
+    // it is taken verbatim before any parsing — a passphrase may begin with `/`
+    // or look like anything else, and the console must not interpret it.
+    if (g_awaiting_passphrase) {
+        g_awaiting_passphrase = false;
+        c.write(credential.unlock(std.mem.trim(u8, args, " \t\r\n")));
+        return;
+    }
+
+    const input = aiconsole.parse(args);
+    // Refuse what SPENDS the credential while it is still encrypted, and say
+    // what to do about it (AGT-022). Session commands still run — /login
+    // especially — and so does OPENING a session, which is where /login is typed.
+    if (aiconsole.gate(input, credential.isUnlocked()) == .locked) return c.write(lockedMessage());
+
+    switch (input) {
+        .login => |pass| {
+            if (pass.len == 0) {
+                // Ask, rather than fail: `/login` on its own is the natural way
+                // to type it, and answering "usage:" to that is a shell being
+                // pedantic at somebody who did the obvious thing.
+                g_awaiting_passphrase = true;
+                c.write("passphrase: ");
+            } else {
+                c.write(credential.unlock(pass));
+            }
+            return;
+        },
         .help => return cmdHelp(c),
         .status => return cmdStatus(c),
         .apps => return cmdApps(c),
@@ -799,13 +856,14 @@ pub fn run(c: console.Console, args: []const u8) void {
             return;
         },
         .quit => {
-            // Close the dedicated agent window. In a shell terminal `ai /quit`
-            // has no window of its own to close (the agent is a transient
-            // command there) — say so rather than closing the terminal.
+            // Leave the conversation and hand the terminal back to the shell —
+            // the counterpart of `ai`, and what a user who typed `ai` expects
+            // to undo. Closing the window instead would take the shell with it.
             if (c.ai_mode) {
-                c.close();
+                c.setAiMode(false);
+                c.write("left the agent — back to the shell\n");
             } else {
-                c.write("/quit closes the AI agent window (F10) — this is a terminal; type exit\n");
+                c.write("not in an agent session; type `ai` to start one\n");
             }
             return;
         },
@@ -816,7 +874,24 @@ pub fn run(c: console.Console, args: []const u8) void {
             return;
         },
         .prompt => |p| {
-            if (p.len == 0) return;
+            if (p.len == 0) {
+                // `ai` on its own means "talk to the agent", so THIS terminal
+                // becomes the conversation — the way running a chat client in a
+                // shell does. Opening a second window instead would leave the
+                // user looking at the terminal they just typed into.
+                if (c.ai_mode) return; // already in it; a blank line is a blank line
+                c.setAiMode(true);
+                c.write(banner());
+                // Sealed and nobody has opened it yet: ask right here. Entering
+                // the session and THEN being told to type /login is a step the
+                // user has to discover; asking is the same information offered
+                // at the moment it is needed.
+                if (!credential.isUnlocked() and credential.isSealedIntoBuild()) {
+                    g_awaiting_passphrase = true;
+                    c.write("passphrase: ");
+                }
+                return;
+            }
             // The standing conversation, at the default per-request budget.
             runLoop(c, history(), p, .{});
         },
@@ -843,7 +918,7 @@ pub fn run(c: console.Console, args: []const u8) void {
 /// Drive one budgeted agent run over `hist` with the given limits, streaming to
 /// the terminal. Shared by a chat prompt and an `/improve` session.
 fn runLoop(c: console.Console, hist: *loop.history.History, p: []const u8, limits: loop.budget.Limits) void {
-    if (g_auth_len == 0) {
+    if (!credential.isUnlocked()) {
         c.write("no API key — set `key=<LLM service key>` in " ++ CFG_PATH ++ "\n");
         return;
     }

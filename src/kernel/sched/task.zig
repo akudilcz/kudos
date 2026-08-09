@@ -9,13 +9,28 @@ const SpinLock = @import("../sync/spinlock.zig").SpinLock;
 
 /// Per-task stack.
 ///
-/// 128 KiB, because the system task runs the entire desktop on this stack — including
-/// the model loader, whose decompression path can put a single large struct in a frame
-/// and take it to ~75 KiB on its own. A stack overflow here is not an error return; it
-/// is a triple fault, with no message. The headroom is deliberate.
+/// Sized by the deepest path any task can take, which is the TLS 1.3 handshake
+/// (NET-010), not the desktop. Two of its frames are live at once — the client
+/// `init` and the key-share `init` it calls `.never_inline` — and each is over
+/// 50 KiB of handshake buffers on its own; the Kyber and RSA frames underneath
+/// add ~40 KiB more, and the agent, HTTP and JSON frames sit above all of it.
+/// The desktop's own worst case (the model loader's decompression frame, ~75 KiB)
+/// fits comfortably inside the same budget.
+///
+/// Re-measure after a toolchain or TLS-vendoring change — the frames come from
+/// the compiler, not from this repository:
+///
+///     objdump -d build/netboot/kernel.elf | grep -E '^[0-9a-f]+ <|sub .*,%rsp'
+///
+/// An overflow here is NOT an error return: these stacks are heap-allocated and
+/// carry no guard page, so running off the end silently corrupts the heap below
+/// and surfaces later as a wild jump — a #UD at a mid-instruction address, with a
+/// backtrace pointing anywhere but the cause. The headroom is the mitigation
+/// until a guard page makes it a fault (MEM-010 covers the mechanism; scheduler
+/// stacks do not use it yet).
 ///
 /// Stacks are heap-allocated, so this costs per live task, not per core.
-pub const STACK_SIZE: usize = 128 * 1024;
+pub const STACK_SIZE: usize = 512 * 1024;
 
 /// Fixed width (bytes) of a task's `name` and `activity` label buffers. Task and
 /// TaskInfo copy these buffers by value between each other, so both structs must

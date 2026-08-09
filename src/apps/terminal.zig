@@ -89,7 +89,7 @@ pub const Terminal = struct {
     dirty: bool = false,
     /// The AI agent window (spec AGT-002): a terminal whose every committed line
     /// is a turn for the on-demand agent rather than a shell command. It prompts
-    /// `ai>` and dispatches each line as `ai <line>` — the same openclaw
+    /// `ai>` and dispatches each line as `ai <line>` — the same agent
     /// console the `ai` shell command drives, so there is one agent codebase. A
     /// normal terminal leaves this false and runs lines as shell commands.
     ai_mode: bool = false,
@@ -123,7 +123,17 @@ pub const Terminal = struct {
         counter.register(&cnt_key_drops); // idempotent — first terminal wins
         t.setCwd("/ramdisk");
         t.clearGrid();
-        t.write(if (ai_mode) "kudos AI agent. type a prompt, or /help.\n" else "kudos terminal. type 'help'.\n");
+        // The agent window opens straight into its conversation, so its banner
+        // is the only place a first-time user is told the two things they need:
+        // where the commands are, and that the credential starts locked.
+        t.write(if (ai_mode)
+            \\kudos agent
+            \\  /login   unlock the service credential (once per boot)
+            \\  /help    everything else
+            \\
+            \\
+        else
+            "kudos terminal. type 'help'.\n");
         t.prompt();
         return t;
     }
@@ -492,7 +502,7 @@ pub const Terminal = struct {
     }
 
     /// Run one committed command line through the shell. In the AI agent window
-    /// (ai_mode) the whole line is a turn for the openclaw agent, dispatched as
+    /// (ai_mode) the whole line is a turn for the agent, dispatched as
     /// `ai <line>` — the same core-0 agent console the `ai` shell command drives,
     /// so there is one agent codebase and no cyclic import (apps → console →
     /// cmd/ai, never the reverse). A normal terminal runs the line verbatim.
@@ -531,6 +541,14 @@ pub const Terminal = struct {
         t.prompt();
     }
 
+    /// Console setAiModeFn: enter or leave the agent session on this terminal.
+    /// The prompt changes with it (`ai>` against the shell's cwd prompt), so the
+    /// line the user is about to type always says where it is going.
+    fn conSetAiMode(ctx: *anyopaque, on: bool) void {
+        const t: *Terminal = @ptrCast(@alignCast(ctx));
+        t.ai_mode = on;
+    }
+
     /// The console surface over this terminal — what shell.execute hands each
     /// command: the grid half bound to this terminal, plus the desktop half
     /// and window handle this terminal was given at spawn.
@@ -546,6 +564,7 @@ pub const Terminal = struct {
             .win = self.win,
             .a = self.a,
             .ai_mode = self.ai_mode,
+            .setAiModeFn = conSetAiMode,
         };
     }
 

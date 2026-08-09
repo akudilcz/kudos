@@ -38,12 +38,25 @@ OP_MOUSE_ABS, OP_MOUSE_ABS_R = 0x0C, 0x8C
 OP_STATS, OP_STATS_R = 0x0D, 0x8D
 OP_RINGTAIL, OP_RINGTAIL_R = 0x0E, 0x8E
 OP_MCP, OP_MCP_R = 0x0F, 0x8F
+OP_TEXT, OP_TEXT_R = 0x10, 0x90
+OP_FOCUS, OP_FOCUS_R = 0x11, 0x91
 MCP_RESPONSE_FILE = "mcp-response.json"
 # Named (non-character) keys OP_KEY can carry — must match fileproto.KEY_*.
 KEY_NONE, KEY_F11, KEY_F12, KEY_F10, KEY_F1 = 0, 1, 2, 3, 4
 KEY_UP_ASCII, KEY_DOWN_ASCII = 0x10, 0x11  # kudos carries arrows as control bytes
 OP_ERR = 0xFF
 ERR_GENERATION = 2
+# kudos was well-formed but out of room. The ONLY error where resending the same
+# datagram is correct: the request was not recorded as dispatched, so the retry
+# is a fresh attempt rather than a re-ACK of something that never happened.
+ERR_BUSY = 4
+
+# How long to keep retrying a BUSY request, and how long to pause between tries.
+# kudos drains its input ring on every pass of the desktop loop (kHz), so a full
+# ring clears in well under a millisecond; a whole second of retries means
+# something is genuinely wedged and the caller should hear about it.
+BUSY_RETRY_S = 1.0
+BUSY_PAUSE_S = 0.01
 CHUNK = 1200
 TIMEOUT_S = 0.15
 RETRIES = 8
@@ -59,6 +72,12 @@ class KmirError(Exception):
 
 
 class GenerationChanged(KmirError):
+    pass
+
+
+class Busy(KmirError):
+    """kudos had no room for a well-formed request. Retry the same bytes."""
+
     pass
 
 
@@ -117,9 +136,30 @@ class Client:
                     code = data[HDR.size] if len(data) > HDR.size else 0
                     if code == ERR_GENERATION:
                         raise GenerationChanged()
+                    if code == ERR_BUSY:
+                        raise Busy()
                     raise KmirError(f"guest error code {code}")
                 return data[HDR.size:]
         raise KmirError(f"no reply after {RETRIES} attempts (op 0x{op:02x})")
+
+    def _rpc_until_accepted(self, payload_body, op):
+        """_rpc, but waiting out a machine that is momentarily out of room.
+
+        A BUSY reply is not a failure — it is kudos saying it did NOT take the
+        request, which is the whole point of the reply existing. Retrying is the
+        correct response, and the retry sends the same bytes because nothing was
+        recorded as dispatched."""
+        deadline = time.time() + BUSY_RETRY_S
+        while True:
+            try:
+                return self._rpc(payload_body, op)
+            except Busy:
+                if time.time() >= deadline:
+                    raise KmirError(
+                        f"kudos stayed busy for {BUSY_RETRY_S}s (op 0x{op:02x}) — "
+                        "its input ring is not draining"
+                    )
+                time.sleep(BUSY_PAUSE_S)
 
     def mcp(self, request):
         """Send one MCP JSON-RPC request to kudos (AGT-011/AGT-013) and return
@@ -243,7 +283,69 @@ class Client:
         bytes (keyboard.KEY_UP = 0x10), so they go through as plain characters."""
         if not 0 <= ascii_byte <= 0xFF:
             raise KmirError(f"KEY ascii out of range: {ascii_byte}")
-        self._rpc(struct.pack("<BB", ascii_byte, named), OP_KEY)
+        self._rpc_until_accepted(struct.pack("<BB", ascii_byte, named), OP_KEY)
+
+    def inject_text(self, text):
+        """Type a whole string on kudos, and do not return until every byte of it
+        has been accepted (DIAG-020).
+
+        One key per datagram made a 144-character command line 144 round trips —
+        144 chances to lose a byte, each one turning the command into a DIFFERENT
+        command rather than a failed one. This sends the line in CHUNK-sized
+        pieces and resumes from the count kudos reports, so a full input ring
+        costs a retry instead of a corrupt command."""
+        data = text.encode() if isinstance(text, str) else bytes(text)
+        sent = 0
+        deadline = time.time() + BUSY_RETRY_S
+        while sent < len(data):
+            piece = data[sent:sent + CHUNK]
+            body = self._rpc_until_accepted(piece, OP_TEXT)
+            if len(body) < 2:
+                raise KmirError("TEXT reply carried no count")
+            took = struct.unpack_from("<H", body)[0]
+            if took == 0:
+                # Zero is not a failure — it is the same "no room right now"
+                # ERR_BUSY reports for a single key, expressed as a count. Wait
+                # for the desktop to drain and ask again.
+                if time.time() >= deadline:
+                    raise KmirError(
+                        f"kudos took 0 more bytes for {BUSY_RETRY_S}s at offset {sent} "
+                        f"of {len(data)} — its input ring is not draining"
+                    )
+                time.sleep(BUSY_PAUSE_S)
+                continue
+            sent += took
+            # The budget measures a STALL, not the whole transfer: a long paste
+            # into a slow guest is progress, and must not time out for being big.
+            deadline = time.time() + BUSY_RETRY_S
+        return sent
+
+    def focus_window(self, needle, timeout_s=2.0):
+        """Focus the front-most visible window whose title contains `needle`, and
+        return the title that ended up focused (DIAG-021).
+
+        Injected keys go wherever focus happens to be, so every remote typing
+        session starts by deciding which window that is. The alternative — click
+        the title bar — needs coordinates that change whenever a window moves.
+
+        The desktop applies the change on its own core, so this asks and then
+        confirms by re-reading until the title matches or the budget expires."""
+        title = self._rpc(needle.encode(), OP_FOCUS).decode("utf-8", "replace")
+        deadline = time.time() + timeout_s
+        while needle not in title:
+            if time.time() >= deadline:
+                raise KmirError(
+                    f"no window matching '{needle}' took focus within {timeout_s}s "
+                    f"(focus is on '{title}')"
+                )
+            time.sleep(BUSY_PAUSE_S)
+            title = self.focused_window()
+        return title
+
+    def focused_window(self):
+        """The title of the window a keystroke would go to right now (DIAG-022).
+        An empty needle is the query form: it reports without changing focus."""
+        return self._rpc(b"", OP_FOCUS).decode("utf-8", "replace")
 
     def inject_mouse(self, dx, dy, buttons):
         """Relative pointer motion + button mask (bit0 L, bit1 R, bit2 M).

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end tests of the openclaw agent loop on the host: the real loop.run
+"""End-to-end tests of the agent loop on the host: the real loop.run
 (built into scripts/agent/hostagent.zig) driven by a stub OpenRouter, using the
 real compile factory, kernel loader, and hot-load core. Proves both cycles —
 app: prompt -> compile -> run -> answer (the generated app computes 639); and

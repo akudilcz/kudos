@@ -81,6 +81,22 @@ pub fn build(b: *std.Build) void {
     // into whichever window has focus. Empty by default — a guest given nothing
     // extra boots exactly as it always did.
     const guest_cmdline = b.option([]const u8, "guest-cmdline", "extra words appended to the staged guest's kernel command line") orelse "";
+
+    // The agent's sealed service credential (spec AGT-017) and the passphrase
+    // that opens it. Reading the credential from the USB stick (AGT-004) leaves
+    // the agent dead on every machine without one — the emulator, this laptop —
+    // so the image can carry it instead, as CIPHERTEXT.
+    //
+    // The default source is secrets/agent-key.b64, which is NOT tracked: sealing
+    // once survives every later rebuild without the operator holding a base64
+    // blob, and the repository never contains the credential in any form. Absent,
+    // the option is empty and the agent falls back to the stick exactly as before.
+    const agent_key = b.option([]const u8, "agent-key", "base64 sealed agent credential (default: secrets/agent-key.b64)") orelse blk: {
+        const io = b.graph.io;
+        const text = std.Io.Dir.cwd().readFileAlloc(io, b.pathFromRoot("secrets/agent-key.b64"), b.allocator, .limited(8 * 1024)) catch break :blk "";
+        break :blk std.mem.trim(u8, text, " \t\r\n");
+    };
+    const agent_password = b.option([]const u8, "agent-password", "bake in the passphrase that opens the sealed credential (unattended rigs only; default: ask)") orelse "";
     const guest_bzimage_rel = b.fmt("{s}/bzImage", .{guest_dir});
     const guest_initramfs_rel = b.fmt("{s}/initramfs.cpio.gz", .{guest_dir});
     const guest_present = blk: {
@@ -491,6 +507,8 @@ pub fn build(b: *std.Build) void {
         buildinfo.addOption(bool, "heartbeat", heartbeat);
         buildinfo.addOption([]const u8, "staged_guest", staged_guest_name);
         buildinfo.addOption([]const u8, "guest_cmdline", guest_cmdline);
+        buildinfo.addOption([]const u8, "agent_key", agent_key);
+        buildinfo.addOption([]const u8, "agent_password", agent_password);
         // verify-script is SMP-only: verifyscript.spawn creates a scheduler task
         // (sched.spawn/enqueue), and only the SMP image runs the per-core
         // scheduler. Injecting it into the single-core image would silently
@@ -625,6 +643,8 @@ pub fn build(b: *std.Build) void {
     pure_buildinfo.addOption(bool, "heartbeat", heartbeat);
     pure_buildinfo.addOption([]const u8, "staged_guest", staged_guest_name);
     pure_buildinfo.addOption([]const u8, "guest_cmdline", guest_cmdline);
+    pure_buildinfo.addOption([]const u8, "agent_key", agent_key);
+    pure_buildinfo.addOption([]const u8, "agent_password", agent_password);
     pure_buildinfo.addOption(bool, "verify_script", false);
     for ([_]HostSuite{
         .{ .n = "calc", .s = "src/drivers/gpu/base/calc.zig" }, // GPU MSI/MTRR + pitch math
@@ -637,6 +657,8 @@ pub fn build(b: *std.Build) void {
         .{ .n = "dhcp_wire", .s = "src/drivers/net/stack/dhcp_wire.zig" }, // DHCP option parse + "the lease is the address" acceptance rule
         .{ .n = "dns_wire", .s = "src/drivers/net/stack/dns_wire.zig" }, // DNS A-query build + answer parse (attacker-controlled input)
         .{ .n = "tlskeys", .s = "src/drivers/net/stack/tlskeys.zig" }, // TLS 1.3 handshake key schedule vs the RFC 8448 vectors
+        .{ .n = "tlsstream", .s = "src/drivers/net/stack/tlsstream.zig" }, // TLS plaintext read policy + failure naming (NET-016/017)
+        .{ .n = "netown", .s = "src/drivers/net/stack/netown.zig" }, // who may drive the stack: claim/skip policy (NET-018)
         .{ .n = "igc_desc", .s = "src/drivers/net/nic/igc_desc.zig" }, // I226 advanced-descriptor codec — QEMU runs e1000, so this has NO emulated coverage
         .{ .n = "edid", .s = "src/drivers/gpu/display/edid.zig" }, // VESA E-EDID preferred-mode parse
         .{ .n = "keymap", .s = "src/drivers/input/keymap.zig" }, // PS/2 scancode + USB HID → ASCII
@@ -650,6 +672,7 @@ pub fn build(b: *std.Build) void {
         .{ .n = "runner", .s = "src/kernel/loader/runner.zig" }, // .kudos loader placement mechanics (verify → copy → zero → entry)
         .{ .n = "features", .s = "src/kernel/loader/features.zig" }, // feature-command registry: exact lookup, replace-in-place, loud overflow
         .{ .n = "config", .s = "src/agent/config.zig" }, // AI.CFG key/factory/model parse
+        .{ .n = "keystore", .s = "src/agent/keystore.zig" }, // the sealed service credential: PBKDF2 + AEAD envelope (AGT-017)
         .{ .n = "openrouter", .s = "src/agent/openrouter.zig" }, // chat wire: request build, response + SSE parse
         .{ .n = "prompt", .s = "src/agent/prompt.zig" }, // system prompt; ABI-generated capability docs
         .{ .n = "history", .s = "src/agent/history.zig" }, // bounded conversation with pinned system message
@@ -664,7 +687,7 @@ pub fn build(b: *std.Build) void {
         .{ .n = "rtc_decode", .s = "src/kernel/timer/rtc_decode.zig" }, // RTC snapshot decode: BCD/12h/century → civil + epoch
         .{ .n = "uptime", .s = "src/kernel/timer/uptime.zig" }, // the wall-clock definition: TSC-derived once calibrated, so no core failure can stop time
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/debug/crashlog_test.zig" }, // per-core crash records: the fatal path's lock-free output channel
-        .{ .n = "aiconsole", .s = "src/agent/aiconsole.zig" }, // openclaw console: prompt vs /command parsing
+        .{ .n = "aiconsole", .s = "src/agent/aiconsole.zig" }, // agent console: prompt vs /command parsing
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/debug/backtrace_test.zig" }, // RBP frame-pointer backtrace walk
         .{ .n = "surface", .s = "src/ui/screen/surface.zig" }, // alpha-blend fast path (blendConst) exactness
         .{ .n = "geom", .s = "src/ui/screen/geom.zig" }, // GPU-UI tessellation: rounded-rect/disc fans, quad strips
@@ -1180,6 +1203,7 @@ pub fn build(b: *std.Build) void {
         shot_ui.addImport("theme", theme_mod);
         const vmconsole_mod = b.createModule(.{ .root_source_file = b.path("src/apps/vmconsole.zig") });
         vmconsole_mod.addImport("keymap", keymap_mod); // the named-key control bytes vmconsole encodes
+        vmconsole_mod.addImport("ring", ring_mod); // SerialQueue's FIFO of bytes owed to the guest
         const t = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("test/ui/vm_shot.zig"), .target = b.graph.host, .optimize = optimize }) });
         t.root_module.addImport("gles", gles_mod);
         t.root_module.addImport("idraw", idraw_mod);

@@ -9,6 +9,36 @@ const tcp_tx = @import("tcp_tx.zig");
 const timer = @import("../../../kernel/timer/timer.zig");
 const sched = @import("../../../kernel/sched/sched.zig");
 
+/// An ACK owed to the peer, deferred out of the receive path (spec NET-019).
+///
+/// Every ACK this module used to emit was sent from inside `handleTcp`, which
+/// runs inside `net.pump()`, which the 60 Hz session loop calls every frame. The
+/// send resolves its next hop, and on an ARP miss `resolveMac` spins the receive
+/// path for up to a second — a full second of no rendering, from a handler that
+/// had no business sending at all. `handleIcmp` documents this exact hazard and
+/// refuses to resolve; this is the same rule, applied where it was missing.
+///
+/// ONE flag, not a queue, and that is not a compromise: a TCP acknowledgement is
+/// CUMULATIVE, so the newest `rcv_nxt` supersedes every earlier one. Coalescing
+/// a pump's worth of ACKs into a single send is exactly correct, and it delivers
+/// delayed-ACK batching for free.
+///
+/// The sizing invariant that keeps one-ACK-per-pump safe: a pump drains at most
+/// `net.MAX_DRAIN_PER_PUMP` segments, so `MAX_DRAIN_PER_PUMP × peer MSS` must
+/// stay under the advertised window, or a window-limited transfer would stall
+/// waiting for an acknowledgement that only arrives after the drain. It holds
+/// today (32 × 1460 ≈ 46 KB against a 64 KB window); raising either without the
+/// other breaks it silently.
+var ack_pending: bool = false;
+
+/// Emit the acknowledgement owed to the peer, if any. Called at the TOP level of
+/// the network pump — outside the receive dispatch, where sending is safe.
+pub fn serviceDeferredAck() void {
+    if (!ack_pending) return;
+    ack_pending = false;
+    _ = sendTcp(ACK, "");
+}
+
 const State = enum { closed, syn_sent, established };
 var state: State = .closed;
 var local_port: u16 = 0;
@@ -163,7 +193,7 @@ pub fn handleTcp(src: [4]u8, p: []const u8) void {
         peer_window = net.rbe16(p[14..16]);
         peer_mss = parseMss(p, data_off);
         state = .established;
-        _ = sendTcp(ACK, "");
+        ack_pending = true;
         return;
     }
 
@@ -189,7 +219,7 @@ pub fn handleTcp(src: [4]u8, p: []const u8) void {
                 if (recv_buf) |*rb| {
                     if (rb.appendSlice(fresh)) |_| {
                         rcv_nxt +%= @intCast(fresh.len);
-                        _ = sendTcp(ACK, ""); // ACK only when new data advances rcv_nxt
+                        ack_pending = true; // ACK only when new data advances rcv_nxt
                     } else |_| {
                         net.dbg("tcp: recv_buf grow failed; dropping segment\n");
                     }
@@ -206,7 +236,7 @@ pub fn handleTcp(src: [4]u8, p: []const u8) void {
                 // the window-opening ACK is lost. One ACK
                 // per received duplicate cannot storm — the peer's retransmit
                 // timer paces it.
-                _ = sendTcp(ACK, "");
+                ack_pending = true;
             }
         }
         // The FIN occupies the sequence number AFTER the segment's data
@@ -217,7 +247,7 @@ pub fn handleTcp(src: [4]u8, p: []const u8) void {
         if ((flags & FIN) != 0 and seq +% @as(u32, @intCast(payload.len)) == rcv_nxt) {
             rcv_nxt +%= 1;
             fin_recv = true;
-            _ = sendTcp(ACK, "");
+            ack_pending = true;
         }
     }
 }

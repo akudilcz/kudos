@@ -237,6 +237,27 @@ pub const Wm = struct {
             x1 = @max(x1, r.x + r.w);
             y1 = @max(y1, r.y + r.h);
         }
+        // Any animating window the box TOUCHES is swallowed whole (DSK-021).
+        // Its pixels come from the clock, so repainting part of it mixes two
+        // instants in one frame — a band of the model at this angle inside the
+        // model at an older one. Repeated as it turns, that reads as the image
+        // tearing and healing rather than as anything to do with damage.
+        for (self.windows.items) |w| {
+            if (!w.animates or w.minimized) continue;
+            // The window's rect in the same clamped screen space the dirty set
+            // uses: a window may be dragged past the left or top edge, damage
+            // cannot follow it there (markRect clamps the same way).
+            const wx0: usize = @intCast(@max(w.x, 0));
+            const wy0: usize = @intCast(@max(w.y, 0));
+            const wx1: usize = @intCast(@max(w.x + @as(i32, @intCast(w.w)), 0));
+            const wy1: usize = @intCast(@max(w.y + @as(i32, @intCast(w.h)), 0));
+            if (x0 >= wx1 or wx0 >= x1) continue;
+            if (y0 >= wy1 or wy0 >= y1) continue;
+            x0 = @min(x0, wx0);
+            y0 = @min(y0, wy0);
+            x1 = @max(x1, wx1);
+            y1 = @max(y1, wy1);
+        }
         return .{ .full = false, .x = @intCast(x0), .y = @intCast(y0), .w = @intCast(x1 - x0), .h = @intCast(y1 - y0) };
     }
 
@@ -316,6 +337,41 @@ pub const Wm = struct {
         win.minimized = false;
         self.markFull();
         self.focus(win);
+    }
+
+    /// Focus the front-most visible window whose title CONTAINS `needle`, and
+    /// return it; null when nothing matches (focus is then left alone).
+    ///
+    /// Substring, not equality: titles carry decoration a caller should not have
+    /// to reproduce exactly ("linux #0", "terminal 2"). Front-most first, so
+    /// "terminal" with three of them open picks the one the user last used
+    /// rather than the oldest. Minimised windows are skipped — focusing a hidden
+    /// window would route keystrokes somewhere invisible, which is worse than
+    /// not matching at all.
+    ///
+    /// Idempotent by construction: focusing the already-focused window is the
+    /// no-op `focus` already implements, so a caller may repeat the request
+    /// without checking first.
+    pub fn focusByTitle(self: *Wm, needle: []const u8) ?*Window {
+        if (needle.len == 0) return null;
+        var i: usize = self.windows.items.len;
+        while (i > 0) {
+            i -= 1;
+            const cand = self.windows.items[i];
+            if (cand.minimized) continue;
+            if (std.mem.indexOf(u8, cand.title, needle) == null) continue;
+            self.focus(cand);
+            return cand;
+        }
+        return null;
+    }
+
+    /// The focused window's title, or an empty slice when nothing is focused.
+    /// The answer to "where would a keystroke go right now" — which is what a
+    /// remote injector has to know before it types.
+    pub fn focusedTitle(self: *const Wm) []const u8 {
+        const f = self.focused orelse return "";
+        return f.title;
     }
 
     pub fn focus(self: *Wm, win: *Window) void {

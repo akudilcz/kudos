@@ -42,20 +42,26 @@ test "the AI agent window prompts `ai>`; a shell terminal prompts `#<core>` (AGT
     const win = try window.create(a, 1, 0, 0, 400, 300, "t");
     defer a.destroy(win);
 
-    // Both write their greeting to row 0 and their prompt to row 0 of the next
-    // row. The distinguishing cell is the first prompt character: `a` of `ai> `
-    // for the agent window, `#` of `#<core>:<cwd>> ` for a shell terminal.
+    // Each writes a greeting and then its prompt. The distinguishing cell is the
+    // first prompt character: `a` of `ai> ` for the agent, `#` of
+    // `#<core>:<cwd>> ` for a shell.
+    //
+    // The prompt row is taken from the CURSOR, not assumed to be row 1: the
+    // greetings are different lengths and are free to change, and pinning the
+    // row made this test fail for a banner edit that broke nothing it claims to
+    // check.
     const shell_term = try Terminal.create(a, win, undefined, 0, null, false);
     try expect(!shell_term.ai_mode);
-    try expectEqual(@as(u8, '#'), shell_term.cells[terminal.MAX_COLS].ch);
+    try expectEqual(@as(u8, '#'), shell_term.cells[shell_term.cy * terminal.MAX_COLS].ch);
     shell_term.destroy(a);
 
     const ai_term = try Terminal.create(a, win, undefined, 0, null, true);
     defer ai_term.destroy(a);
     try expect(ai_term.ai_mode);
-    try expectEqual(@as(u8, 'a'), ai_term.cells[terminal.MAX_COLS + 0].ch);
-    try expectEqual(@as(u8, 'i'), ai_term.cells[terminal.MAX_COLS + 1].ch);
-    try expectEqual(@as(u8, '>'), ai_term.cells[terminal.MAX_COLS + 2].ch);
+    const row = ai_term.cy * terminal.MAX_COLS;
+    try expectEqual(@as(u8, 'a'), ai_term.cells[row + 0].ch);
+    try expectEqual(@as(u8, 'i'), ai_term.cells[row + 1].ch);
+    try expectEqual(@as(u8, '>'), ai_term.cells[row + 2].ch);
 }
 
 test "visible cols/rows always follow the window's content area" {

@@ -28,6 +28,14 @@ const hud = @import("../ui/desktop/hud.zig");
 const prof = @import("../drivers/gpu/prof.zig");
 const iaccel = @import("iaccel");
 const Desktop = @import("../ui/desktop/desktop.zig").Desktop;
+const Window = @import("../ui/wm/window.zig").Window;
+
+/// The window whose title was last published to the remote-request inbox. Only
+/// a CHANGE of focused window is republished — this loop runs at kHz and the
+/// title would otherwise be copied thousands of times a second to say the same
+/// thing. Starts null, which is also "nothing focused", so the first real focus
+/// always publishes.
+var last_published_focus: ?*Window = null;
 
 /// The desktop the pumps drive. Created inside main's run(); the no-arg
 /// callback pumps and the SMP system task reach it through this global.
@@ -79,6 +87,23 @@ fn dispatchInput(d: *Desktop) bool {
         spawnByName(d, name) catch |e|
             klog.puts(std.fmt.bufPrint(&msg, "agent open_app '{s}' failed: {s}\n", .{ name, @errorName(e) }) catch "agent open_app failed\n");
         changed = true;
+    }
+    // A remote focus-by-name request (DIAG-020), from the same inbox and for the
+    // same reason: the window list is the desktop's, and this is its core. A
+    // needle that matches nothing is traced rather than ignored — silence would
+    // read exactly like a window that never opened.
+    if (fileserv.takeFocusRequest()) |needle| {
+        if (d.wm.focusByTitle(needle) != null) {
+            changed = true;
+        } else {
+            klog.puts(std.fmt.bufPrint(&msg, "focus: no visible window matching '{s}'\n", .{needle}) catch "focus: no match\n");
+        }
+    }
+    // Publish where a keystroke would land, for the remote injector that has to
+    // know before it types.
+    if (d.wm.focused != last_published_focus) {
+        last_published_focus = d.wm.focused;
+        fileserv.publishFocus(d.wm.focusedTitle());
     }
     while (keyboard.poll()) |ev| {
         // PERF-008: this event's visible effect (echo, spawned window) rides the

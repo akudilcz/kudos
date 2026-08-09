@@ -64,6 +64,9 @@ pub const Vm = struct {
     ptr_x: u32 = 0,
     ptr_y: u32 = 0,
     ptr_buttons: u8 = 0,
+    /// Keystrokes owed to the guest's serial port, in order (VIRT-036). Drained
+    /// as far as the guest's ring will take on every send and every tick.
+    serial: vmconsole.SerialQueue = .{},
     fb_tex: u32 = 0, // guest scanout texture, 0 = none
     fb_gen: u32 = 0, // ivirt generation the texture was built for
     /// Whether the guest has FLUSHED at least one real frame into the scanout.
@@ -85,11 +88,30 @@ pub const Vm = struct {
     /// line-oriented tty expects.
     pub fn onKey(self: *Vm, ascii: u8) void {
         if (vmconsole.keySequence(ascii)) |seq| {
-            for (seq) |b| _ = ivirt.conInput(self.id, b);
+            for (seq) |b| self.sendSerial(b);
             return;
         }
-        const b: u8 = if (ascii == '\n') RETURN else ascii;
-        _ = ivirt.conInput(self.id, b);
+        self.sendSerial(if (ascii == '\n') RETURN else ascii);
+    }
+
+    /// One byte to the guest's serial port, in order, waiting if it must (spec
+    /// VIRT-036). Queue first, then push as far as the guest's ring allows —
+    /// never straight through, so nothing can overtake what is already waiting.
+    fn sendSerial(self: *Vm, b: u8) void {
+        if (!self.serial.offer(b)) ivirt.countInputDrop(self.id);
+        _ = self.drainSerial();
+    }
+
+    /// Hand the guest as much of the queue as its ring will take. Returns true
+    /// when a byte moved, so a window that still owes bytes keeps being ticked.
+    fn drainSerial(self: *Vm) bool {
+        var moved = false;
+        while (self.serial.next()) |b| {
+            if (!ivirt.conInput(self.id, b)) break;
+            self.serial.advance();
+            moved = true;
+        }
+        return moved;
     }
 
     /// Deliver one key edge to the guest's virtio keyboard. The guest sees the
@@ -130,17 +152,24 @@ pub const Vm = struct {
         }
     }
 
-    /// Drain guest serial output into the console grid. Returns true when
-    /// something was fed.
+    /// Drain guest serial output into the console grid, and report whether this
+    /// window changed (spec VIRT-035) — which is what makes the desktop render a
+    /// frame at all.
+    ///
+    /// The guest's own painting counts, and on a graphical guest it is the whole
+    /// answer: once its compositor owns the screen no serial byte ever arrives
+    /// again, so serial alone reports "nothing changed" forever while the guest
+    /// redraws behind it. The flush flag is PEEKED here and consumed in prepareGl
+    /// — taking it here would swallow the flush and upload a stale texture.
     pub fn tick(self: *Vm) bool {
-        var fed = false;
+        var fed = self.drainSerial();
         var n: usize = 0;
         while (n < SERIAL_DRAIN_PER_TICK) : (n += 1) {
             const b = ivirt.conRead(self.id) orelse break;
             self.console.feed(b);
             fed = true;
         }
-        return fed;
+        return fed or ivirt.fbDirty(self.id);
     }
 
     pub fn onResize(self: *Vm) bool {

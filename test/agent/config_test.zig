@@ -5,7 +5,7 @@ const config = @import("config");
 
 test "parses keys, ignoring comments, blanks, whitespace, and unknown keys (AGT-004)" {
     const text =
-        \\# openclaw config
+        \\# agent config
         \\key = sk-or-v1-abcdef
         \\
         \\factory=192.168.64.1:8623

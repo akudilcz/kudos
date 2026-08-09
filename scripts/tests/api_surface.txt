@@ -2,6 +2,8 @@
 # One line per top-level pub declaration in src/: the public surface, reviewable.
 src/agent/aiconsole.zig: pub const Input = union(enum)
 src/agent/aiconsole.zig: pub fn parse(line: []const u8) Input
+src/agent/aiconsole.zig: pub const Gate = enum
+src/agent/aiconsole.zig: pub fn gate(input: Input, unlocked: bool) Gate
 src/agent/budget.zig: pub const DEFAULT_MAX_TURNS: usize = 8;
 src/agent/budget.zig: pub const DEFAULT_MAX_TOOL_CALLS: usize = 16;
 src/agent/budget.zig: pub const DEFAULT_MAX_TOKENS: usize = 100_000;
@@ -12,8 +14,29 @@ src/agent/budget.zig: pub const Exhausted = enum
 src/agent/budget.zig: pub const Budget = struct
 src/agent/config.zig: pub const Config = struct
 src/agent/config.zig: pub fn parse(text: []const u8) Config
+src/agent/credential.zig: pub const MAX_API_KEY_LEN = 128;
+src/agent/credential.zig: pub const Source = enum { none, sealed, cfg_file };
+src/agent/credential.zig: pub fn authorization() []const u8
+src/agent/credential.zig: pub fn isUnlocked() bool
+src/agent/credential.zig: pub fn from() Source
+src/agent/credential.zig: pub fn useConfigKey(key: []const u8) void
+src/agent/credential.zig: pub fn unlock(passphrase: []const u8) []const u8
+src/agent/credential.zig: pub fn tryBakedPassphrase() void
+src/agent/credential.zig: pub fn isSealedIntoBuild() bool
 src/agent/history.zig: pub const Role = enum
 src/agent/history.zig: pub const History = struct
+src/agent/keystore.zig: pub const MAGIC = "KSE1".*;
+src/agent/keystore.zig: pub const SALT_BYTES = 16;
+src/agent/keystore.zig: pub const NONCE_BYTES = Aead.nonce_length;
+src/agent/keystore.zig: pub const TAG_BYTES = Aead.tag_length;
+src/agent/keystore.zig: pub const KEY_BYTES = Aead.key_length;
+src/agent/keystore.zig: pub const HEADER_BYTES = MAGIC.len + SALT_BYTES + NONCE_BYTES + TAG_BYTES;
+src/agent/keystore.zig: pub const ITERATIONS: u32 = 200_000;
+src/agent/keystore.zig: pub const MAX_SECRET_BYTES = 128;
+src/agent/keystore.zig: pub const Error = error{
+src/agent/keystore.zig: pub fn unseal(envelope: []const u8, passphrase: []const u8, out: []u8) Error![]const u8
+src/agent/keystore.zig: pub fn seal(
+src/agent/keystore.zig: pub fn unsealBase64(b64: []const u8, passphrase: []const u8, out: []u8) Error![]const u8
 src/agent/loop.zig: pub const tools = @import("tools.zig");
 src/agent/loop.zig: pub const history = @import("history.zig");
 src/agent/loop.zig: pub const budget = @import("budget.zig");
@@ -86,6 +109,7 @@ src/apps/vmconsole.zig: pub const ROWS = 25;
 src/apps/vmconsole.zig: pub const Color = ?u4;
 src/apps/vmconsole.zig: pub fn keySequence(ascii: u8) ?[]const u8
 src/apps/vmconsole.zig: pub const Console = struct
+src/apps/vmconsole.zig: pub const SerialQueue = struct
 src/apps/vm.zig: pub const Vm = struct
 src/boot/pump.zig: pub var desktop: *Desktop = undefined;
 src/boot/pump.zig: pub fn systemLoop() noreturn
@@ -1907,7 +1931,7 @@ src/drivers/input/keyboard.zig: pub const KeyEvent = struct
 src/drivers/input/keyboard.zig: pub const hidToAscii = keymap.hidToAscii;
 src/drivers/input/keyboard.zig: pub const hidToEvdev = keymap.hidToEvdev;
 src/drivers/input/keyboard.zig: pub const MOD_USAGE_FIRST = keymap.MOD_USAGE_FIRST;
-src/drivers/input/keyboard.zig: pub fn inject(ev: KeyEvent) void
+src/drivers/input/keyboard.zig: pub fn inject(ev: KeyEvent) bool
 src/drivers/input/keyboard.zig: pub fn poll() ?KeyEvent
 src/drivers/input/keyboard.zig: pub fn init() void
 src/drivers/input/keymap.zig: pub const KEY_UP: u8 = 0x10;
@@ -1967,6 +1991,10 @@ src/drivers/net/debug/fileproto.zig: pub const OP_RINGTAIL: u8 = 0x0e; // u16 Ki
 src/drivers/net/debug/fileproto.zig: pub const OP_RINGTAIL_R: u8 = 0x8e;
 src/drivers/net/debug/fileproto.zig: pub const OP_MCP: u8 = 0x0f;
 src/drivers/net/debug/fileproto.zig: pub const OP_MCP_R: u8 = 0x8f;
+src/drivers/net/debug/fileproto.zig: pub const OP_TEXT: u8 = 0x10;
+src/drivers/net/debug/fileproto.zig: pub const OP_TEXT_R: u8 = 0x90;
+src/drivers/net/debug/fileproto.zig: pub const OP_FOCUS: u8 = 0x11;
+src/drivers/net/debug/fileproto.zig: pub const OP_FOCUS_R: u8 = 0x91;
 src/drivers/net/debug/fileproto.zig: pub const MCP_RESPONSE_FILE = "mcp-response.json";
 src/drivers/net/debug/fileproto.zig: pub const OP_ERR: u8 = 0xff;
 src/drivers/net/debug/fileproto.zig: pub const KEY_NONE: u8 = 0;
@@ -1977,6 +2005,7 @@ src/drivers/net/debug/fileproto.zig: pub const STATUS_CAP: usize = 160;
 src/drivers/net/debug/fileproto.zig: pub const ERR_UNKNOWN_NAME: u8 = 1;
 src/drivers/net/debug/fileproto.zig: pub const ERR_GENERATION: u8 = 2;
 src/drivers/net/debug/fileproto.zig: pub const ERR_BAD_REQUEST: u8 = 3;
+src/drivers/net/debug/fileproto.zig: pub const ERR_BUSY: u8 = 4;
 src/drivers/net/debug/fileproto.zig: pub const HDR_LEN: usize = 8;
 src/drivers/net/debug/fileproto.zig: pub const Header = struct { op: u8, request_id: u16 };
 src/drivers/net/debug/fileproto.zig: pub fn parseHeader(p: []const u8) ?Header
@@ -1989,6 +2018,8 @@ src/drivers/net/debug/fileproto.zig: pub const ListEntry = struct
 src/drivers/net/debug/fileproto.zig: pub fn writeListResp(buf: []u8, request_id: u16, entries: []const ListEntry) ?usize
 src/drivers/net/debug/fileproto.zig: pub fn writeErr(buf: []u8, request_id: u16, code: u8) usize
 src/drivers/net/debug/fileproto.zig: pub fn writeKeyReq(buf: []u8, request_id: u16, ascii: u8, named: u8) usize
+src/drivers/net/debug/fileproto.zig: pub fn writeTextReq(buf: []u8, request_id: u16, s: []const u8) usize
+src/drivers/net/debug/fileproto.zig: pub fn writeFocusReq(buf: []u8, request_id: u16, needle: []const u8) usize
 src/drivers/net/debug/fileproto.zig: pub fn writeMouseReq(buf: []u8, request_id: u16, dx: i16, dy: i16, buttons: u8) usize
 src/drivers/net/debug/fileproto.zig: pub fn writeMouseAbsReq(buf: []u8, request_id: u16, x: i16, y: i16, buttons: u8) usize
 src/drivers/net/debug/fileproto.zig: pub fn writeShotReq(buf: []u8, request_id: u16) usize
@@ -2007,6 +2038,10 @@ src/drivers/net/debug/fileserv.zig: pub fn takeShotRequest() bool
 src/drivers/net/debug/fileserv.zig: pub fn requestShot() void
 src/drivers/net/debug/fileserv.zig: pub fn requestSpawn(name: []const u8) void
 src/drivers/net/debug/fileserv.zig: pub fn takeSpawnRequest() ?[]const u8
+src/drivers/net/debug/fileserv.zig: pub fn requestFocus(needle: []const u8) void
+src/drivers/net/debug/fileserv.zig: pub fn takeFocusRequest() ?[]const u8
+src/drivers/net/debug/fileserv.zig: pub fn publishFocus(title: []const u8) void
+src/drivers/net/debug/fileserv.zig: pub fn focusedTitle() []const u8
 src/drivers/net/debug/fileserv.zig: pub var mcp_handler: ?*const fn (body: []const u8) void = null;
 src/drivers/net/debug/fileserv.zig: pub fn setMcpHandler(h: *const fn (body: []const u8) void) void
 src/drivers/net/debug/fileserv.zig: pub fn pingCount() u64
@@ -2134,6 +2169,9 @@ src/drivers/net/stack/http_wire.zig: pub const StreamingBody = struct
 src/drivers/net/stack/http.zig: pub const Method = enum
 src/drivers/net/stack/http.zig: pub fn request(
 src/drivers/net/stack/http.zig: pub fn requestStream(
+src/drivers/net/stack/netown.zig: pub const Holder = ?*anyopaque;
+src/drivers/net/stack/netown.zig: pub fn mayClaim(held: Holder, caller: Holder) bool
+src/drivers/net/stack/netown.zig: pub fn mustSkip(held: Holder, caller: Holder) bool
 src/drivers/net/stack/net.zig: pub const ETH_ARP = 0x0806;
 src/drivers/net/stack/net.zig: pub const ETH_IP = 0x0800;
 src/drivers/net/stack/net.zig: pub const PROTO_ICMP = wire.PROTO_ICMP;
@@ -2144,6 +2182,9 @@ src/drivers/net/stack/net.zig: pub const UDP_HLEN = wire.UDP_HLEN;
 src/drivers/net/stack/net.zig: pub const ETH_HLEN = inet.ETHER_HEADER_BYTES;
 src/drivers/net/stack/net.zig: pub const TCP_HLEN = 20; // TCP header with no options
 src/drivers/net/stack/net.zig: pub const ETH_IP_HLEN = ETH_HLEN + IP_HLEN; // start of the transport payload (34)
+src/drivers/net/stack/net.zig: pub fn claimStack() bool
+src/drivers/net/stack/net.zig: pub fn releaseStack() void
+src/drivers/net/stack/net.zig: pub fn stackHeldByOther() bool
 src/drivers/net/stack/net.zig: pub fn dbg(s: []const u8) void
 src/drivers/net/stack/net.zig: pub fn dbgx(s: []const u8, v: u64) void
 src/drivers/net/stack/net.zig: pub fn init() bool
@@ -2197,6 +2238,7 @@ src/drivers/net/stack/tcp_tx.zig: pub const MAX_TRIES: u32 = 8;
 src/drivers/net/stack/tcp_tx.zig: pub const Transport = struct
 src/drivers/net/stack/tcp_tx.zig: pub const Progress = enum { sending, done, failed };
 src/drivers/net/stack/tcp_tx.zig: pub const Sender = struct
+src/drivers/net/stack/tcp.zig: pub fn serviceDeferredAck() void
 src/drivers/net/stack/tcp.zig: pub fn handleTcp(src: [4]u8, p: []const u8) void
 src/drivers/net/stack/tcp.zig: pub fn connect(ip: [4]u8, port: u16) bool
 src/drivers/net/stack/tcp.zig: pub const ConnState = enum { connecting, established, refused };
@@ -2220,6 +2262,8 @@ src/drivers/net/stack/tlsclient.zig: pub fn end(c: *Client) Writer.Error!void
 src/drivers/net/stack/tlsclient.zig: pub fn eof(c: Client) bool
 src/drivers/net/stack/tlskeys.zig: pub fn Handshake(comptime P: type) type
 src/drivers/net/stack/tlskeys.zig: pub fn handshake(
+src/drivers/net/stack/tlsstream.zig: pub fn readAvailable(r: *std.Io.Reader, buf: []u8) std.Io.Reader.Error!usize
+src/drivers/net/stack/tlsstream.zig: pub fn describeRead(read_err: ?TlsClient.ReadError, fallback: anyerror) []const u8
 src/drivers/net/stack/tls.zig: pub const Session = struct
 src/drivers/net/stack/tls.zig: pub fn open(host: []const u8) inet.FetchError!Session
 src/drivers/net/stack/udp.zig: pub fn handleUdp(src: [4]u8, p: []const u8) void
@@ -2585,6 +2629,7 @@ src/iface/ivirt.zig: pub fn stopRequested(id: Id) bool
 src/iface/ivirt.zig: pub fn conWrite(id: Id, b: u8) bool
 src/iface/ivirt.zig: pub fn conRead(id: Id) ?u8
 src/iface/ivirt.zig: pub fn conInput(id: Id, b: u8) bool
+src/iface/ivirt.zig: pub fn countInputDrop(id: Id) void
 src/iface/ivirt.zig: pub fn inputPost(id: Id, ev: InputEvent) bool
 src/iface/ivirt.zig: pub fn inputFetch(id: Id) ?InputEvent
 src/iface/ivirt.zig: pub fn droppedInput(id: Id) u64
@@ -2605,6 +2650,7 @@ src/iface/ivirt.zig: pub fn retractFb(id: Id) void
 src/iface/ivirt.zig: pub const Fb = struct { ptr: [*]const u32, w: u32, h: u32, gen: u32 };
 src/iface/ivirt.zig: pub fn fb(id: Id) ?Fb
 src/iface/ivirt.zig: pub fn markFbDirty(id: Id) void
+src/iface/ivirt.zig: pub fn fbDirty(id: Id) bool
 src/iface/ivirt.zig: pub fn takeFbDirty(id: Id) bool
 src/iface/ivirt.zig: pub fn reset(id: Id) void
 src/iface/iwindow.zig: pub fn requestOpen(w: u32, h: u32) void
@@ -2987,7 +3033,7 @@ src/kernel/sched/taskstat.zig: pub fn cpuPercentSince(pc: *percpu.PerCpu) u32
 src/kernel/sched/taskstat.zig: pub const TaskInfo = struct
 src/kernel/sched/taskstat.zig: pub fn taskCpuMs(t: *const Task) u64
 src/kernel/sched/taskstat.zig: pub fn snapshotTasks(core_index: u32, out: []TaskInfo) usize
-src/kernel/sched/task.zig: pub const STACK_SIZE: usize = 128 * 1024;
+src/kernel/sched/task.zig: pub const STACK_SIZE: usize = 512 * 1024;
 src/kernel/sched/task.zig: pub const TASK_LABEL_LEN: usize = 16;
 src/kernel/sched/task.zig: pub const Context = extern struct
 src/kernel/sched/task.zig: pub const TaskState = enum { runnable, running, blocked, dead };
