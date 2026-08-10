@@ -61,6 +61,14 @@ UBUNTU_ARCHIVE="http://archive.ubuntu.com/ubuntu"
 CHROME_DEB_URL="https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
 
 BUSYBOX_VERSION="1.36.1"
+
+# The toolset every image with a package manager carries: a way in over the
+# network, a compiler, and Python. A guest you cannot ssh into, build in, or
+# script is a guest you can only look at — and on a machine that persists
+# nothing, installing them after boot means installing them again every boot.
+UBUNTU_TOOLS="openssh-client openssh-server build-essential python3"
+# Alpine's names for the same three. build-base is its build-essential.
+ALPINE_TOOLS="openssh build-base python3"
 # The interactive shell every image gives a person. Pinned like the rest: a
 # guest whose shell changes under it is a guest whose transcripts stop matching.
 # Not `BASH_VERSION` — that names THIS script's own interpreter, and a build
@@ -287,6 +295,10 @@ ubuntu_rootfs() {
 apt_setup() {
     local rootfs="$1"
     APT_ROOT="$WORK/apt-root"
+    # Outside APT_ROOT, which is wiped on every setup: the downloaded packages
+    # are the expensive part and they are valid for any image built from this
+    # release.
+    APT_CACHE="$WORK/apt-archives"
     local keyring="$rootfs/usr/share/keyrings/ubuntu-archive-keyring.gpg"
     [ -f "$keyring" ] || { echo "build_guest: no archive keyring in $rootfs" >&2; exit 1; }
 
@@ -321,27 +333,42 @@ apt_fetch_unpack() {
         | sed -n "s/^'\([^']*\)'.*/\1/p" > "$uris"
     local count
     count="$(wc -l < "$uris")"
-    [ "$count" -gt 0 ] && echo "build_guest: downloading $count package(s) ..." || return 0
-    rm -f "$APT_ROOT/var/cache/apt/archives"/*.deb
-    # --retry, and four at a time rather than eight: a few hundred parallel
-    # requests to one mirror is a good way to be reset by it, and a build that
-    # dies two thirds of the way through a download has thrown away everything
-    # it fetched. Retries make a transient reset cost seconds instead of a run.
-    ( cd "$APT_ROOT/var/cache/apt/archives" &&
-      xargs -n1 -P4 curl -fsSL --retry 4 --retry-delay 2 --retry-connrefused -O < "$uris" )
-    # Every URI must have produced a file: xargs reports a failure it kept going
-    # past with one status for the lot, so count rather than trust it.
-    local got
-    got="$(find "$APT_ROOT/var/cache/apt/archives" -name '*.deb' | wc -l)"
-    [ "$got" -eq "$count" ] || {
-        echo "build_guest: downloaded $got of $count packages — refusing to unpack a partial set" >&2
-        exit 1
-    }
+    [ "$count" -gt 0 ] && echo "build_guest: resolving to $count package(s) ..." || return 0
+
+    # A PERSISTENT cache, kept across builds and across images: the four images
+    # share most of a base system, and rebuilding one should not re-download what
+    # the last one already fetched. It also makes a mirror that resets a
+    # connection cost one file rather than a whole build, because everything
+    # fetched before it is still there.
+    mkdir -p "$APT_CACHE"
+    local want missing=0
+    while read -r uri; do
+        want="$APT_CACHE/$(basename "$uri")"
+        [ -s "$want" ] || { echo "$uri"; missing=$((missing + 1)); }
+    done < "$uris" > "$APT_ROOT/missing.txt"
+    missing="$(wc -l < "$APT_ROOT/missing.txt")"
+    if [ "$missing" -gt 0 ]; then
+        echo "build_guest: downloading $missing of them ($((count - missing)) already cached) ..."
+        # Four at a time rather than eight: a few hundred parallel requests to one
+        # mirror is a good way to be reset by it. Retries make a transient reset
+        # cost seconds instead of a run.
+        ( cd "$APT_CACHE" &&
+          xargs -n1 -P4 curl -fsSL --retry 4 --retry-delay 2 --retry-connrefused -O \
+            < "$APT_ROOT/missing.txt" )
+    fi
+
+    # Unpack exactly the resolved set, named from the URI list — NOT everything
+    # in the cache, which now holds packages other images asked for.
     echo "build_guest: unpacking $count package(s) into the rootfs ..."
     local deb
-    for deb in "$APT_ROOT/var/cache/apt/archives"/*.deb; do
+    while read -r uri; do
+        deb="$APT_CACHE/$(basename "$uri")"
+        [ -s "$deb" ] || {
+            echo "build_guest: $(basename "$uri") never downloaded — refusing to unpack a partial set" >&2
+            exit 1
+        }
         dpkg -x "$deb" "$rootfs"
-    done
+    done < "$uris"
 }
 
 apt_unpack() {
@@ -809,7 +836,7 @@ alpine_rootfs "$ROOTFS"
     --repository "$ALPINE_MIRROR/$ALPINE_BRANCH/main" \
     --repository "$ALPINE_MIRROR/$ALPINE_BRANCH/community" \
     --no-cache --no-scripts --no-interactive \
-    add bash mesa-dri-gallium mesa-egl mesa-gbm weston weston-backend-drm \
+    add bash $ALPINE_TOOLS mesa-dri-gallium mesa-egl mesa-gbm weston weston-backend-drm \
         weston-clients xkeyboard-config seatd eudev font-dejavu \
         adwaita-icon-theme librsvg gsettings-desktop-schemas dbus firefox-esr \
         stress-ng
@@ -1401,7 +1428,8 @@ image_zigserver() {
     # python3 runs the factory; binutils is the readelf it proves position
     # independence with; the Zig toolchain arrives below, not from a package,
     # because the version has to match this repo's exactly.
-    apk_add "$ROOTFS" python3 binutils bash
+    # shellcheck disable=SC2086 # the tool list is a deliberate word-split
+    apk_add "$ROOTFS" python3 binutils bash $ALPINE_TOOLS
 
     # This image's console is a getty, so root must be an account login will
     # actually open — Alpine ships it locked.
@@ -1571,8 +1599,8 @@ image_ubuntu() {
     # lists already in place, so `apt install` works without `apt update` first
     # — which on a guest that persists nothing would otherwise be a download
     # paid over again on every single boot.
-    apt_setup "$ROOTFS"
-    apt_ship_lists "$ROOTFS"
+    # shellcheck disable=SC2086 # the tool list is a deliberate word-split
+    apt_unpack "$ROOTFS" $UBUNTU_TOOLS
 
     # busybox: the DHCP client and the link configuration ubuntu-base has
     # neither of — it ships no dhcp client at all, and no iproute2, so without
@@ -1696,6 +1724,12 @@ image_desktop() {
     # The session, the toolkit stack the applications need, and the applications.
     # --no-install-recommends throughout (apt_unpack), because a recommends tree
     # on a metapackage is how a 600 MB image becomes a 2 GB one.
+    # libglib2.0-bin and libgdk-pixbuf2.0-bin are here for their TOOLS, not their
+    # libraries: glib-compile-schemas and gdk-pixbuf-query-loaders build the two
+    # caches without which no GTK application starts, and the init runs them at
+    # first boot because dpkg -x never ran the maintainer scripts that would.
+    # They look unused in this list, and removing them is a grey screen.
+    #
     # XFCE on Xorg: a whole desktop — panel, menu, desktop icons, file manager,
     # settings, task manager — that was designed to run without a GPU and still
     # does. No Vulkan drivers and no GL compositor: there is no device for either
@@ -1703,8 +1737,10 @@ image_desktop() {
     apt_unpack "$ROOTFS" \
         xfce4 xfce4-terminal xfce4-taskmanager mousepad ristretto \
         xserver-xorg-core xserver-xorg-input-libinput xinit xauth \
-        dbus-x11 xdg-utils ca-certificates openssh-client \
-        libgl1-mesa-dri fonts-dejavu-core fonts-liberation
+        dbus-x11 xdg-utils ca-certificates \
+        libglib2.0-bin libgdk-pixbuf2.0-bin udev \
+        libgl1-mesa-dri fonts-dejavu-core fonts-liberation \
+        $UBUNTU_TOOLS
     deb_unpack "$ROOTFS" "$CHROME_DEB_URL"
 
     # busybox for the DHCP client and link setup, as the server image does.
@@ -1778,6 +1814,32 @@ EOF
 </channel>
 EOF
 
+    # Xorg does not recognise virtio-gpu's PCI id, so its autoconfiguration finds
+    # no driver for the device and falls back to fbdev and vesa — neither of
+    # which Ubuntu ships any more. What it says then is "Cannot run in
+    # framebuffer mode. Please specify busIDs", which sounds like a
+    # configuration problem and is really an empty device list.
+    #
+    # modesetting is the generic KMS driver, and a KMS device is exactly what
+    # the guest has. Naming it is the whole fix, and it is a config file rather
+    # than a change to anything Ubuntu ships.
+    mkdir -p "$ROOTFS/etc/X11/xorg.conf.d"
+    cat > "$ROOTFS/etc/X11/xorg.conf.d/10-kudos-modesetting.conf" <<'EOF'
+Section "Device"
+    Identifier  "kudos virtio-gpu"
+    Driver      "modesetting"
+    Option      "kmsdev" "/dev/dri/card0"
+    # No hardware cursor: the scanout kudos composites is a plain pixel buffer,
+    # so a cursor drawn by a plane nobody reads is a cursor that is not there.
+    Option      "HWCursor" "false"
+EndSection
+
+Section "Screen"
+    Identifier  "kudos screen"
+    Device      "kudos virtio-gpu"
+EndSection
+EOF
+
     cat > "$ROOTFS/etc/motd" <<EOF
 Ubuntu $UBUNTU_RELEASE desktop (XFCE on Xorg, software-rendered) — runs from RAM.
   chrome · xfce4-terminal · thunar · mousepad · ssh    nothing persists a reboot.
@@ -1824,6 +1886,19 @@ export XDG_CONFIG_HOME=/root/.config
 # llvmpipe is the renderer, and it threads: give it the cores the guest has.
 export LP_NUM_THREADS=\$(nproc)
 
+# udev, because Xorg finds its devices through it and nothing else here would
+# start one. Without a running udevd, X enumerates no DRM device at all and
+# fails with "Cannot run in framebuffer mode. Please specify busIDs" — a message
+# about configuration for what is really an empty device list — and it would
+# find no keyboard or mouse either. Stock Ubuntu runs this from its init system;
+# this guest has no init system, so it runs it here.
+for udevd in /usr/lib/systemd/systemd-udevd /lib/systemd/systemd-udevd /sbin/udevd; do
+    [ -x "\$udevd" ] && { "\$udevd" --daemon && echo "desktop: udevd started (\$udevd)"; break; }
+done
+udevadm trigger --action=add >/dev/null 2>&1
+udevadm settle --timeout=10 >/dev/null 2>&1
+[ -e /dev/dri/card0 ] && echo "desktop: /dev/dri/card0 present" || echo "desktop: NO DRM DEVICE — X will not start"
+
 # EVERYTHING dpkg -x DOES NOT DO. Unpacking a package is not installing one: the
 # maintainer scripts that generate the caches below never run, and each thing
 # they generate is load-bearing for a desktop rather than an optimisation.
@@ -1854,7 +1929,10 @@ cache schemas /usr/share/glib-2.0/schemas/gschemas.compiled \\
     glib-compile-schemas /usr/share/glib-2.0/schemas
 # Without the loader cache GTK can decode no image at all, which means no icon,
 # no theme and no panel.
-cache pixbuf "" gdk-pixbuf-query-loaders --update-cache
+# By full path: Ubuntu installs this one in a multiarch subdirectory rather than
+# on PATH, so calling it by name finds nothing and fails as "command not found"
+# — which reads exactly like the package being absent when it is present.
+cache pixbuf "" /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders --update-cache
 # Thunar sorts and opens by MIME type; without the database everything is an
 # unknown blob.
 cache mime /usr/share/mime/mime.cache update-mime-database /usr/share/mime
@@ -1880,6 +1958,12 @@ while true; do
         -- /usr/bin/X :0 vt1 -keeptty > "\$XSESSION_LOG" 2>&1
     echo "desktop: the X session exited (\$?). Its last words:"
     tail -20 "\$XSESSION_LOG"
+    # xinit's own output is often empty because the failure is the X SERVER's,
+    # and Xorg writes its diagnosis to a log of its own. Print whichever exists:
+    # a session that will not start is unfixable without the reason.
+    for l in /var/log/Xorg.0.log /root/.local/share/xorg/Xorg.0.log; do
+        [ -s "\$l" ] && { echo "desktop: --- \$l ---"; grep -E "\(EE\)|Fatal|no screens" "\$l" | tail -15; }
+    done
     # A session that will not start must not leave a black screen and no way in:
     # the shell below is on the framebuffer console, which is what the VM window
     # shows when X is not running.

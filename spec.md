@@ -520,8 +520,7 @@ second-level (nested) address translation.
 the Linux/x86 64-bit boot protocol.
 
 **VIRT-004.** The Kudos system shall provide the guest its entire root filesystem
-from an initial RAM filesystem resident in guest memory, exposing no storage device
-to the guest.
+from an initial RAM filesystem resident in guest memory.
 
 **VIRT-005.** The Kudos system shall provide the guest a 16550-compatible serial
 port as its console.

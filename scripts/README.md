@@ -123,7 +123,15 @@ userland needs on top.
   rendering into the guest's virtio-gpu scanout. `zigserver`: the pinned Zig
   toolchain plus `agent/factory.py`, serving the `.kudos` compile factory on
   port 8623. `ubuntu`: the ubuntu-base userland with apt, running from RAM.
-  The last three are the `vm boot` catalog (`src/kernel/virt/guestlist.zig`).
+  `desktop`: that userland plus XFCE on Xorg and Chrome, software-rendered.
+  The last four are the `vm boot` catalog (`src/kernel/virt/guestlist.zig`).
+  Every image with a package manager carries ssh, a compiler and Python, since
+  a guest that persists nothing would otherwise install them on every boot.
+  The Ubuntu images are installed by RESOLVING and UNPACKING (`apt_unpack`):
+  apt has no unprivileged `--root`, so the build downloads the closure and
+  `dpkg -x`s it, and the guest's own init does at first boot the few things a
+  maintainer script would have done — the library cache, the D-Bus machine id,
+  and the GTK schema and pixbuf caches without which no GTK application starts.
 - `test_guest.sh <image>` — the acceptance gate: boots a built pair under plain
   QEMU and waits for that image's up-marker, so a broken image is the image's
   fault and not the hypervisor's. For `zigserver` it also compiles
