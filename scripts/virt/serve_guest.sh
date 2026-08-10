@@ -30,7 +30,7 @@ for dir in "$OUT"/*/; do
     found=1
 done
 [ "$found" = 1 ] || {
-    echo "serve_guest: no built image pair under $OUT — run a scripts/virt/build_*_guest.sh first" >&2
+    echo "serve_guest: no built image pair under $OUT — run scripts/virt/build_guest.sh <image> first" >&2
     exit 1
 }
 exec python3 -m http.server "$PORT" --bind 0.0.0.0 --directory "$OUT"

@@ -33,6 +33,17 @@ pub const Transport = struct {
     send: *const fn (ctx: *anyopaque, bytes: []const u8) bool,
     /// Every response byte received so far (grows across steps).
     received: *const fn (ctx: *anyopaque) []const u8,
+    /// Make room for `bytes` of response in ONE allocation, before the body
+    /// arrives. A buffer that grows geometrically instead needs the old block
+    /// and the new one live at once, and its own copies fragment the arena —
+    /// which is how a body a fraction of the free space dies part-way through
+    /// with megabytes still free (a 254 MiB initramfs stopped at 126 MiB
+    /// against a 512 MiB arena that had 366 MiB free but no 190 MiB block).
+    /// False = this response can never be buffered; the job then fails AT THE
+    /// HEADER, which is the honest moment, rather than after the download.
+    /// Called at most once per response, and only when Content-Length says how
+    /// much to ask for.
+    reserve: *const fn (ctx: *anyopaque, bytes: usize) bool,
     /// True once the peer closed (FIN/RST) — the end of a close-delimited body.
     closed: *const fn (ctx: *anyopaque) bool,
 };
@@ -62,6 +73,7 @@ pub const FetchJob = struct {
     started: bool = false,
     seen: usize = 0, // received().len at the last step, to detect progress
     deadline: u64 = 0,
+    reserved: bool = false, // the one-shot whole-response reservation has been asked for
 
     // Result, valid once phase == .done:
     status: u16 = 0,
@@ -112,7 +124,15 @@ pub const FetchJob = struct {
                     self.renew();
                 }
                 if (self.frame(r)) |complete| {
-                    return if (complete) self.finishBody(r) else if (self.expired()) self.fail() else .working;
+                    if (!self.reserveOnce(r)) return self.fail();
+                    if (complete) return self.finishBody(r);
+                    // A header with no Content-Length is a close-delimited body:
+                    // its end IS the peer's close, so the close must be checked
+                    // here too and not only before the header lands. A stated
+                    // length that has not arrived is different — an incomplete
+                    // body is a truncated response, and it fails on the budget.
+                    if (self.total_body == null and self.t.closed(self.t.ctx)) return self.finishBody(r);
+                    return if (self.expired()) self.fail() else .working;
                 }
                 // No header yet: complete only when the peer closes (unlikely
                 // this early), else keep waiting within the stall budget.
@@ -121,6 +141,17 @@ pub const FetchJob = struct {
             },
             .done, .failed => return if (self.phase == .done) .done else .failed,
         }
+    }
+
+    /// Ask the transport for the whole response's room the moment the header
+    /// says how big it is — once per response, and while the buffer still holds
+    /// only the head, which is the only moment the ask is cheap. A
+    /// close-delimited body has no size to name, so it is left to grow.
+    fn reserveOnce(self: *FetchJob, r: []const u8) bool {
+        if (self.reserved) return true;
+        const total = self.total_body orelse return true;
+        self.reserved = true;
+        return self.t.reserve(self.t.ctx, (r.len - self.got_body) + total);
     }
 
     fn beginSend(self: *FetchJob) job.Step {

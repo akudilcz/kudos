@@ -207,7 +207,9 @@ pub const Gpu = struct {
         var resp = std.mem.zeroes(RespDisplayInfo);
         resp.hdr = respHdr(hdr, RESP_OK_DISPLAY_INFO);
         resp.pmodes[0] = .{
-            .r = .{ .x = 0, .y = 0, .width = ivirt.FB_MAX_W, .height = ivirt.FB_MAX_H },
+            // The advertised mode, not the ceiling: this is the size the guest
+            // will render at, and the window shows it pixel-for-pixel.
+            .r = .{ .x = 0, .y = 0, .width = ivirt.FB_MODE_W, .height = ivirt.FB_MODE_H },
             .enabled = 1,
             .flags = 0,
         };

@@ -46,7 +46,7 @@ const layout = @import("layout.zig");
 /// the guest needs to find them: there is no PCI bus and no device tree in a
 /// kudos guest, so a device nobody names is a device nobody sees. The list has
 /// one home (layout.WIRED_DEVICES), shared with the staged guest's command line.
-const DEVICES = layout.WIRED_DEVICES;
+const DEVICES = layout.WIRED_DEVICES ++ " " ++ layout.NO_IOAPIC;
 
 /// VM-exit dieting, appended to every catalog cmdline: each flag stops the
 /// guest banging on a device we emulate one trap at a time. Under a NESTED

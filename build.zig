@@ -62,9 +62,9 @@ pub fn build(b: *std.Build) void {
     // guest build — empty blobs are wired instead so the kernel still compiles and
     // `vm boot` reports no guest is staged. A generated empty file is the stand-in
     // (b.path of a missing file would fail the embed at compile time).
-    // WHICH guest is staged: `-Dguest=<name>` picks assets/virt/<name>/ (the
-    // images the other build_*_guest.sh scripts produce), and the default is the
-    // busybox pair build_guest.sh drops at the top of assets/virt/. Staging is
+    // WHICH guest is staged: `-Dguest=<name>` picks assets/virt/<name>/ (what
+    // `build_guest.sh <name>` produces), and the default is the busybox pair
+    // `build_guest.sh staged` drops at the top of assets/virt/. Staging is
     // how a guest boots with NO download: the image is in memory the moment
     // kudos is, which for a browser-sized initramfs is the difference between
     // booting and spending half an hour pulling 236 MiB through the TCP stack.

@@ -282,6 +282,31 @@ pub const Painter = struct {
         self.vert(x, y + h, 0, 1, c);
     }
 
+    /// An image drawn from a SUB-RECTANGLE of `tex`, the source given in texture
+    /// coordinates (0,0 top-left .. 1,1 bottom-right). `image` above maps the
+    /// whole texture onto the destination and so always resamples it by whatever
+    /// the destination happens to be; this one lets a caller draw part of a
+    /// texture at its own size instead. The VM window shows a guest scanout that
+    /// way — one guest pixel per screen pixel, cropping what will not fit —
+    /// because a fractional downscale of an 8x16 console font destroys the text
+    /// it is there to show.
+    pub fn imageCrop(self: *Painter, tex: u32, x: f32, y: f32, w: f32, h: f32, uv: [4]f32, color: u32) void {
+        self.prepare(tex, 6);
+        const c = premul(color);
+        // Named for the edge each one is, not u0/v0 — `u0` is a Zig primitive
+        // type (the zero-bit integer) and a local of that name shadows it.
+        const left = uv[0];
+        const top = uv[1];
+        const right = uv[2];
+        const bottom = uv[3];
+        self.vert(x, y, left, top, c);
+        self.vert(x + w, y, right, top, c);
+        self.vert(x + w, y + h, right, bottom, c);
+        self.vert(x, y, left, top, c);
+        self.vert(x + w, y + h, right, bottom, c);
+        self.vert(x, y + h, left, bottom, c);
+    }
+
     /// Draw `str` at (x,y) in `color`, sampling the glyph atlas `atlas_tex` (upload it once
     /// with `uploadAtlas`). Batches with any adjacent text on the same atlas.
     pub fn text(self: *Painter, atlas_tex: u32, atlas: gltext.Atlas, str: []const u8, x: f32, y: f32, color: u32) void {

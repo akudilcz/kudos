@@ -69,6 +69,10 @@ pub const Vm = struct {
     serial: vmconsole.SerialQueue = .{},
     fb_tex: u32 = 0, // guest scanout texture, 0 = none
     fb_gen: u32 = 0, // ivirt generation the texture was built for
+    /// The scanout's own pixel size, kept because the window draws it at that
+    /// size rather than stretched to fit (see drawGl).
+    fb_w: u32 = 0,
+    fb_h: u32 = 0,
     /// Whether the guest has FLUSHED at least one real frame into the scanout.
     /// The framebuffer view may only replace the serial grid once this is true:
     /// SET_SCANOUT arrives before any pixel transfer, and an armed-but-never-
@@ -198,6 +202,8 @@ pub const Vm = struct {
             if (self.fb_tex != 0) gles.deleteTextures(g, 1, @ptrCast(&self.fb_tex));
             self.fb_tex = kgl.uploadImage(g, fb.w, fb.h, bytes);
             self.fb_gen = fb.gen;
+            self.fb_w = fb.w;
+            self.fb_h = fb.h;
         }
     }
 
@@ -233,7 +239,32 @@ pub const Vm = struct {
         // pixels into it (fb_presented); before that the serial grid — which
         // may be carrying the boot log — stays visible.
         if (self.fb_tex != 0 and self.fb_presented) {
-            p.image(self.fb_tex, 0, STATUS_H, w, h - STATUS_H, 0xFFFFFFFF);
+            // ONE GUEST PIXEL PER SCREEN PIXEL, centred in whatever room the
+            // window has. Stretching the scanout to the content rectangle
+            // resamples it by whatever fraction the window happens to be, and
+            // what a fractional downscale destroys first is text: the console
+            // font is 8x16, so a dropped row is the bottom of a glyph, and the
+            // lines read as though each is eating the one above it. A guest
+            // that has drawn a picture deserves to have it shown, not
+            // interpolated — so the picture keeps its size and the window pads
+            // around it.
+            const view_w = w;
+            const view_h = h - STATUS_H;
+            const tex_w: f32 = @floatFromInt(self.fb_w);
+            const tex_h: f32 = @floatFromInt(self.fb_h);
+            // A scanout larger than the window is CROPPED, never squashed — and
+            // cropped from the BOTTOM, because a console's newest rows are its
+            // last ones: the prompt is what a person needs to see, and it is the
+            // first thing a top-anchored crop would cut. Horizontally it stays
+            // centred, where no such asymmetry applies.
+            const draw_w = @min(tex_w, view_w);
+            const draw_h = @min(tex_h, view_h);
+            const u_span = draw_w / tex_w;
+            const v_span = draw_h / tex_h;
+            const uv = [4]f32{ (1 - u_span) / 2, 1 - v_span, (1 + u_span) / 2, 1 };
+            const x = @floor((view_w - draw_w) / 2);
+            const y = STATUS_H + @floor((view_h - draw_h) / 2);
+            p.imageCrop(self.fb_tex, x, y, draw_w, draw_h, uv, 0xFFFFFFFF);
             return;
         }
         const line_h = atlas.cell_h;

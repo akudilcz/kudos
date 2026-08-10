@@ -2273,6 +2273,7 @@ src/drivers/net/stack/tcp.zig: pub const ConnState = enum { connecting, establis
 src/drivers/net/stack/tcp.zig: pub fn connectStart(ip: [4]u8, port: u16) bool
 src/drivers/net/stack/tcp.zig: pub fn connectState() ConnState
 src/drivers/net/stack/tcp.zig: pub fn beginRecv(a: std.mem.Allocator) void
+src/drivers/net/stack/tcp.zig: pub fn reserveRecv(total: usize) bool
 src/drivers/net/stack/tcp.zig: pub fn send(data: []const u8) bool
 src/drivers/net/stack/tcp.zig: pub fn pumpUntil(consumed: usize, deadline_ms: u64) usize
 src/drivers/net/stack/tcp.zig: pub fn received() []const u8
@@ -2663,6 +2664,8 @@ src/iface/ivirt.zig: pub const ABS_RANGE: u32 = 0x7FFF;
 src/iface/ivirt.zig: pub const InputEvent = union(enum)
 src/iface/ivirt.zig: pub const FB_MAX_W = 1600;
 src/iface/ivirt.zig: pub const FB_MAX_H = 900;
+src/iface/ivirt.zig: pub const FB_MODE_W = 1280;
+src/iface/ivirt.zig: pub const FB_MODE_H = 720;
 src/iface/ivirt.zig: pub const NET_FRAME_BYTES = @import("inet").ETHER_FRAME_MAX;
 src/iface/ivirt.zig: pub const NET_RING_FRAMES = 16;
 src/iface/ivirt.zig: pub const NetFrame = struct
@@ -3235,6 +3238,7 @@ src/kernel/virt/layout.zig: pub const VirtioSlot = enum(u3)
 src/kernel/virt/layout.zig: pub const VIRTIO_MMIO_END: u64 =
 src/kernel/virt/layout.zig: pub fn cmdlineArg(comptime slot: VirtioSlot) []const u8
 src/kernel/virt/layout.zig: pub const WIRED_DEVICES = cmdlineArg(.gpu) ++ " " ++
+src/kernel/virt/layout.zig: pub const NO_IOAPIC = "acpi=off";
 src/kernel/virt/layout.zig: pub const DEFAULT_RAM_BYTES: u64 = 128 * 1024 * 1024;
 src/kernel/virt/layout.zig: pub const MAX_RAM_BYTES: u64 = VIRTIO_MMIO_GPA - (VIRTIO_MMIO_GPA % PAGE_2M);
 src/kernel/virt/layout.zig: pub const Layout = struct

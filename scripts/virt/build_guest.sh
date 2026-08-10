@@ -48,6 +48,11 @@ UBUNTU_BASE_VERSION="24.04.4"
 UBUNTU_BASE_MIRROR="https://cdimage.ubuntu.com/ubuntu-base/releases"
 
 BUSYBOX_VERSION="1.36.1"
+# The interactive shell every image gives a person. Pinned like the rest: a
+# guest whose shell changes under it is a guest whose transcripts stop matching.
+# Not `BASH_VERSION` — that names THIS script's own interpreter, and a build
+# script that overwrites it is one that lies about what is running it.
+GUEST_BASH_VERSION="5.2.21"
 
 # GCC 15+ defaults to -std=gnu23, where bool/true/false are keywords; the 6.6.x
 # kernel and busybox 1.36 predate C23 and still typedef them, so a stock modern
@@ -194,6 +199,57 @@ build_busybox() {
     cd "$WORK"
 }
 
+# Build a static bash once, into $BASH_BIN — the interactive shell EVERY image
+# gives a person, so a guest shell has history, tab completion and the editing
+# keys muscle memory expects. The package-managed images install their own
+# (apk/apt); this build is for the images whose base has no package manager at
+# all, where the alternative is busybox ash.
+#
+# Static for the same reason busybox is: one file, no loader and no libraries to
+# carry, so it drops into an initramfs that holds nothing else.
+build_bash() {
+    BASH_BIN="$WORK/bash-$GUEST_BASH_VERSION/bash"
+    [ -x "$BASH_BIN" ] && return 0
+    cd "$WORK"
+    local bdir="bash-$GUEST_BASH_VERSION"
+    if [ ! -d "$bdir" ]; then
+        curl -fL --no-progress-meter -O "https://ftp.gnu.org/gnu/bash/$bdir.tar.gz"
+        rm -rf "$bdir.extracting"
+        mkdir "$bdir.extracting"
+        tar xf "$bdir.tar.gz" --strip-components=1 -C "$bdir.extracting"
+        mv "$bdir.extracting" "$bdir"
+    fi
+    cd "$bdir"
+    # --without-bash-malloc: bash's own allocator assumes a layout a static
+    # glibc does not give it, and the symptom is a shell that aborts on its
+    # first command rather than one that fails to build.
+    ./configure --enable-static-link --without-bash-malloc CC="$CC_STD" >/dev/null
+    make -j"$(nproc)" >/dev/null
+    cd "$WORK"
+}
+
+# usable_root <rootfs> [shell] — make root an account a person can actually get
+# into, and give it bash.
+#
+# Alpine's minirootfs and Ubuntu's base both ship root LOCKED: a `*` in the
+# password field, which no password can ever hash to. An image whose console is
+# a getty then presents a login prompt that CANNOT be answered — not by a blank
+# password, not by any password — so the guest has no way in at all, and the
+# symptom is indistinguishable from a guest with no shell.
+#
+# These are throwaway RAM guests: no disk, no persistence, nothing to protect. A
+# login nobody can answer protects nothing and costs the shell.
+usable_root() {
+    local rootfs="$1" shell="${2:-/bin/bash}"
+    sed -i 's|^root:[^:]*:|root::|' "$rootfs/etc/shadow"
+    # Field 7 of the passwd line is the login shell; rewrite that one field
+    # rather than the whole line, so the home directory and gecos stay whatever
+    # the distribution set them to.
+    awk -F: -v OFS=: -v sh="$shell" '$1 == "root" { $7 = sh } { print }' \
+        "$rootfs/etc/passwd" > "$rootfs/etc/passwd.new"
+    mv "$rootfs/etc/passwd.new" "$rootfs/etc/passwd"
+}
+
 # write_udhcpc_script <rootfs> — the lease callback, shipped at a path the image
 # owns so network setup does not depend on which busybox packaging shipped (or
 # dropped) a default script. busybox exports $interface/$ip/$mask (a prefix
@@ -299,14 +355,14 @@ CONFIG_PACKET=y
 CONFIG_NETDEVICES=y
 CONFIG_NET_CORE=y
 CONFIG_VIRTIO_NET=y
-# ACPI, for the interrupt controller. Without it x86 Linux knows only the two
-# 8259 chips and their sixteen interrupt lines, because the IO-APIC's existence
-# and address are stated in the MADT and nowhere else a kernel this small
-# reads. kudos builds an RSDP, XSDT and MADT for every guest (kernel/virt/
-# acpi.zig) that a kernel without this option cannot look at, and a machine
-# whose devices sit above IRQ 15 — QEMU's microvm puts its virtio transports at
-# 25 and up — has no way to deliver an interrupt to a guest that only has a
-# PIC. It is also the table an SMP guest reads to find its other processors.
+# ACPI, so this kernel can read the tables kudos builds (kernel/virt/acpi.zig)
+# and find its processors. It does NOT get this guest an I/O APIC: kudos models
+# the 8259 pair and nothing else, and its MADT says so, which is why every kudos
+# guest command line carries `acpi=off` (kernel/virt/layout.zig, NO_IOAPIC) —
+# an ACPI-enabled Linux that finds no I/O APIC can route no device interrupt at
+# all, and every virtio device then fails to probe. Keeping the option on means
+# the same image still boots on a machine that HAS one; the command line is
+# where the decision belongs, because that is where kudos states its own truth.
 CONFIG_ACPI=y
 FRAGEOF
 }
@@ -331,12 +387,25 @@ image_staged() {
         DRM_FBDEV_EMULATION FRAMEBUFFER_CONSOLE SERIAL_8250_CONSOLE
 
     build_busybox
+    build_bash
     local initrd="$WORK/initramfs"
     rm -rf "$initrd"
     mkdir -p "$initrd"/{bin,sbin,proc,sys,dev}
     cp "$BUSYBOX" "$initrd/bin/busybox"
     local applet
     for applet in sh mount ls cat echo; do ln -sf busybox "$initrd/bin/$applet"; done
+    # busybox supplies the applets; bash is what a person is given to type at.
+    # /bin/sh stays busybox ash — init's own script runs under it, and a shell
+    # for scripts and a shell for people are two different jobs.
+    cp "$BASH_BIN" "$initrd/bin/bash"
+
+    # The guest's half of the hypervisor's contracts (guestcheck.c), in the image
+    # that boots in seconds rather than only in the one that takes four minutes:
+    # every contract it tests — a feature that executes, a vector register that
+    # survives an exit, a page written then made executable then written again —
+    # is one whose breakage presents as a segfault somewhere else entirely.
+    # Statically linked, so it needs nothing this initramfs does not have.
+    $CC_STD -static -O1 -o "$initrd/bin/guestcheck" "$SCRIPT_DIR/guestcheck.c"
 
     # The archive carries no device nodes — building those needs root, and this
     # script must run as a plain user. So init claims its console ITSELF, once
@@ -350,7 +419,11 @@ mount -t sysfs none /sys
 mount -t devtmpfs none /dev
 exec </dev/console >/dev/console 2>&1
 echo "$marker"
-exec /bin/sh
+# The contracts, stated on the console of the guest that boots fastest: this is
+# the cheapest place any of them can be found broken, and a hypervisor that
+# breaks one breaks it for every guest, not only this one.
+/bin/guestcheck
+exec /bin/bash --login
 EOF
     chmod +x "$initrd/init"
 
@@ -544,12 +617,13 @@ alpine_rootfs "$ROOTFS"
     --repository "$ALPINE_MIRROR/$ALPINE_BRANCH/main" \
     --repository "$ALPINE_MIRROR/$ALPINE_BRANCH/community" \
     --no-cache --no-scripts --no-interactive \
-    add mesa-dri-gallium mesa-egl mesa-gbm weston weston-backend-drm \
+    add bash mesa-dri-gallium mesa-egl mesa-gbm weston weston-backend-drm \
         weston-clients xkeyboard-config seatd eudev font-dejavu \
         adwaita-icon-theme librsvg gsettings-desktop-schemas dbus firefox-esr \
         stress-ng
 
 echo "kudos-firefox" > "$ROOTFS/etc/hostname"
+usable_root "$ROOTFS"
 
 # The guest conformance probe (guestcheck.c). Built here rather than shipped as
 # a package because it is ours and it is the guest's half of the contracts the
@@ -1055,8 +1129,10 @@ report_devices
 run_cmdline_script
 
 # PID 1 must not exit: a shell on the serial console is what is left to
-# diagnose with when the picture is wrong.
-exec /bin/sh
+# diagnose with when the picture is wrong. bash rather than busybox ash because
+# this is a shell for a PERSON — history, tab completion and the editing keys
+# are what make a guest investigable at 115200 baud.
+exec /bin/bash --login
 EOF
 chmod +x "$ROOTFS/init"
 
@@ -1098,8 +1174,8 @@ image_zigserver() {
 
     # Kernel: the shared guest fragment plus a network stack and the syscall
     # floor a multi-process Python service needs. ACPI comes with the same
-    # reason as the browser image: the IO-APIC's existence is stated in the MADT
-    # and nowhere else, and a device above IRQ 15 cannot otherwise be delivered.
+    # reason as the browser image, and with the same caveat: kudos runs these
+    # guests with `acpi=off` because it models no I/O APIC (see write_net_fragment).
     write_net_fragment
     # shellcheck disable=SC2086 # the assert list is a deliberate word-split
     build_kernel "$WORK/kudos_net_guest.config" $NET_GUEST_ASSERTS
@@ -1108,7 +1184,11 @@ image_zigserver() {
     # python3 runs the factory; binutils is the readelf it proves position
     # independence with; the Zig toolchain arrives below, not from a package,
     # because the version has to match this repo's exactly.
-    apk_add "$ROOTFS" python3 binutils
+    apk_add "$ROOTFS" python3 binutils bash
+
+    # This image's console is a getty, so root must be an account login will
+    # actually open — Alpine ships it locked.
+    usable_root "$ROOTFS"
 
     # The pinned toolchain, pruned to what a freestanding build actually reads.
     # The C and C++ support trees are more than half of a Zig install and none
@@ -1231,9 +1311,17 @@ EOF
     chmod +x "$ROOTFS/init"
 
     cat > "$ROOTFS/etc/inittab" <<'EOF'
-# busybox init: /init already did one-time setup; init only owns the gettys.
-ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100
-tty1::respawn:/sbin/getty 38400 tty1
+# busybox init: /init already did one-time setup; init only owns the consoles.
+#
+# A SHELL, not a getty. getty exists to hold a line open until someone logs in,
+# and login exists to ask for a password — neither of which a throwaway RAM
+# guest with no password has any use for. What it cost was the shell itself:
+# getty needs the terminal to behave like a terminal before it will hand over,
+# so on a console that is a mirrored serial port there was no prompt at all,
+# only a getty respawning against a line it could not settle. Running the shell
+# directly needs nothing from the line but bytes in and bytes out.
+ttyS0::respawn:/bin/bash --login
+tty1::respawn:/bin/bash --login
 ::ctrlaltdel:/sbin/reboot
 ::restart:/sbin/init
 EOF
@@ -1280,11 +1368,14 @@ image_ubuntu() {
     local applet
     for applet in udhcpc ip; do ln -sf busybox "$ROOTFS/bin/$applet"; done
 
+    # The guest's half of the hypervisor's contracts, in the image with a REAL
+    # dynamically-linked userland: the staged image proves them for static
+    # binaries only, and a loader that relocates and re-protects its pages
+    # exercises paths a static binary never reaches.
+    $CC_STD -static -O1 -o "$ROOTFS/usr/bin/guestcheck" "$SCRIPT_DIR/guestcheck.c"
+
     echo "kudos-ubuntu" > "$ROOTFS/etc/hostname"
-    # root with no password on the console: this is a throwaway RAM guest with
-    # no disk and no persistence, and a login prompt nobody can answer is a
-    # guest nobody can use.
-    sed -i 's|^root:[^:]*:|root::|' "$ROOTFS/etc/shadow"
+    usable_root "$ROOTFS"
     cat > "$ROOTFS/etc/motd" <<EOF
 Ubuntu $UBUNTU_RELEASE server (minimal) — runs entirely from RAM, nothing persists a reboot.
 apt works once this guest has a lease; installs land in RAM, so watch what you fetch.
@@ -1303,7 +1394,16 @@ mount -t devtmpfs devtmpfs /dev 2>/dev/null
 mkdir -p /dev/pts /dev/shm /run /tmp
 mount -t devpts devpts /dev/pts 2>/dev/null
 mount -t tmpfs tmpfs /dev/shm 2>/dev/null
-exec </dev/console >/dev/console 2>&1
+# The SERIAL LINE BY NAME, not /dev/console. kudos mirrors ttyS0 into the VM
+# window AND into the netdebug trace, which is the only copy of a guest's output
+# that survives the window scrolling, the guest wedging, or nobody watching.
+# /dev/console is whichever console the kernel decided was preferred, and when
+# that decision goes the other way the userland's half of the boot is simply
+# gone while the kernel's printk still arrives — indistinguishable from an init
+# that never ran.
+KUDOS_CON=/dev/ttyS0
+[ -c "\$KUDOS_CON" ] || KUDOS_CON=/dev/console
+exec <"\$KUDOS_CON" >"\$KUDOS_CON" 2>&1
 hostname -F /etc/hostname
 ip link set lo up 2>/dev/null
 
@@ -1319,6 +1419,7 @@ fi
 
 cat /etc/motd
 echo "$marker"
+/usr/bin/guestcheck
 
 # PID 1 must not exit: respawn the login shell instead, so a user who types
 # exit gets another prompt rather than a kernel panic.

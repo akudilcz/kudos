@@ -51,7 +51,7 @@ const ivirt = @import("ivirt");
 /// machine model wires up (there is no device tree or PCI bus in a kudos
 /// guest). The framebuffer console comes first so kernel messages land on the
 /// guest's display, while ttyS0 — named last — stays /dev/console for the shell.
-const MACHINE_CMDLINE = "console=tty0 console=ttyS0 " ++ layout.WIRED_DEVICES;
+const MACHINE_CMDLINE = "console=tty0 console=ttyS0 " ++ layout.WIRED_DEVICES ++ " " ++ layout.NO_IOAPIC;
 
 /// The command line every staged guest boots with: what the machine requires,
 /// then whatever `-Dguest-cmdline=` added. The build option is how a caller
@@ -478,7 +478,7 @@ fn nbInitrdDone(_: *anyopaque, body: ?[]const u8) void {
     // Single-core: this callback runs on core 0's job pump — start here and
     // let pumpAll drive the guest per frame, exactly like a staged boot.
     startHere(id) catch |e| {
-        last_start_error = @errorName(e);
+        noteStartError(e);
         vmx.disableOnCore();
         storage[id].deinit();
         ivirt.setState(id, .failed);
@@ -512,6 +512,19 @@ fn nbFail(reason: []const u8) void {
 
 /// Create a guest from `bz_image` + `initrd` and start it. See `bootStaged`; the
 /// images are read during the load and need not outlive it.
+/// Record why a guest could not be started AND say so in the trace — the one
+/// place both boot paths name a start failure. A staged boot and a fetched one
+/// unwind identically, and when only one of them spoke, a fetched guest that
+/// failed to start left a window reading "failed" over a trace that said
+/// nothing at all: the fetch lines were the last word, so the download looked
+/// like the thing that broke.
+fn noteStartError(e: anyerror) void {
+    last_start_error = @errorName(e);
+    klog.puts("virt: guest start failed: ");
+    klog.puts(last_start_error);
+    klog.puts("\n");
+}
+
 fn boot(ram_bytes: u64, bz_image: []const u8, initrd: []const u8, cmdline: []const u8) BootError!ivirt.Id {
     const claim_if = regLock();
     const id = registry.claim() orelse {
@@ -549,10 +562,7 @@ fn boot(ram_bytes: u64, bz_image: []const u8, initrd: []const u8, cmdline: []con
         // No per-core scheduler to hand it to — core 0 both owns and runs this
         // guest, so bring it up here and let `pumpAll` drive it per frame.
         startHere(id) catch |e| {
-            last_start_error = @errorName(e);
-            klog.puts("virt: guest start failed: ");
-            klog.puts(last_start_error);
-            klog.puts("\n");
+            noteStartError(e);
             vmx.disableOnCore(); // drop the reference startHere took
             storage[id].deinit();
             ivirt.setState(id, .failed);

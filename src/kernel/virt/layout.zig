@@ -104,6 +104,23 @@ pub const WIRED_DEVICES = cmdlineArg(.gpu) ++ " " ++
     cmdlineArg(.tablet) ++ " " ++
     cmdlineArg(.net);
 
+/// Interrupts arrive through the legacy 8259 pair (virt/i8259.zig), which is the
+/// only interrupt controller this hypervisor implements — there is no I/O APIC
+/// model, and the MADT (virt/acpi.zig) accordingly declares a local APIC and no
+/// I/O APIC. A guest kernel built with ACPI reads that table, finds no I/O APIC
+/// to route a device line through, and can then map no device interrupt at all:
+/// every virtio device fails to probe with -EINVAL ("failed to find virt
+/// queues"), and the 8250's interrupt-driven transmit path never completes, so
+/// the guest's userland output is buffered forever while the kernel's own printk
+/// — which polls — still arrives. What that looks like from the outside is a
+/// guest with no devices and no shell, booting to a blank console.
+///
+/// So the command line says what is true: use the 8259s. Every device a kudos
+/// guest has sits on a legacy line, so nothing is given up by saying so. Remove
+/// this only together with a real I/O APIC model and its MADT entry — the
+/// combination that is broken is ACPI ON with no I/O APIC behind it.
+pub const NO_IOAPIC = "acpi=off";
+
 /// Default guest RAM if the caller does not specify: 128 MiB, a whole number of
 /// 2 MiB pages so the EPT builder uses large pages throughout.
 pub const DEFAULT_RAM_BYTES: u64 = 128 * 1024 * 1024;

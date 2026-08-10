@@ -880,6 +880,9 @@ fn bgSend(_: *anyopaque, bytes: []const u8) bool {
 fn bgReceived(_: *anyopaque) []const u8 {
     return tcp.received();
 }
+fn bgReserve(_: *anyopaque, bytes: usize) bool {
+    return tcp.reserveRecv(bytes);
+}
 fn bgClosed(_: *anyopaque) bool {
     return tcp.finished() or tcp.wasReset();
 }
@@ -907,7 +910,7 @@ fn vtFetchBackground(_: *anyopaque, a: std.mem.Allocator, url: []const u8, cb_ct
     bg_cb = on_done;
     bg_cb_ctx = cb_ctx;
     bg_fj = .{
-        .t = .{ .ctx = &bg_seam, .start = bgStart, .poll = bgPoll, .send = bgSend, .received = bgReceived, .closed = bgClosed },
+        .t = .{ .ctx = &bg_seam, .start = bgStart, .poll = bgPoll, .send = bgSend, .received = bgReceived, .reserve = bgReserve, .closed = bgClosed },
         .clock = .{ .ctx = &bg_seam, .millis = bgMillis },
         .request = head,
     };

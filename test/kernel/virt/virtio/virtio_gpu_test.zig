@@ -187,7 +187,7 @@ fn attachSplitImage(r: *Req) []const u8 {
         .bytes();
 }
 
-test "GET_DISPLAY_INFO: one enabled ceiling-mode scanout, full response written" {
+test "GET_DISPLAY_INFO: one enabled scanout at the ADVERTISED mode, full response written" {
     var f: Fx = undefined;
     f.init();
     var g = makeGpu();
@@ -197,8 +197,14 @@ test "GET_DISPLAY_INFO: one enabled ceiling-mode scanout, full response written"
     try expectEqual(@as(u32, 24 + 16 * 24), out.written); // hdr + 16 pmodes
     const pmode: usize = @intCast(RESP_GPA + 24);
     try expectEqual(@as(u32, 0), std.mem.readInt(u32, f.ram[pmode..][0..4], .little)); // x
-    try expectEqual(@as(u32, ivirt.FB_MAX_W), std.mem.readInt(u32, f.ram[pmode + 8 ..][0..4], .little));
-    try expectEqual(@as(u32, ivirt.FB_MAX_H), std.mem.readInt(u32, f.ram[pmode + 12 ..][0..4], .little));
+    // The advertised mode, NOT the ceiling: a guest takes this as its display
+    // size, and a window shows it pixel-for-pixel, so a device that advertised
+    // more than a window can hold would have every guest render a picture that
+    // then has to be cropped or resampled.
+    try expectEqual(@as(u32, ivirt.FB_MODE_W), std.mem.readInt(u32, f.ram[pmode + 8 ..][0..4], .little));
+    try expectEqual(@as(u32, ivirt.FB_MODE_H), std.mem.readInt(u32, f.ram[pmode + 12 ..][0..4], .little));
+    // And it must be something a window can actually show whole.
+    try std.testing.expect(ivirt.FB_MODE_W <= ivirt.FB_MAX_W and ivirt.FB_MODE_H <= ivirt.FB_MAX_H);
     try expectEqual(@as(u32, 1), std.mem.readInt(u32, f.ram[pmode + 16 ..][0..4], .little)); // enabled
     try expectEqual(@as(u32, 0), std.mem.readInt(u32, f.ram[pmode + 24 ..][0..4], .little)); // pmode[1] disabled
 }

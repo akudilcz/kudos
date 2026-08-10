@@ -85,6 +85,24 @@ pub const InputEvent = union(enum) {
 pub const FB_MAX_W = 1600;
 pub const FB_MAX_H = 900;
 
+/// The mode the device ADVERTISES as its display, which is the one a guest
+/// takes unless it asks for something else — the size every guest therefore
+/// renders at, and so the size a VM window has to show.
+///
+/// It is smaller than the ceiling above on purpose. The window draws a scanout
+/// at its own size, one guest pixel per screen pixel (apps/vm.zig): scaling it
+/// would resample the guest's picture, and what a fractional resample destroys
+/// first is console text — an 8x16 font loses a row per glyph and the lines run
+/// together. So the advertised mode must FIT the window, or the part that does
+/// not fit is cropped away.
+///
+/// This is what fits a maximised VM window on a 1280x800 display once the
+/// title bar and the window's status strip are taken out, and it is a standard
+/// mode rather than an invented one. A guest that wants the full ceiling still
+/// gets it by setting its own mode; nothing here limits the device.
+pub const FB_MODE_W = 1280;
+pub const FB_MODE_H = 720;
+
 /// Largest Ethernet frame the NIC bridge carries — the network contract's
 /// frame ceiling, re-exported so the bridge's producers and consumers size
 /// their buffers from the mailbox they talk through.

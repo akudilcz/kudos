@@ -15,6 +15,11 @@ const FakeConn = struct {
     sent: std.array_list.Managed(u8),
     recv: std.array_list.Managed(u8),
     peer_closed: bool = false,
+    /// The whole-response reservation: how many bytes were asked for, and how
+    /// many times. A second ask would mean the buffer grows after all.
+    reserved: usize = 0,
+    reserve_calls: usize = 0,
+    reserve_ok: bool = true,
 
     fn start(ctx: *anyopaque) bool {
         const self: *FakeConn = @ptrCast(@alignCast(ctx));
@@ -34,12 +39,18 @@ const FakeConn = struct {
         const self: *FakeConn = @ptrCast(@alignCast(ctx));
         return self.recv.items;
     }
+    fn reserve(ctx: *anyopaque, bytes: usize) bool {
+        const self: *FakeConn = @ptrCast(@alignCast(ctx));
+        self.reserve_calls += 1;
+        self.reserved = bytes;
+        return self.reserve_ok;
+    }
     fn closed(ctx: *anyopaque) bool {
         const self: *FakeConn = @ptrCast(@alignCast(ctx));
         return self.peer_closed;
     }
     fn transport(self: *FakeConn) fetchjob.Transport {
-        return .{ .ctx = self, .start = start, .poll = poll, .send = send, .received = received, .closed = closed };
+        return .{ .ctx = self, .start = start, .poll = poll, .send = send, .received = received, .reserve = reserve, .closed = closed };
     }
 };
 
@@ -144,6 +155,77 @@ test "a silent peer past the stall budget fails; progress renews it" {
     // Past it with no new bytes: fail.
     clk.now += 2;
     try std.testing.expectEqual(job.Step.failed, fetchjob.FetchJob.step(&fj));
+}
+
+test "the whole response is reserved once, from Content-Length, before the body lands (NET-009)" {
+    var conn = FakeConn{ .conn = .established, .sent = std.array_list.Managed(u8).init(std.testing.allocator), .recv = std.array_list.Managed(u8).init(std.testing.allocator) };
+    defer conn.sent.deinit();
+    defer conn.recv.deinit();
+    var clk = FakeClock{};
+    var fj = fetchjob.FetchJob{ .t = conn.transport(), .clock = clk.clock(), .request = "GET /x HTTP/1.1\r\n\r\n" };
+
+    _ = fetchjob.FetchJob.step(&fj); // -> sending
+    _ = fetchjob.FetchJob.step(&fj); // -> receiving
+
+    // The head alone, without its size yet: nothing to reserve against.
+    try conn.recv.appendSlice("HTTP/1.1 200 OK\r\nContent-Len");
+    _ = fetchjob.FetchJob.step(&fj);
+    try std.testing.expectEqual(@as(usize, 0), conn.reserve_calls);
+
+    // The size arrives with the first body byte: head + body is asked for at
+    // once, while only the head is buffered — the room for the WHOLE response.
+    const head = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n";
+    try conn.recv.appendSlice("gth: 5\r\n\r\nh");
+    _ = fetchjob.FetchJob.step(&fj);
+    try std.testing.expectEqual(@as(usize, 1), conn.reserve_calls);
+    try std.testing.expectEqual(head.len + 5, conn.reserved);
+
+    // Every later step reuses that room: a second ask would mean the buffer
+    // grows across the transfer after all, which is the bug being prevented.
+    try conn.recv.appendSlice("ello");
+    try std.testing.expectEqual(job.Step.done, fetchjob.FetchJob.step(&fj));
+    try std.testing.expectEqual(@as(usize, 1), conn.reserve_calls);
+    try std.testing.expectEqualStrings("hello", fj.body);
+}
+
+test "a response too large to buffer fails at the header, not part-way through (NET-009)" {
+    var conn = FakeConn{ .conn = .established, .reserve_ok = false, .sent = std.array_list.Managed(u8).init(std.testing.allocator), .recv = std.array_list.Managed(u8).init(std.testing.allocator) };
+    defer conn.sent.deinit();
+    defer conn.recv.deinit();
+    var clk = FakeClock{};
+    var fj = fetchjob.FetchJob{ .t = conn.transport(), .clock = clk.clock(), .request = "GET /x HTTP/1.1\r\n\r\n" };
+
+    _ = fetchjob.FetchJob.step(&fj); // -> sending
+    _ = fetchjob.FetchJob.step(&fj); // -> receiving
+
+    // The header states a size the transport cannot make room for. The job ends
+    // HERE, on the first step that knows the size — not after the body has been
+    // dribbling in for minutes against a buffer that can never hold it.
+    try conn.recv.appendSlice("HTTP/1.1 200 OK\r\nContent-Length: 999999999\r\n\r\nx");
+    try std.testing.expectEqual(job.Step.failed, fetchjob.FetchJob.step(&fj));
+    try std.testing.expectEqual(fetchjob.Phase.failed, fj.phase);
+    try std.testing.expectEqual(@as(usize, 1), conn.reserve_calls);
+}
+
+test "a close-delimited body states no size, so nothing is reserved (NET-009)" {
+    var conn = FakeConn{ .conn = .established, .sent = std.array_list.Managed(u8).init(std.testing.allocator), .recv = std.array_list.Managed(u8).init(std.testing.allocator) };
+    defer conn.sent.deinit();
+    defer conn.recv.deinit();
+    var clk = FakeClock{};
+    var fj = fetchjob.FetchJob{ .t = conn.transport(), .clock = clk.clock(), .request = "GET /x HTTP/1.1\r\n\r\n" };
+
+    _ = fetchjob.FetchJob.step(&fj); // -> sending
+    _ = fetchjob.FetchJob.step(&fj); // -> receiving
+
+    // No Content-Length: the size is the peer's close, which is not known until
+    // it happens. Asking for a number nobody stated is not available, so this
+    // body grows as it always did.
+    try conn.recv.appendSlice("HTTP/1.1 200 OK\r\n\r\nbody");
+    _ = fetchjob.FetchJob.step(&fj);
+    conn.peer_closed = true;
+    try std.testing.expectEqual(job.Step.done, fetchjob.FetchJob.step(&fj));
+    try std.testing.expectEqual(@as(usize, 0), conn.reserve_calls);
+    try std.testing.expectEqualStrings("body", fj.body);
 }
 
 test "no route: start fails the job immediately" {

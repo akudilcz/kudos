@@ -323,6 +323,25 @@ pub fn beginRecv(a: std.mem.Allocator) void {
     recv_buf = std.array_list.Managed(u8).init(a);
 }
 
+/// Make the receive buffer able to hold `total` bytes without growing again —
+/// the whole response in one allocation, asked for while the arena is still
+/// unfragmented and the buffer still holds only the response head. Growing on
+/// demand instead needs the old block and the larger new one live at once, so a
+/// body well inside the free space fails on the block it cannot find: 190 MiB
+/// refused against 366 MiB free, because the 126 MiB already buffered sat in the
+/// middle of it. False = no such block; the caller fails the transfer now.
+pub fn reserveRecv(total: usize) bool {
+    if (recv_buf) |*rb| {
+        rb.ensureTotalCapacity(total) catch {
+            net.dbg("tcp: recv_buf reserve failed; response too large to buffer\n");
+            return false;
+        };
+        return true;
+    }
+    net.dbg("tcp: reserve with no recv_buf\n");
+    return false;
+}
+
 /// Send `data` reliably on the established connection: segment it to the peer's
 /// MSS, keep it within the peer's window, and retransmit anything the peer does
 /// not acknowledge, pumping RX to collect ACKs. Returns true once every byte is
