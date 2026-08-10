@@ -20,7 +20,12 @@ const theme = @import("theme");
 const vmconsole = @import("vmconsole.zig");
 const ivirt = @import("ivirt");
 
-const STATUS_H: f32 = 20; // status line height above the console/framebuffer
+// NO STATUS STRIP. The window used to spend its top twenty rows saying which
+// guest this was and what state it was in — inside the content area, so those
+// rows came straight off the guest's own picture, and a scanout the window
+// cannot fit whole is cropped rather than scaled. The window's title bar
+// already identifies the guest, and `vm` in a terminal reports every guest's
+// state and core; neither costs the guest a pixel.
 const RETURN: u8 = 0x0D; // Enter → carriage return to the guest tty
 const SERIAL_DRAIN_PER_TICK: usize = 1024; // per-frame bound: a boot burst cannot starve the frame
 
@@ -218,15 +223,7 @@ pub const Vm = struct {
         const w: f32 = @floatFromInt(cw);
         const h: f32 = @floatFromInt(ch);
 
-        // Background + status line.
         p.rect(0, 0, w, h, theme.CONTENT_BG);
-        p.rect(0, 0, w, STATUS_H, theme.BORDER);
-        var buf: [64]u8 = undefined;
-        const label = if (self.core) |c|
-            std.fmt.bufPrint(&buf, "{s} VM {d} on core {d}", .{ @tagName(ivirt.state(self.id)), self.id, c }) catch "VM"
-        else
-            std.fmt.bufPrint(&buf, "{s} VM {d}", .{ @tagName(ivirt.state(self.id)), self.id }) catch "VM";
-        p.text(atlas_tex, atlas, label, 6, 4, theme.ACCENT);
 
         // A netboot in flight: the download is the window's whole story, so it
         // gets a progress bar rather than a blank console (VIRT-010).
@@ -249,7 +246,7 @@ pub const Vm = struct {
             // interpolated — so the picture keeps its size and the window pads
             // around it.
             const view_w = w;
-            const view_h = h - STATUS_H;
+            const view_h = h;
             const tex_w: f32 = @floatFromInt(self.fb_w);
             const tex_h: f32 = @floatFromInt(self.fb_h);
             // A scanout larger than the window is CROPPED, never squashed — and
@@ -263,14 +260,14 @@ pub const Vm = struct {
             const v_span = draw_h / tex_h;
             const uv = [4]f32{ (1 - u_span) / 2, 1 - v_span, (1 + u_span) / 2, 1 };
             const x = @floor((view_w - draw_w) / 2);
-            const y = STATUS_H + @floor((view_h - draw_h) / 2);
+            const y = @floor((view_h - draw_h) / 2);
             p.imageCrop(self.fb_tex, x, y, draw_w, draw_h, uv, 0xFFFFFFFF);
             return;
         }
         const line_h = atlas.cell_h;
         var r: usize = 0;
         while (r < vmconsole.ROWS) : (r += 1) {
-            const y = STATUS_H + @as(f32, @floatFromInt(r)) * line_h;
+            const y = @as(f32, @floatFromInt(r)) * line_h;
             if (y >= h) break;
             self.drawRow(p, atlas_tex, atlas, r, y + 2);
         }
@@ -279,7 +276,7 @@ pub const Vm = struct {
         // waiting; without one it reads as dead.
         if (focused and blink_on) {
             const cx = 6 + @as(f32, @floatFromInt(self.console.cx)) * atlas.cell_w;
-            const cy = STATUS_H + 2 + @as(f32, @floatFromInt(self.console.cy)) * line_h;
+            const cy = 2 + @as(f32, @floatFromInt(self.console.cy)) * line_h;
             if (cy < h) p.rect(cx, cy, atlas.cell_w, line_h, theme.ACCENT);
         }
     }
@@ -323,7 +320,7 @@ pub const Vm = struct {
             }) catch "fetching";
         const bar_w = w * FETCH_BAR_SPAN;
         const x = (w - bar_w) / 2;
-        const y = (h + STATUS_H) / 2;
+        const y = h / 2;
         p.text(atlas_tex, atlas, label, x, y - atlas.cell_h - FETCH_BAR_H / 2, theme.WHITE);
         meter.drawTinted(p, .{ .x = x, .y = y, .w = bar_w, .h = FETCH_BAR_H }, pr.done, pr.total, theme.ACCENT);
     }
