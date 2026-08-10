@@ -45,7 +45,7 @@ pub const Baked = struct {
 /// (guestlist.zig) and the `scripts/virt/build_guest.sh` subcommands that make
 /// them; build.zig repeats this list because a build script cannot read Zig
 /// source, and a host test asserts the two agree.
-pub const BAKEABLE = [_][]const u8{ "firefox", "zigserver", "ubuntu" };
+pub const BAKEABLE = [_][]const u8{ "firefox", "zigserver", "ubuntu", "desktop" };
 
 /// The embedded halves, one row per BAKEABLE name and in that order. Empty
 /// blobs when the build did not bake that guest — the same real-or-empty wiring
@@ -54,6 +54,7 @@ const baked_images = [BAKEABLE.len]Baked{
     .{ .bzimage = @embedFile("baked_firefox_bzimage"), .initramfs = @embedFile("baked_firefox_initramfs") },
     .{ .bzimage = @embedFile("baked_zigserver_bzimage"), .initramfs = @embedFile("baked_zigserver_initramfs") },
     .{ .bzimage = @embedFile("baked_ubuntu_bzimage"), .initramfs = @embedFile("baked_ubuntu_initramfs") },
+    .{ .bzimage = @embedFile("baked_desktop_bzimage"), .initramfs = @embedFile("baked_desktop_initramfs") },
 };
 
 /// The baked halves for catalog id `id`, or null when this build did not bake

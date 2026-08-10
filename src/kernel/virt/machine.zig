@@ -36,6 +36,7 @@ const insn = @import("insn.zig");
 const gpudev = @import("virtio/gpudev.zig");
 const netdev = @import("virtio/netdev.zig");
 const inputdev = @import("virtio/inputdev.zig");
+const blkdev = @import("virtio/blkdev.zig");
 const ivirt = @import("ivirt");
 const netbridge = @import("netbridge.zig");
 
@@ -89,6 +90,14 @@ pub const Vm = struct {
     /// reason. A guest with a scanout but no input is a picture, not a machine.
     kbd: inputdev.InputDev = .{},
     tablet: inputdev.InputDev = .{},
+    /// The guest's disk, wired by `start` for the same reason. Backed by host
+    /// memory carved with the VM (`disk_hpa`), so a guest that mounts a
+    /// filesystem is mounting kudos's own RAM.
+    blk: blkdev.BlkDev = .{},
+    /// Host-physical base and length of the disk's backing store, held for
+    /// teardown. Zero-length when this VM was created with no disk.
+    disk_hpa: usize = 0,
+    disk_frames: usize = 0,
     /// Host-physical base of the display's pixel stores, and the frame count to
     /// return at teardown.
     stores_hpa: usize = 0,
@@ -128,15 +137,30 @@ pub const Vm = struct {
     /// ~120 KiB stack temporary — no kernel task stack (sched.STACK_SIZE)
     /// can absorb that below a real call chain. Grabs the contiguous guest
     /// RAM once, so call it off any hot path.
-    pub fn create(self: *Vm, id: ivirt.Id, ram_bytes: u64, bz_image: []const u8, initrd: []const u8, cmdline: []const u8) !void {
+    pub fn create(self: *Vm, id: ivirt.Id, ram_bytes: u64, bz_image: []const u8, initrd: []const u8, cmdline: []const u8, disk_bytes: u64) !void {
         var mem = try guestmem.create(ram_bytes, vmx.eptCaps());
         errdefer mem.deinit();
         const entry = try linuxload.load(mem.ram(), bz_image, initrd, cmdline);
         const stores_hpa = pmm.allocContiguous(STORE_FRAMES) orelse return error.NoGuestRam;
+        errdefer pmm.freeContiguous(stores_hpa, STORE_FRAMES);
+        // The disk, if this guest asked for one: whole frames of host memory,
+        // contiguous because the device model addresses it as one flat slice.
+        // A guest with disk_bytes == 0 gets no block device at all rather than
+        // an empty one, so a driver finds nothing rather than a disk of size
+        // zero it then has to reason about.
+        const disk_frames: usize = @intCast((disk_bytes + pmm.FRAME_SIZE - 1) / pmm.FRAME_SIZE);
+        const disk_hpa = if (disk_frames == 0) 0 else pmm.allocContiguous(disk_frames) orelse
+            return error.NoDiskMemory;
+        // A guest must never see another guest's or the host's leftover bytes,
+        // and a disk is the one device that would hand them over wholesale.
+        if (disk_frames != 0)
+            @memset(@as([*]u8, @ptrFromInt(disk_hpa))[0 .. disk_frames * pmm.FRAME_SIZE], 0);
         self.* = .{
             .id = id,
             .mem = mem,
             .stores_hpa = stores_hpa,
+            .disk_hpa = disk_hpa,
+            .disk_frames = disk_frames,
             .entry = entry,
         };
     }
@@ -160,6 +184,10 @@ pub const Vm = struct {
         self.net.connectSink(.{ .ctx = self, .put = sinkPut });
         self.kbd.bind(.keyboard, self.mem.ram());
         self.tablet.bind(.tablet, self.mem.ram());
+        if (self.disk_frames != 0) {
+            const disk = @as([*]u8, @ptrFromInt(self.disk_hpa))[0 .. self.disk_frames * pmm.FRAME_SIZE];
+            self.blk.bind(disk, self.mem.ram());
+        }
         ivirt.setState(self.id, .running);
     }
 
@@ -201,6 +229,11 @@ pub const Vm = struct {
         if (self.stores_hpa != 0) {
             pmm.freeContiguous(self.stores_hpa, STORE_FRAMES);
             self.stores_hpa = 0;
+        }
+        if (self.disk_frames != 0) {
+            pmm.freeContiguous(self.disk_hpa, self.disk_frames);
+            self.disk_hpa = 0;
+            self.disk_frames = 0;
         }
         self.mem.deinit();
     }
@@ -459,7 +492,7 @@ pub const Vm = struct {
             .net => self.net.read(off, size),
             .keyboard => self.kbd.read(off, size),
             .tablet => self.tablet.read(off, size),
-            else => 0,
+            .blk => self.blk.read(off, size),
         };
     }
 
@@ -469,7 +502,7 @@ pub const Vm = struct {
             .net => self.net.write(off, size, val),
             .keyboard => self.kbd.write(off, size, val),
             .tablet => self.tablet.write(off, size, val),
-            else => {},
+            .blk => self.blk.write(off, size, val),
         }
     }
 
@@ -607,6 +640,8 @@ pub const Vm = struct {
         if (self.kbd.irqLevel()) self.pic.raise(kbd_irq) else self.pic.lower(kbd_irq);
         const tablet_irq = layout.VirtioSlot.tablet.irq();
         if (self.tablet.irqLevel()) self.pic.raise(tablet_irq) else self.pic.lower(tablet_irq);
+        const blk_irq = layout.VirtioSlot.blk.irq();
+        if (self.blk.irqLevel()) self.pic.raise(blk_irq) else self.pic.lower(blk_irq);
 
         // An expired TSC deadline fires the LAPIC timer (disarms the MSR, raises
         // the vector into IRR).

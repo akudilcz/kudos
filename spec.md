@@ -613,6 +613,12 @@ every frame the guest draws into its scanout (VIRT-013).
 **VIRT-036.** The Kudos system shall deliver keystrokes to the guest serial port
 (VIRT-011) in the order they were typed.
 
+**VIRT-037.** The Kudos system shall present each guest a block device, backed
+by system memory, that the guest can read and write by sector.
+
+**VIRT-038.** The Kudos system shall refuse, in whole, a guest block-device
+(VIRT-037) request addressing any sector outside that device.
+
 ## Agent
 
 **AGT-001.** The Kudos system shall provide an AI agent, available on demand,

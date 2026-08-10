@@ -22,6 +22,9 @@
 #              serving /compile on port 8623.
 #   ubuntu     a minimal Ubuntu server: the ubuntu-base rootfs, running from RAM
 #              with a root shell on the serial console and apt ready to use.
+#   desktop    the same Ubuntu userland with a graphical session on it: XFCE on
+#              Xorg, software-rendered, with a terminal, Chrome and the desktop's
+#              own applications — all unpacked into the initramfs, all in RAM.
 #
 # The three fetched images are served to `vm boot` by scripts/virt/serve_guest.sh
 # and named by the catalog in src/kernel/virt/guestlist.zig.
@@ -46,6 +49,16 @@ ALPINE_MIRROR="https://dl-cdn.alpinelinux.org/alpine"
 UBUNTU_RELEASE="24.04"
 UBUNTU_BASE_VERSION="24.04.4"
 UBUNTU_BASE_MIRROR="https://cdimage.ubuntu.com/ubuntu-base/releases"
+# The archive the desktop image's extra packages are resolved from. The suite is
+# this release's codename, spelled here rather than derived, because a mismatch
+# between the base tarball and the packages unpacked onto it is a guest whose
+# libraries disagree with its binaries.
+UBUNTU_SUITE="noble"
+UBUNTU_ARCHIVE="http://archive.ubuntu.com/ubuntu"
+# The browser, from Google's own .deb: Ubuntu ships Chromium and Firefox as
+# snaps, which need snapd, systemd and a loop-mounted squashfs — none of which a
+# diskless RAM guest has.
+CHROME_DEB_URL="https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
 
 BUSYBOX_VERSION="1.36.1"
 # The interactive shell every image gives a person. Pinned like the rest: a
@@ -233,6 +246,149 @@ build_bash() {
     cd "$WORK"
 }
 
+# ubuntu_rootfs <dir> — fetch the ubuntu-base tarball once and extract it into
+# <dir>, replacing whatever was there. The server userland with no kernel and no
+# init, which is exactly what an initramfs guest wants.
+ubuntu_rootfs() {
+    local base_tarball="ubuntu-base-$UBUNTU_BASE_VERSION-base-amd64.tar.gz"
+    if [ ! -f "$WORK/$base_tarball" ]; then
+        echo "build_guest: fetching $base_tarball ..."
+        curl -fL --no-progress-meter -o "$WORK/$base_tarball" \
+            "$UBUNTU_BASE_MIRROR/$UBUNTU_RELEASE/release/$base_tarball"
+    fi
+    rm -rf "$1"
+    mkdir -p "$1"
+    # -p for the same reason as the Alpine base: without it a plain-user extract
+    # drops every setuid bit Ubuntu ships (su, mount, passwd …) and the sticky
+    # bit on /tmp and /var/tmp, and the result is not Ubuntu server.
+    tar xzpf "$WORK/$base_tarball" -C "$1"
+}
+
+# apt_unpack <rootfs> <package...> — install Ubuntu packages into a rootfs from
+# OUTSIDE it, as a plain user.
+#
+# apt has no `--root` that works unprivileged the way apk.static does: it wants a
+# chroot and root to configure packages. So this does the half that can be done
+# without either — resolve, download, unpack — and leaves configuration to the
+# guest's own first boot (ldconfig; nothing else here needs a maintainer script,
+# because this image supplies its own init and runs no systemd units).
+#
+# The apt state lives in its own directory with `Dir::*` overrides, so resolution
+# happens against the Ubuntu release this image is built from rather than
+# whatever this laptop happens to be running. It verifies signatures with the
+# keyring FROM THE TARBALL — the archive's own key, shipped with the userland it
+# signs — so the build trusts neither the host's keys nor nothing at all. And
+# dpkg's status file is seeded from the extracted base, so the closure resolved
+# is the DELTA over ubuntu-base and not a second copy of it.
+# apt_setup <rootfs> — build the private apt state both operations below work
+# through, and leave $APT_OPTS/$APT_ROOT set for them. Split out because the
+# state is identical either way and two copies of it would be two chances to
+# resolve against the wrong release.
+apt_setup() {
+    local rootfs="$1"
+    APT_ROOT="$WORK/apt-root"
+    local keyring="$rootfs/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    [ -f "$keyring" ] || { echo "build_guest: no archive keyring in $rootfs" >&2; exit 1; }
+
+    rm -rf "$APT_ROOT"
+    mkdir -p "$APT_ROOT"/{etc/apt/apt.conf.d,etc/apt/preferences.d,var/lib/apt/lists/partial,var/lib/dpkg,var/cache/apt/archives/partial}
+    cp "$rootfs/var/lib/dpkg/status" "$APT_ROOT/var/lib/dpkg/status"
+    cat > "$APT_ROOT/etc/apt/sources.list" <<EOF
+deb [signed-by=$keyring] $UBUNTU_ARCHIVE $UBUNTU_SUITE main universe
+deb [signed-by=$keyring] $UBUNTU_ARCHIVE $UBUNTU_SUITE-updates main universe
+deb [signed-by=$keyring] $UBUNTU_ARCHIVE $UBUNTU_SUITE-security main universe
+EOF
+    APT_OPTS=(
+        -o "Dir=$APT_ROOT"
+        -o "Dir::State=$APT_ROOT/var/lib/apt"
+        -o "Dir::State::status=$APT_ROOT/var/lib/dpkg/status"
+        -o "Dir::Cache=$APT_ROOT/var/cache/apt"
+        -o "Dir::Etc=$APT_ROOT/etc/apt"
+        -o "APT::Architecture=amd64"
+        -o "Acquire::Languages=none"
+    )
+    apt-get "${APT_OPTS[@]}" update >/dev/null
+}
+
+# apt_fetch_unpack <rootfs> <apt-get subcommand and arguments...> — resolve what
+# that subcommand would install, download it, and unpack it into the rootfs.
+apt_fetch_unpack() {
+    local rootfs="$1"; shift
+    local uris="$APT_ROOT/uris.txt"
+    # --print-uris rather than a download: apt would otherwise want to place the
+    # .debs in a cache it then reasons about, and all this needs is the list.
+    apt-get "${APT_OPTS[@]}" "$@" --print-uris -y --no-install-recommends \
+        | sed -n "s/^'\([^']*\)'.*/\1/p" > "$uris"
+    local count
+    count="$(wc -l < "$uris")"
+    [ "$count" -gt 0 ] && echo "build_guest: downloading $count package(s) ..." || return 0
+    rm -f "$APT_ROOT/var/cache/apt/archives"/*.deb
+    # --retry, and four at a time rather than eight: a few hundred parallel
+    # requests to one mirror is a good way to be reset by it, and a build that
+    # dies two thirds of the way through a download has thrown away everything
+    # it fetched. Retries make a transient reset cost seconds instead of a run.
+    ( cd "$APT_ROOT/var/cache/apt/archives" &&
+      xargs -n1 -P4 curl -fsSL --retry 4 --retry-delay 2 --retry-connrefused -O < "$uris" )
+    # Every URI must have produced a file: xargs reports a failure it kept going
+    # past with one status for the lot, so count rather than trust it.
+    local got
+    got="$(find "$APT_ROOT/var/cache/apt/archives" -name '*.deb' | wc -l)"
+    [ "$got" -eq "$count" ] || {
+        echo "build_guest: downloaded $got of $count packages — refusing to unpack a partial set" >&2
+        exit 1
+    }
+    echo "build_guest: unpacking $count package(s) into the rootfs ..."
+    local deb
+    for deb in "$APT_ROOT/var/cache/apt/archives"/*.deb; do
+        dpkg -x "$deb" "$rootfs"
+    done
+}
+
+apt_unpack() {
+    local rootfs="$1"; shift
+    apt_setup "$rootfs"
+    echo "build_guest: resolving $# package(s) against $UBUNTU_SUITE ..."
+    apt_fetch_unpack "$rootfs" install "$@"
+    apt_ship_lists "$rootfs"
+}
+
+# apt_ship_lists <rootfs> — leave the image with apt READY TO USE: the package
+# lists already downloaded, and every package already at the archive's current
+# version.
+#
+# An image whose lists are empty makes `apt install` fail until someone runs
+# `apt update` first, and a guest with no persistence pays that download on every
+# single boot. And an image built from a release tarball is as old as the
+# tarball: shipping the upgrades means the guest starts current instead of
+# starting with a list of things to fix.
+apt_ship_lists() {
+    local rootfs="$1"
+    echo "build_guest: upgrading the base to the archive's current versions ..."
+    apt_fetch_unpack "$rootfs" upgrade
+    echo "build_guest: shipping the package lists ..."
+    mkdir -p "$rootfs/var/lib/apt/lists/partial"
+    # The lists are what `apt install` reads; copied rather than re-fetched, so
+    # the image ships exactly the index this build resolved against.
+    cp "$APT_ROOT/var/lib/apt/lists"/*_Packages "$rootfs/var/lib/apt/lists/" 2>/dev/null || true
+    cp "$APT_ROOT/var/lib/apt/lists"/*Release* "$rootfs/var/lib/apt/lists/" 2>/dev/null || true
+}
+
+# deb_unpack <rootfs> <url> — the same unpack for a .deb that is not in Ubuntu's
+# archive at all. Chrome and VS Code are shipped by their vendors and by nobody
+# else: Ubuntu's own Chromium and Firefox are snaps, which need snapd, systemd
+# and a loop-mounted squashfs — none of which exist in a guest whose whole
+# filesystem is an initramfs in RAM.
+deb_unpack() {
+    local rootfs="$1" url="$2"
+    local out="$WORK/$(basename "${url%%\?*}")"
+    case "$out" in *.deb) ;; *) out="$out.deb" ;; esac
+    if [ ! -f "$out" ]; then
+        echo "build_guest: fetching $(basename "$out") ..."
+        curl -fL --no-progress-meter -o "$out" "$url"
+    fi
+    dpkg -x "$out" "$rootfs"
+}
+
 # usable_root <rootfs> [shell] — make root an account a person can actually get
 # into, and give it bash.
 #
@@ -398,7 +554,12 @@ image_staged() {
     mkdir -p "$initrd"/{bin,sbin,proc,sys,dev}
     cp "$BUSYBOX" "$initrd/bin/busybox"
     local applet
-    for applet in sh mount ls cat echo; do ln -sf busybox "$initrd/bin/$applet"; done
+    # Every applet this image's init actually calls. A missing one is not a
+    # missing command so much as a silent false answer: the disk self-test below
+    # reported the device broken when what was absent was `dd`.
+    for applet in sh mount ls cat echo dd cmp od wc mkdir sync; do
+        ln -sf busybox "$initrd/bin/$applet"
+    done
     # busybox supplies the applets; bash is what a person is given to type at.
     # /bin/sh stays busybox ash — init's own script runs under it, and a shell
     # for scripts and a shell for people are two different jobs.
@@ -424,9 +585,35 @@ mount -t sysfs none /sys
 mount -t devtmpfs none /dev
 exec </dev/console >/dev/console 2>&1
 echo "$marker"
+# The disk (VIRT-037). A driver that binds proves only that the device answered
+# its probe; what a disk is FOR is holding bytes, so write a pattern and read it
+# back. Sector 0 rather than a filesystem: this is the device under test, and a
+# filesystem would put its own bugs between the test and the answer.
+if [ -b /dev/vda ]; then
+    mkdir -p /tmp
+    # NOT /dev/urandom: a guest with no entropy source can block there forever
+    # waiting for a CRNG that never initialises, and the test then hangs instead
+    # of answering. busybox's own binary is a deterministic pattern that is
+    # always present and is not a page of identical bytes.
+    dd if=/bin/busybox of=/tmp/pat bs=4096 count=1 2>/dev/null
+    dd if=/tmp/pat of=/dev/vda bs=4096 count=1 conv=fsync 2>/dev/null
+    dd if=/dev/vda of=/tmp/back bs=4096 count=1 2>/dev/null
+    if cmp -s /tmp/pat /tmp/back; then
+        echo "KUDOS-DISK-OK \$(( \$(cat /sys/block/vda/size) / 2048 )) MiB"
+    else
+        echo "KUDOS-DISK-MISMATCH — the device stored something other than what was written"
+        echo "KUDOS-DISK-WROTE \$(od -An -tx1 -N16 /tmp/pat)"
+        echo "KUDOS-DISK-READ  \$(od -An -tx1 -N16 /tmp/back)"
+        echo "KUDOS-DISK-SIZES \$(wc -c < /tmp/pat) vs \$(wc -c < /tmp/back)"
+    fi
+else
+    echo "KUDOS-DISK-ABSENT — no /dev/vda; the driver bound to nothing"
+fi
 # The contracts, stated on the console of the guest that boots fastest: this is
 # the cheapest place any of them can be found broken, and a hypervisor that
-# breaks one breaks it for every guest, not only this one.
+# breaks one breaks it for every guest, not only this one. It runs LAST because
+# its vector-state check forces 200000 exits, which takes far longer than
+# everything above it put together.
 /bin/guestcheck
 exec /bin/bash --login
 EOF
@@ -1379,18 +1566,13 @@ image_ubuntu() {
     # shellcheck disable=SC2086 # the assert list is a deliberate word-split
     build_kernel "$WORK/kudos_net_guest.config" $NET_GUEST_ASSERTS
 
-    local base_tarball="ubuntu-base-$UBUNTU_BASE_VERSION-base-amd64.tar.gz"
-    if [ ! -f "$WORK/$base_tarball" ]; then
-        echo "build_guest(ubuntu): fetching $base_tarball ..."
-        curl -fL --no-progress-meter -o "$WORK/$base_tarball" \
-            "$UBUNTU_BASE_MIRROR/$UBUNTU_RELEASE/release/$base_tarball"
-    fi
-    rm -rf "$ROOTFS"
-    mkdir -p "$ROOTFS"
-    # -p for the same reason as the Alpine base: without it a plain-user extract
-    # drops every setuid bit Ubuntu ships (su, sudo, mount, passwd, ping …) and
-    # the sticky bit on /tmp and /var/tmp, and the result is not Ubuntu server.
-    tar xzpf "$WORK/$base_tarball" -C "$ROOTFS"
+    ubuntu_rootfs "$ROOTFS"
+    # apt ready to use the moment the guest boots: current packages and the
+    # lists already in place, so `apt install` works without `apt update` first
+    # — which on a guest that persists nothing would otherwise be a download
+    # paid over again on every single boot.
+    apt_setup "$ROOTFS"
+    apt_ship_lists "$ROOTFS"
 
     # busybox: the DHCP client and the link configuration ubuntu-base has
     # neither of — it ships no dhcp client at all, and no iproute2, so without
@@ -1484,8 +1666,235 @@ EOF
     pack_and_record "$ROOTFS"
 }
 
+# ── desktop: Ubuntu with a graphical session ────────────────────────────────
+# The Ubuntu userland of the `ubuntu` image, plus a Wayland desktop and the
+# applications a person actually opens. Everything is unpacked into the
+# initramfs, so the whole desktop lives in RAM and nothing persists a reboot.
+#
+# NOT GNOME. Ubuntu's own desktop is GNOME Shell, whose compositor assumes a GPU;
+# there is none here, so every pixel is llvmpipe's work inside a nested
+# hypervisor and GNOME under those conditions is a slideshow. XFCE was designed
+# for machines without graphics acceleration and still runs like it — with its
+# compositor turned off (see the xfconf seed below) it blits opaque rectangles
+# and stays responsive. The userland underneath is stock Ubuntu either way.
+#
+# Chrome comes from Google's own .deb because Ubuntu's browsers are snaps: snapd
+# wants systemd and loop-mounted squashfs images, and this guest has neither an
+# init system nor a disk.
+image_desktop() {
+    OUT="$ASSETS/desktop"
+    ROOTFS="$WORK/desktop-rootfs"
+    mkdir -p "$OUT"
+    local marker="KUDOS-DESKTOP-UP"
+
+    write_net_fragment
+    # shellcheck disable=SC2086 # the assert list is a deliberate word-split
+    build_kernel "$WORK/kudos_net_guest.config" $NET_GUEST_ASSERTS
+
+    ubuntu_rootfs "$ROOTFS"
+
+    # The session, the toolkit stack the applications need, and the applications.
+    # --no-install-recommends throughout (apt_unpack), because a recommends tree
+    # on a metapackage is how a 600 MB image becomes a 2 GB one.
+    # XFCE on Xorg: a whole desktop — panel, menu, desktop icons, file manager,
+    # settings, task manager — that was designed to run without a GPU and still
+    # does. No Vulkan drivers and no GL compositor: there is no device for either
+    # here, and every pixel is llvmpipe's work inside a nested hypervisor.
+    apt_unpack "$ROOTFS" \
+        xfce4 xfce4-terminal xfce4-taskmanager mousepad ristretto \
+        xserver-xorg-core xserver-xorg-input-libinput xinit xauth \
+        dbus-x11 xdg-utils ca-certificates openssh-client \
+        libgl1-mesa-dri fonts-dejavu-core fonts-liberation
+    deb_unpack "$ROOTFS" "$CHROME_DEB_URL"
+
+    # busybox for the DHCP client and link setup, as the server image does.
+    build_busybox
+    cp "$BUSYBOX" "$ROOTFS/bin/busybox"
+    local applet
+    for applet in udhcpc ip; do ln -sf busybox "$ROOTFS/bin/$applet"; done
+
+    $CC_STD -static -O1 -o "$ROOTFS/usr/bin/guestcheck" "$SCRIPT_DIR/guestcheck.c"
+    echo "kudos-desktop" > "$ROOTFS/etc/hostname"
+    usable_root "$ROOTFS"
+    write_udhcpc_script "$ROOTFS"
+
+    # Chrome and VS Code refuse their own sandboxes when run as root, and this
+    # guest has no other user — the sandbox wants user namespaces the guest
+    # kernel is not configured for, and refusing is the honest behaviour on the
+    # application's part. Wrappers state the flags once, so a person types
+    # `chrome` and gets a browser rather than a lecture.
+    mkdir -p "$ROOTFS/usr/local/bin"
+    cat > "$ROOTFS/usr/local/bin/chrome" <<'EOF'
+#!/bin/sh
+exec /opt/google/chrome/google-chrome --no-sandbox --disable-dev-shm-usage \
+    --disable-gpu --password-store=basic "$@"
+EOF
+    chmod +x "$ROOTFS/usr/local/bin/chrome"
+
+    # THE SETTINGS THAT DECIDE WHETHER THIS DESKTOP IS USABLE. Every pixel here
+    # is drawn by a CPU rasteriser inside a nested hypervisor, so the defaults
+    # that cost nothing on real hardware cost everything:
+    #
+    #  - xfwm4's compositor blends every window with alpha, shadows and a full
+    #    repaint per frame. Off, xfwm4 blits opaque rectangles instead, which is
+    #    the difference between a desktop that drags and one that moves.
+    #  - the default wallpaper is a full-screen image rescaled and re-blitted on
+    #    every desktop expose; a solid colour is one fill.
+    #  - box-move and box-resize draw an outline while dragging rather than
+    #    recompositing the whole window on every motion event.
+    local xfconf="$ROOTFS/root/.config/xfce4/xfconf/xfce-perchannel-xml"
+    mkdir -p "$xfconf"
+    cat > "$xfconf/xfwm4.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="use_compositing" type="bool" value="false"/>
+    <property name="box_move" type="bool" value="true"/>
+    <property name="box_resize" type="bool" value="true"/>
+    <property name="frame_opacity" type="int" value="100"/>
+    <property name="placement_ratio" type="int" value="20"/>
+  </property>
+</channel>
+EOF
+    cat > "$xfconf/xfce4-desktop.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-desktop" version="1.0">
+  <property name="backdrop" type="empty">
+    <property name="screen0" type="empty">
+      <property name="monitorVirtual-1" type="empty">
+        <property name="workspace0" type="empty">
+          <property name="image-style" type="int" value="0"/>
+          <property name="color-style" type="int" value="0"/>
+          <property name="rgba1" type="array">
+            <value type="double" value="0.15"/>
+            <value type="double" value="0.16"/>
+            <value type="double" value="0.20"/>
+            <value type="double" value="1.0"/>
+          </property>
+        </property>
+      </property>
+    </property>
+  </property>
+</channel>
+EOF
+
+    cat > "$ROOTFS/etc/motd" <<EOF
+Ubuntu $UBUNTU_RELEASE desktop (XFCE on Xorg, software-rendered) — runs from RAM.
+  chrome · xfce4-terminal · thunar · mousepad · ssh    nothing persists a reboot.
+EOF
+
+    cat > "$ROOTFS/init" <<EOF
+#!/bin/sh
+# kudos Ubuntu-desktop guest init (PID 1). The initramfs is the whole system.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mkdir -p /dev/pts /dev/shm /run /tmp /run/user/0
+mount -t devpts devpts /dev/pts 2>/dev/null
+mount -t tmpfs tmpfs /dev/shm 2>/dev/null
+chmod 1777 /tmp /dev/shm
+chmod 700 /run/user/0
+exec </dev/ttyS0 >/dev/ttyS0 2>&1
+hostname -F /etc/hostname
+
+# dpkg -x unpacks a package; it does not configure one. The only configuration
+# step this image actually needs is the shared-library cache — without it every
+# binary unpacked above fails to find its libraries and the desktop never starts.
+echo "desktop: building the shared-library cache"
+ldconfig
+
+ip link set lo up 2>/dev/null
+if [ -e /sys/class/net/eth0 ]; then
+    ip link set eth0 up
+    udhcpc -i eth0 -b -t 3 -s /etc/kudos/udhcpc.script || true
+fi
+
+cat /etc/motd
+echo "$marker"
+
+# The session runs on the guest's own display — the virtio-gpu scanout that
+# kudos composites into the VM window. Xorg finds it through DRM with the
+# modesetting driver and takes its mode from what the device advertises, so the
+# desktop is exactly the size the window shows and nothing is rescaled.
+export HOME=/root
+export XDG_RUNTIME_DIR=/run/user/0
+export XDG_CACHE_HOME=/root/.cache
+export XDG_CONFIG_HOME=/root/.config
+# llvmpipe is the renderer, and it threads: give it the cores the guest has.
+export LP_NUM_THREADS=\$(nproc)
+
+# EVERYTHING dpkg -x DOES NOT DO. Unpacking a package is not installing one: the
+# maintainer scripts that generate the caches below never run, and each thing
+# they generate is load-bearing for a desktop rather than an optimisation.
+#
+# The failure they cause is always the same and never says so: an X server comes
+# up, its clients start, each one exits immediately, and the screen stays the
+# grey of a root window with nothing on it. Every one of them is quick, and each
+# says whether it worked, so a desktop that does not appear can be diagnosed from
+# the console rather than guessed at.
+cache() {
+    label=\$1; artifact=\$2; shift 2
+    if "\$@" >/tmp/cache.log 2>&1 && { [ -z "\$artifact" ] || [ -e "\$artifact" ]; }; then
+        echo "desktop: cache \$label ok"
+    else
+        echo "desktop: cache \$label FAILED (rc=\$?)"
+        tail -3 /tmp/cache.log
+    fi
+}
+# D-Bus refuses to run without a machine id, and every desktop service is a bus
+# service. Normally dbus's postinst writes this.
+dbus-uuidgen --ensure=/etc/machine-id
+mkdir -p /var/lib/dbus
+cp /etc/machine-id /var/lib/dbus/machine-id
+# GTK reads its settings through GSettings, and an uncompiled schema directory is
+# a fatal error to every GTK application — the panel, the desktop, the file
+# manager and the window manager alike.
+cache schemas /usr/share/glib-2.0/schemas/gschemas.compiled \\
+    glib-compile-schemas /usr/share/glib-2.0/schemas
+# Without the loader cache GTK can decode no image at all, which means no icon,
+# no theme and no panel.
+cache pixbuf "" gdk-pixbuf-query-loaders --update-cache
+# Thunar sorts and opens by MIME type; without the database everything is an
+# unknown blob.
+cache mime /usr/share/mime/mime.cache update-mime-database /usr/share/mime
+# Fontconfig works without its cache by rescanning every font on every start,
+# which on a CPU-rendered desktop is the slowest thing in the boot.
+cache fonts "" fc-cache -f
+
+XSESSION_LOG=/var/log/xsession.log
+while true; do
+    echo "desktop: starting the X session (log: \$XSESSION_LOG)"
+    # xinit with XFCE's own xinitrc, NOT \`startx startxfce4\`: startxfce4 runs
+    # xinit itself, so handing it to startx as a client starts one X server and
+    # then tries to start a second inside it. What that looks like is a bare grey
+    # root window — an X server with nothing on it — which reads as a desktop
+    # that half-started rather than as two of them fighting.
+    #
+    # -keeptty because init lives on the serial line, not on a virtual terminal:
+    # left to itself Xorg tries to take over a VT it was not started from.
+    # dbus-launch around the session rather than trusting autolaunch: XFCE's
+    # xinitrc execs xfce4-session directly, and every panel plugin, the settings
+    # daemon and the file manager reach each other over that bus.
+    xinit /usr/bin/dbus-launch --exit-with-session /etc/xdg/xfce4/xinitrc \
+        -- /usr/bin/X :0 vt1 -keeptty > "\$XSESSION_LOG" 2>&1
+    echo "desktop: the X session exited (\$?). Its last words:"
+    tail -20 "\$XSESSION_LOG"
+    # A session that will not start must not leave a black screen and no way in:
+    # the shell below is on the framebuffer console, which is what the VM window
+    # shows when X is not running.
+    echo "desktop: a shell on tty1 is what is left — exit it to retry the session"
+    setsid -c /bin/bash --login </dev/tty1 >/dev/tty1 2>&1
+done
+EOF
+    chmod +x "$ROOTFS/init"
+
+    pack_and_record "$ROOTFS"
+}
+
 case "$IMAGE" in
 staged) image_staged ;;
+desktop) image_desktop ;;
 firefox) image_firefox ;;
 zigserver) image_zigserver ;;
 ubuntu) image_ubuntu ;;

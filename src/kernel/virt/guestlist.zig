@@ -130,6 +130,26 @@ pub const CATALOG = [_]Image{
         .approx_mb = 33,
         .cmdline = "console=tty0 console=ttyS0 " ++ DEVICES ++ " " ++ EXIT_DIET,
     },
+    .{
+        // The same Ubuntu userland with a graphical session on it: XFCE on Xorg,
+        // software-rendered, painting into the guest's virtio-gpu scanout, with
+        // a terminal, a file manager and Chrome.
+        //
+        // The RAM figure is the one to read twice. The tree unpacks to ~1 GiB
+        // and lives in tmpfs before a single application starts, so a third of
+        // this is spent before the desktop appears and the rest is the whole
+        // budget a browser has to work in. It is also the largest thing the
+        // fetch path carries: the response is reserved whole and contiguously
+        // (tcp.reserveRecv), which is why the kernel arena is a gigabyte
+        // (kernel/memory/heap.zig) rather than the half it used to be.
+        .name = "Ubuntu desktop (XFCE on Xorg, software-rendered, runs from RAM)",
+        .id = "desktop",
+        .kernel_url = "http://10.0.2.2:8000/desktop/bzImage",
+        .initramfs_url = "http://10.0.2.2:8000/desktop/initramfs.cpio.gz",
+        .ram_mb = 3072,
+        .approx_mb = 379,
+        .cmdline = "console=tty0 console=ttyS0 " ++ DEVICES ++ " " ++ EXIT_DIET,
+    },
 };
 
 /// How many entries `vm boot` lists: the staged built-in plus this catalog.

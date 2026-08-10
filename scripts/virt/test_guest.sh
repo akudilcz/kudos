@@ -8,7 +8,7 @@
 # a failure here is the image's fault and never the hypervisor's — which is
 # exactly the question worth answering before spending a kudos boot on it.
 #
-# Usage: scripts/virt/test_guest.sh <staged|firefox|zigserver|ubuntu> [budget_s]
+# Usage: scripts/virt/test_guest.sh <staged|firefox|zigserver|ubuntu|desktop> [budget_s]
 # Requires: qemu-system-x86_64 and an image built by scripts/virt/build_guest.sh.
 set -euo pipefail
 
@@ -28,8 +28,12 @@ staged)    OUT="$ASSETS";           MARKER="KUDOS-GUEST-UP";      RAM=512;  DEFA
 firefox)   OUT="$ASSETS/firefox";   MARKER="KUDOS-FIREFOX-UP";    RAM=3072; DEFAULT_BUDGET=300 ;;
 zigserver) OUT="$ASSETS/zigserver"; MARKER="KUDOS-ZIGSERVER-UP";  RAM=3072; DEFAULT_BUDGET=420 ;;
 ubuntu)    OUT="$ASSETS/ubuntu";    MARKER="KUDOS-UBUNTU-UP";     RAM=1536; DEFAULT_BUDGET=120 ;;
+# The desktop unpacks ~2.2 GiB into tmpfs before its session starts, so it gets
+# the RAM the catalog gives it and a budget that covers the unpack, not just a
+# kernel boot.
+desktop)   OUT="$ASSETS/desktop";   MARKER="KUDOS-DESKTOP-UP";    RAM=3072; DEFAULT_BUDGET=420 ;;
 *)
-    echo "usage: scripts/virt/test_guest.sh <staged|firefox|zigserver|ubuntu> [budget_s]" >&2
+    echo "usage: scripts/virt/test_guest.sh <staged|firefox|zigserver|ubuntu|desktop> [budget_s]" >&2
     exit 2
     ;;
 esac

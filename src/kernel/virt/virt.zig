@@ -454,7 +454,7 @@ fn nbInitrdDone(_: *anyopaque, body: ?[]const u8) void {
     const ram_bytes: u64 = @as(u64, netboot.img.ram_mb) * 1024 * 1024;
 
     ivirt.setState(id, .booting);
-    machine.Vm.create(&storage[id], id, ram_bytes, kernel, initrd, netboot.img.cmdline) catch {
+    machine.Vm.create(&storage[id], id, ram_bytes, kernel, initrd, netboot.img.cmdline, layout.DEFAULT_DISK_BYTES) catch {
         return nbFail("guest RAM/EPT allocation failed (image too large?)");
     };
     // A machine now occupies the slot, so a run driver may execute it. Until
@@ -538,7 +538,7 @@ fn boot(ram_bytes: u64, bz_image: []const u8, initrd: []const u8, cmdline: []con
 
     ivirt.reset(id); // a recycled slot starts clean — see vmslots.zig
     ivirt.setState(id, .booting);
-    machine.Vm.create(&storage[id], id, ram_bytes, bz_image, initrd, cmdline) catch {
+    machine.Vm.create(&storage[id], id, ram_bytes, bz_image, initrd, cmdline, layout.DEFAULT_DISK_BYTES) catch {
         ivirt.setState(id, .failed);
         return error.GuestRamExhausted;
     };

@@ -35,10 +35,24 @@ def emit(buf: bytearray, name: str, ino: int, mode: int,
     (inode, mode, uid, gid, nlink, mtime, filesize, dev major/minor,
     rdev major/minor, name size, checksum), NUL-terminated name, data;
     name and data each padded to 4 bytes."""
+    # The name size is a count of BYTES, not of characters. Encode once and
+    # measure that: a single UTF-8 name (ca-certificates ships one, a Hungarian
+    # CA) makes a character count understate the header, the unpacker then reads
+    # the wrong number of bytes, and every entry after it is garbage. What the
+    # kernel says is "junk within compressed archive", followed by a panic for a
+    # missing /init that was packed perfectly well.
+    raw = name.encode()
     fields = [ino, mode, 0, 0, 1, 0, len(data), 0, 0,
-              rmajor, rminor, len(name) + 1, 0]
+              rmajor, rminor, len(raw) + 1, 0]
+    # Every field is exactly eight hex digits; Python's %08X pads to eight but
+    # does not truncate beyond it, so a value that does not fit silently widens
+    # the header and desynchronises the archive in the same unreadable way.
+    # Nothing here should approach it — the largest is a file size, and the
+    # ceiling is 4 GiB — so say so rather than discover it in a panic.
+    if any(f > 0xFFFFFFFF for f in fields):
+        raise SystemExit(f"pack_initramfs: {name}: a newc field exceeds 32 bits")
     buf.extend(NEWC_MAGIC + b"".join(b"%08X" % f for f in fields))
-    buf.extend(name.encode() + b"\0")
+    buf.extend(raw + b"\0")
     align4(buf)
     buf.extend(data)
     align4(buf)

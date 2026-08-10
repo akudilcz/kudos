@@ -102,7 +102,14 @@ pub fn cmdlineArg(comptime slot: VirtioSlot) []const u8 {
 pub const WIRED_DEVICES = cmdlineArg(.gpu) ++ " " ++
     cmdlineArg(.keyboard) ++ " " ++
     cmdlineArg(.tablet) ++ " " ++
-    cmdlineArg(.net);
+    cmdlineArg(.net) ++ " " ++
+    cmdlineArg(.blk);
+
+/// How much of kudos's own RAM a guest's disk is given. The disk is host memory
+/// (virtio/blkdev.zig), so this is spent per running guest and returned when it
+/// halts — big enough to hold a root filesystem worth mounting, small enough
+/// that several guests can each have one.
+pub const DEFAULT_DISK_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Interrupts arrive through the legacy 8259 pair (virt/i8259.zig), which is the
 /// only interrupt controller this hypervisor implements — there is no I/O APIC

@@ -35,12 +35,20 @@ inline fn unlockHeap(if_was: bool) void {
     if (buildinfo.smp) lock.releaseIrqRestore(if_was);
 }
 
-// 512 MiB arena. The GPU desktop's working set alone is ~60 MiB at ultrawide
+// 1 GiB arena. The GPU desktop's working set alone is ~60 MiB at ultrawide
 // native (compositor back buffer 19.8 + wallpaper 19.8 + two half-screen boot
 // windows ~19), and maximising a window transiently needs old + new buffers
 // live at once, so a full-screen window needs well over that. The machine has
 // 64+ GiB; be generous.
-const ARENA_FRAMES = 131072;
+//
+// What sets the figure is not the desktop but the largest FETCH: a guest image
+// arrives as one HTTP response reserved whole, in one contiguous block (see
+// tcp.reserveRecv), because growing a buffer across a half-gigabyte transfer
+// fragments the arena with its own copies and fails on a block it cannot find.
+// The catalog's desktop image is ~500 MB, and a reservation that size needs an
+// arena with room for it AND everything already live — half a gigabyte of
+// headroom, not a tight fit.
+const ARENA_FRAMES = 262144;
 
 /// The allocator core: free-list state + arena bounds, no locking and no
 /// hardware — the kernel wrappers below hold the heap lock around every call.

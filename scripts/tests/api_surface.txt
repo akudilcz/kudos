@@ -3195,7 +3195,7 @@ src/kernel/virt/guestmem.zig: pub const CreateError = error{ NoGuestRam, NoEptTa
 src/kernel/virt/guestmem.zig: pub fn create(ram_bytes: u64, caps: vmxcaps.EptCaps) CreateError!GuestMem
 src/kernel/virt/gueststage.zig: pub fn name() []const u8
 src/kernel/virt/gueststage.zig: pub const Baked = struct
-src/kernel/virt/gueststage.zig: pub const BAKEABLE = [_][]const u8{ "firefox", "zigserver", "ubuntu" };
+src/kernel/virt/gueststage.zig: pub const BAKEABLE = [_][]const u8{ "firefox", "zigserver", "ubuntu", "desktop" };
 src/kernel/virt/gueststage.zig: pub fn bakedFor(id: []const u8) ?Baked
 src/kernel/virt/gueststage.zig: pub fn bzImage() []const u8
 src/kernel/virt/gueststage.zig: pub fn initramfs() []const u8
@@ -3238,6 +3238,7 @@ src/kernel/virt/layout.zig: pub const VirtioSlot = enum(u3)
 src/kernel/virt/layout.zig: pub const VIRTIO_MMIO_END: u64 =
 src/kernel/virt/layout.zig: pub fn cmdlineArg(comptime slot: VirtioSlot) []const u8
 src/kernel/virt/layout.zig: pub const WIRED_DEVICES = cmdlineArg(.gpu) ++ " " ++
+src/kernel/virt/layout.zig: pub const DEFAULT_DISK_BYTES: u64 = 256 * 1024 * 1024;
 src/kernel/virt/layout.zig: pub const NO_IOAPIC = "acpi=off";
 src/kernel/virt/layout.zig: pub const DEFAULT_RAM_BYTES: u64 = 128 * 1024 * 1024;
 src/kernel/virt/layout.zig: pub const MAX_RAM_BYTES: u64 = VIRTIO_MMIO_GPA - (VIRTIO_MMIO_GPA % PAGE_2M);
@@ -3276,6 +3277,9 @@ src/kernel/virt/vcpu.zig: pub const MachineOps = struct
 src/kernel/virt/vcpu.zig: pub const Vcpu = struct
 src/kernel/virt/vfpu.zig: pub const FpuArea = extern struct
 src/kernel/virt/vfpu.zig: pub const FpuSwap = extern struct
+src/kernel/virt/virtio/blkdev.zig: pub const virtq = @import("virtq.zig");
+src/kernel/virt/virtio/blkdev.zig: pub const SECTOR_BYTES: u64 = 512;
+src/kernel/virt/virtio/blkdev.zig: pub const BlkDev = struct
 src/kernel/virt/virtio/gpudev.zig: pub const mmio = @import("mmio.zig");
 src/kernel/virt/virtio/gpudev.zig: pub const gpu = @import("gpu.zig");
 src/kernel/virt/virtio/gpudev.zig: pub const ivirt = @import("ivirt");

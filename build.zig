@@ -131,8 +131,8 @@ pub fn build(b: *std.Build) void {
     // and the build_guest.sh subcommands that produce them; a host test asserts
     // this list and the catalog agree, because nothing else can — the build
     // script cannot read the kernel's source.
-    const bakeable = [_][]const u8{ "firefox", "zigserver", "ubuntu" };
-    const bake_opt = b.option([]const u8, "bake", "carry these catalog guests in the image: csv of firefox|zigserver|ubuntu, or all") orelse "";
+    const bakeable = [_][]const u8{ "firefox", "zigserver", "ubuntu", "desktop" };
+    const bake_opt = b.option([]const u8, "bake", "carry these catalog guests in the image: csv of firefox|zigserver|ubuntu|desktop, or all") orelse "";
     var baked_paths: [bakeable.len][2]std.Build.LazyPath = undefined;
     for (bakeable, 0..) |id, i| {
         const wanted = std.mem.eql(u8, bake_opt, "all") or blk: {
@@ -881,6 +881,7 @@ pub fn build(b: *std.Build) void {
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/virtio/virtio_gpudev_test.zig" }, // the display adapter: 2D model behind the transport
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/virtio/virtio_netdev_test.zig" }, // the network adapter: rx/tx queues behind the transport, frames over the FrameSink seam
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/virtio/virtio_inputdev_test.zig" }, // keyboard + tablet: config selectors and evdev events behind the transport
+        .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/virtio/virtio_blkdev_test.zig" }, // the disk: read/write/flush requests over a RAM-backed store
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/netbridge_test.zig" }, // the guest NIC bridge's forwarding policy (which port a frame is for)
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/virt/vfpu_test.zig" }, // the guest FPU register file: reset control words + the layout vmentry.asm indexes
         .{ .n = "vmslots", .s = "src/kernel/virt/vmslots.zig" }, // VM slot retirement handshake (window ↔ vCPU)
