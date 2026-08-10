@@ -158,7 +158,12 @@ alpine_rootfs() {
     fetch_alpine_base
     rm -rf "$1"
     mkdir -p "$1"
-    tar xzf "$WORK/$MINIROOTFS" -C "$1"
+    # -p: keep the archive's EXACT modes. tar only preserves setuid, setgid and
+    # the sticky bit for the superuser unless asked, and this script runs as a
+    # plain user — without it every such bit in the distribution is silently
+    # dropped, which is not the distribution any more. pack_initramfs.py carries
+    # whatever mode is on disk into the archive, so this is where it is decided.
+    tar xzpf "$WORK/$MINIROOTFS" -C "$1"
 }
 
 # apk_add <rootfs> <package...> — install into a rootfs from outside it.
@@ -762,6 +767,12 @@ mount -t proc     none /proc
 mount -t sysfs    none /sys
 mount -t devtmpfs none /dev
 mkdir -p /dev/pts /dev/shm /tmp /run
+# A directory mkdir creates is 0755 and root-owned; /tmp and /dev/shm are
+# STICKY AND WORLD-WRITABLE on every real system, and things quietly assume it.
+# apt is the one that names the assumption out loud: it drops to the `_apt` user
+# to fetch, cannot then write /tmp/apt.conf.XXXXXX, so signature checking never
+# runs and every repository reports itself unsigned.
+chmod 1777 /tmp /dev/shm
 mount -t devpts none /dev/pts
 mount -t tmpfs  none /dev/shm
 mount -t tmpfs  none /tmp
@@ -1128,11 +1139,30 @@ report_devices
 # Anything the caller asked this boot to do, on a machine that is now fully up.
 run_cmdline_script
 
-# PID 1 must not exit: a shell on the serial console is what is left to
-# diagnose with when the picture is wrong. bash rather than busybox ash because
-# this is a shell for a PERSON — history, tab completion and the editing keys
-# are what make a guest investigable at 115200 baud.
-exec /bin/bash --login
+# PID 1 must not exit, and the shell it holds open is what is left to diagnose
+# with when the picture is wrong — so put it WHERE THE WINDOW IS LOOKING. This
+# guest paints a real framebuffer, and kudos shows a guest's scanout once it
+# does; a shell on the serial console alone is then running somewhere nobody can
+# see. Keystrokes reach both the serial port and the virtio keyboard, so the
+# framebuffer console is one a person can see AND type at. bash rather than
+# busybox ash because this is a shell for a PERSON — history, tab completion and
+# the editing keys are what make a guest investigable at all.
+#
+# setsid -c gives it the tty as its CONTROLLING terminal, which job control
+# needs; without it bash says so on every start.
+KUDOS_SHELL_TTY=/dev/tty1
+[ -c "\$KUDOS_SHELL_TTY" ] || KUDOS_SHELL_TTY=/dev/console
+# This image's setsid is busybox's, not util-linux's, and whether it takes -c
+# depends on how that busybox was configured. Ask it once rather than assume:
+# a shell that fails to start is a guest with no shell, which is the whole bug
+# being fixed here.
+KUDOS_SETSID=
+setsid -c true 2>/dev/null && KUDOS_SETSID="setsid -c"
+echo "kudos-guest: shell on \$KUDOS_SHELL_TTY" > /dev/console
+while true; do
+    \$KUDOS_SETSID /bin/bash --login <"\$KUDOS_SHELL_TTY" >"\$KUDOS_SHELL_TTY" 2>&1
+    echo "kudos-guest: shell exited — starting another" > /dev/console
+done
 EOF
 chmod +x "$ROOTFS/init"
 
@@ -1242,6 +1272,7 @@ mountpoint -q /proc || mount -t proc proc /proc
 mountpoint -q /sys || mount -t sysfs sysfs /sys
 mountpoint -q /dev || mount -t devtmpfs devtmpfs /dev
 mkdir -p /dev/pts /dev/shm /run /workspace /tmp
+chmod 1777 /tmp /dev/shm # sticky + world-writable, as every real system has them
 mountpoint -q /dev/pts || mount -t devpts devpts /dev/pts
 mountpoint -q /dev/shm || mount -t tmpfs tmpfs /dev/shm
 exec </dev/console >/dev/console 2>&1
@@ -1356,7 +1387,10 @@ image_ubuntu() {
     fi
     rm -rf "$ROOTFS"
     mkdir -p "$ROOTFS"
-    tar xzf "$WORK/$base_tarball" -C "$ROOTFS"
+    # -p for the same reason as the Alpine base: without it a plain-user extract
+    # drops every setuid bit Ubuntu ships (su, sudo, mount, passwd, ping …) and
+    # the sticky bit on /tmp and /var/tmp, and the result is not Ubuntu server.
+    tar xzpf "$WORK/$base_tarball" -C "$ROOTFS"
 
     # busybox: the DHCP client and the link configuration ubuntu-base has
     # neither of — it ships no dhcp client at all, and no iproute2, so without
@@ -1392,6 +1426,10 @@ mount -t proc proc /proc 2>/dev/null
 mount -t sysfs sysfs /sys 2>/dev/null
 mount -t devtmpfs devtmpfs /dev 2>/dev/null
 mkdir -p /dev/pts /dev/shm /run /tmp
+# 1777, not mkdir's 0755: apt fetches as the `_apt` user and cannot otherwise
+# write /tmp/apt.conf.XXXXXX, which makes signature checking fail and every
+# repository report itself unsigned — "apt update" then refuses the lot.
+chmod 1777 /tmp /dev/shm
 mount -t devpts devpts /dev/pts 2>/dev/null
 mount -t tmpfs tmpfs /dev/shm 2>/dev/null
 # The SERIAL LINE BY NAME, not /dev/console. kudos mirrors ttyS0 into the VM
@@ -1421,10 +1459,23 @@ cat /etc/motd
 echo "$marker"
 /usr/bin/guestcheck
 
+# The interactive shell goes WHERE THE WINDOW IS LOOKING. kudos shows a guest's
+# framebuffer once the guest has painted one, and it feeds keystrokes to both the
+# serial port and the virtio keyboard — so a shell on the framebuffer console is
+# one a person can see AND type at, while the boot narration above stays on the
+# serial line, which is the copy the netdebug trace keeps. A shell on the serial
+# port alone is invisible the moment the guest brings up its display, which reads
+# as a guest that never started one.
+#
+# setsid -c gives the shell the tty as its CONTROLLING terminal, which is what
+# job control needs; without it bash says so on every start.
+KUDOS_SHELL_TTY=/dev/tty1
+[ -c "\$KUDOS_SHELL_TTY" ] || KUDOS_SHELL_TTY="\$KUDOS_CON"
+echo "ubuntu: shell on \$KUDOS_SHELL_TTY"
 # PID 1 must not exit: respawn the login shell instead, so a user who types
 # exit gets another prompt rather than a kernel panic.
 while true; do
-    /bin/bash --login </dev/console >/dev/console 2>&1
+    setsid -c /bin/bash --login <"\$KUDOS_SHELL_TTY" >"\$KUDOS_SHELL_TTY" 2>&1
     echo "ubuntu: shell exited — starting another"
 done
 EOF
