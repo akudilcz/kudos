@@ -1,7 +1,7 @@
 #!/bin/sh
 # Turn this machine into a headless kudos TEST RIG: stop the desktop, wait for
 # the GPU to be truly free, bind it to vfio-pci. After this, passthrough test
-# runs (make test-boot-2-qemu / scripts/tests/run_passthrough.sh) boot and kill
+# runs (make test-boot B=2 / scripts/tests/run_passthrough.sh) boot and kill
 # QEMU freely WITHOUT ever touching the display-manager or the binding: those two
 # transitions hang the host if they run inside a test loop. Reverse with
 # `make stop` (scripts/gpu/restore.sh) when you want the desktop back.
@@ -61,7 +61,7 @@ if [ "$INNER" = "1" ]; then
     # binding under it hangs the host), binds both functions, verifies the bind.
     "$ROOT/scripts/gpu/bind.sh"
     echo "rig: READY — card on vfio-pci, desktop down."
-    echo "rig: run tests with make test-boot-2-qemu; restore the desktop with make stop."
+    echo "rig: run tests with make test-boot B=2; restore the desktop with make stop."
     exit 0
 fi
 

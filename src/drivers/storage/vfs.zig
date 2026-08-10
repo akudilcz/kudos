@@ -8,11 +8,17 @@
 //! `/` contains exactly the mounts (files cannot be created there). Every
 //! terminal has a cwd (default /ramdisk); relative paths resolve against
 //! it, `.`/`..` work (`..` clamps at `/`). Consumers: the shell's
-//! cd/ls/cat/show (shell.zig — each command documents its own surface) and
-//! the model viewer's file reads (modelview.zig). The netdebug file
-//! protocol deliberately stays on the flat iramdisk seam (fileserv.zig):
-//! the VFS is READ-ONLY routing — `fetch`/netdebug writes go to the
-//! ramdisk directly, and no create/delete/rename exists here (v1).
+//! cd/ls/cat/show (shell.zig — each command documents its own surface), the
+//! model viewer's file reads (modelview.zig), and the agent's file tools
+//! (console/cmd/ai.zig). The netdebug file protocol deliberately stays on the
+//! flat iramdisk seam (fileserv.zig): `fetch`/netdebug writes go to the
+//! ramdisk directly.
+//!
+//! Routing covers mutation too — write/remove/mkdir/rmdir — but the namespace
+//! itself is fixed: `/` and the mount roots are the mount table's, so mutating
+//! either is refused here and never reaches a store. Whether a MOUNT accepts a
+//! mutation is the store's own answer (the ramdisk does; the FAT volume
+//! replies error.ReadOnly), and there is no rename.
 //!
 //! Architecture: a thin, PURE routing layer — path normalization + a fixed
 //! mount table; everything else is delegated to the mounted store through
@@ -133,6 +139,47 @@ pub fn kind(abs: []const u8) ?ifilesys.Kind {
     const r = route(abs) orelse return null;
     if (r.rest.len == 0) return .dir;
     return r.fs.kind(r.rest);
+}
+
+/// The store `abs` mutates within, and the mount-relative path inside it.
+/// Refuses `/` and the mount roots: the namespace's own shape is the mount
+/// table's, not a caller's (see the file header).
+fn routeWrite(abs: []const u8) ifilesys.WriteError!struct { fs: ifilesys.IFileSys, rest: []const u8 } {
+    if (abs.len <= 1) return ifilesys.WriteError.ReadOnly; // "/" itself
+    const r = route(abs) orelse {
+        // A single-component path ("/notes") names an entry OF the root, which
+        // holds exactly the mounts — read-only. A deeper one ("/nope/x") names
+        // something inside a mount that is not there: absent, not refused. The
+        // two need different fixes, so they are not the same answer.
+        const nested = std.mem.indexOfScalarPos(u8, abs, 1, '/') != null;
+        return if (nested) ifilesys.WriteError.NotFound else ifilesys.WriteError.ReadOnly;
+    };
+    if (r.rest.len == 0) return ifilesys.WriteError.ReadOnly; // a mount root
+    return .{ .fs = r.fs, .rest = r.rest };
+}
+
+/// Create or replace the file at a normalized absolute path.
+pub fn write(abs: []const u8, data: []const u8) ifilesys.WriteError!void {
+    const r = try routeWrite(abs);
+    return r.fs.write(r.rest, data);
+}
+
+/// Delete the file at a normalized absolute path.
+pub fn remove(abs: []const u8) ifilesys.WriteError!void {
+    const r = try routeWrite(abs);
+    return r.fs.remove(r.rest);
+}
+
+/// Create a directory at a normalized absolute path.
+pub fn mkdir(abs: []const u8) ifilesys.WriteError!void {
+    const r = try routeWrite(abs);
+    return r.fs.mkdir(r.rest);
+}
+
+/// Delete an empty directory at a normalized absolute path.
+pub fn rmdir(abs: []const u8) ifilesys.WriteError!void {
+    const r = try routeWrite(abs);
+    return r.fs.rmdir(r.rest);
 }
 
 /// Enumerate a directory. `/` lists the mounts themselves (as directories).

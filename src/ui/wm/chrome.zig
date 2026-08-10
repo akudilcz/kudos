@@ -67,14 +67,24 @@ pub fn draw(
 
     // Centred title, clipped to a sane cap (windows never carry a 128-char title).
     const shown = title[0..@min(title.len, 128)];
-    const tw = kgl.textWidth(atlas, shown);
-    // Keep the title clear of the traffic lights on the left.
-    const min_x = buttonX(.zoom) + TL_HIT_R + 6;
-    var tx = (w - tw) * 0.5;
-    if (tx < min_x) tx = min_x;
+    const tx = titleX(w, kgl.textWidth(atlas, shown));
     const ty = (TITLE_H - atlas.cell_h) * 0.5;
     const color = if (focused) theme.TITLE_TEXT else theme.TITLE_TEXT_DIM;
     p.text(atlas_tex, atlas, shown, tx, ty, color);
+}
+
+/// Where a title of width `text_w` starts in a title bar of width `w`, so that
+/// it reads as centred (spec DSK-007).
+///
+/// Centred, EXCEPT that it never runs under the traffic lights: a long title in
+/// a narrow window would otherwise be drawn straight through them, and a title
+/// nobody can read is not centred, it is hidden. Pushed clear, it is left-
+/// aligned against the buttons — the same choice every desktop makes, and the
+/// reason this is a function rather than one multiplication.
+pub fn titleX(w: f32, text_w: f32) f32 {
+    const min_x = buttonX(.zoom) + TL_HIT_R + 6;
+    const centred = (w - text_w) * 0.5;
+    return if (centred < min_x) min_x else centred;
 }
 
 // ── hit-tests (pure; window-local coordinates, y down) ─────────────────────

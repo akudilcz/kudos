@@ -5,6 +5,12 @@
 //! exercises read/list/kind and the mount-root convention ("" is always .dir).
 //! The FAT volume implementation has its own contents-specific suite
 //! (fat_test.zig) against real mkfs.vfat images.
+//!
+//! The contract has two halves, and so does this file: every store answers the
+//! read half, and each one answers the MUTATION half in one of exactly two
+//! ways — it accepts mutation (`verifyWritable`) or it refuses all of it with
+//! error.ReadOnly (`verifyReadOnly`). A store that did neither would be a third
+//! kind of thing the callers have no case for.
 
 const std = @import("std");
 const ifilesys = @import("ifilesys");
@@ -57,6 +63,58 @@ fn verify(fs: ifilesys.IFileSys) !void {
     try std.testing.expectError(ifilesys.Error.NotADirectory, fs.list("one.txt", Collector.cb, &col));
 }
 
+/// The vectors every store that ACCEPTS mutation must satisfy, run against an
+/// empty store. What a directory IS stays the store's own business (the ramdisk
+/// implies one from a name; a FAT volume has real ones) — asserted here is only
+/// what the contract states: what each call does, and which refusal each broken
+/// precondition earns.
+fn verifyWritable(fs: ifilesys.IFileSys) !void {
+    const expectError = std.testing.expectError;
+
+    // write creates, and replaces without leaving the old contents behind.
+    try fs.write("a.txt", "one");
+    try std.testing.expectEqualStrings("one", fs.read("a.txt").?);
+    try fs.write("a.txt", "two");
+    try std.testing.expectEqualStrings("two", fs.read("a.txt").?);
+
+    // remove deletes it, and says so when there is nothing to delete.
+    try fs.remove("a.txt");
+    try std.testing.expectEqual(@as(?ifilesys.Kind, null), fs.kind("a.txt"));
+    try expectError(ifilesys.WriteError.NotFound, fs.remove("a.txt"));
+
+    // mkdir creates a directory that exists while empty; a taken name is Exists.
+    try fs.mkdir("d");
+    try std.testing.expectEqual(ifilesys.Kind.dir, fs.kind("d").?);
+    try expectError(ifilesys.WriteError.Exists, fs.mkdir("d"));
+    try fs.rmdir("d");
+    try std.testing.expectEqual(@as(?ifilesys.Kind, null), fs.kind("d"));
+    try expectError(ifilesys.WriteError.NotFound, fs.rmdir("d"));
+
+    // A directory holding something is not silently emptied, and is not a file.
+    try fs.write("d/inner.txt", "x");
+    try std.testing.expectEqual(ifilesys.Kind.dir, fs.kind("d").?);
+    try expectError(ifilesys.WriteError.NotEmpty, fs.rmdir("d"));
+    try expectError(ifilesys.WriteError.IsADirectory, fs.write("d", "x"));
+    try expectError(ifilesys.WriteError.IsADirectory, fs.remove("d"));
+
+    // …and nothing may be put under a FILE, which has nothing under it.
+    try expectError(ifilesys.WriteError.NotADirectory, fs.write("d/inner.txt/x", "x"));
+    try expectError(ifilesys.WriteError.NotADirectory, fs.mkdir("d/inner.txt/x"));
+    try fs.remove("d/inner.txt");
+}
+
+/// The vectors a store that accepts NO mutation must satisfy: every call is
+/// refused as read-only — not ignored, and not reported as something absent.
+fn verifyReadOnly(fs: ifilesys.IFileSys) !void {
+    const ReadOnly = ifilesys.WriteError.ReadOnly;
+    try std.testing.expectError(ReadOnly, fs.write("one.txt", "changed"));
+    try std.testing.expectError(ReadOnly, fs.remove("one.txt"));
+    try std.testing.expectError(ReadOnly, fs.mkdir("newdir"));
+    try std.testing.expectError(ReadOnly, fs.rmdir("newdir"));
+    // Refused means unchanged: the file it was told to overwrite still reads as it was.
+    try std.testing.expectEqualStrings(FILES[0].data, fs.read(FILES[0].name).?);
+}
+
 test "IFileSys conformance: the REAL ramdisk fileSys" {
     ramdisk.init(std.testing.allocator);
     defer ramdisk.deinit();
@@ -64,10 +122,22 @@ test "IFileSys conformance: the REAL ramdisk fileSys" {
     try verify(ramdisk.fileSys());
 }
 
+test "IFileSys conformance: the REAL ramdisk fileSys accepts mutation" {
+    ramdisk.init(std.testing.allocator);
+    defer ramdisk.deinit();
+    try verifyWritable(ramdisk.fileSys());
+}
+
 test "IFileSys conformance: an in-memory FAKE" {
     var fake = FakeFs{};
     for (FILES) |f| fake.add(f.name, f.data);
     try verify(fake.fs());
+}
+
+test "IFileSys conformance: a read-only store refuses every mutation (STO-010)" {
+    var fake = FakeFs{};
+    for (FILES) |f| fake.add(f.name, f.data);
+    try verifyReadOnly(fake.fs());
 }
 
 /// A minimal flat IFileSys over a fixed table — the fake half of the contract.
@@ -99,7 +169,16 @@ const FakeFs = struct {
         for (0..self.n) |i| cb(cb_ctx, .{ .name = self.names[i], .kind = .file, .size = self.datas[i].len });
     }
 
-    const vtable = ifilesys.IFileSys.VTable{ .read = read_, .list = list_, .kind = kind_ };
+    // The read-only half of the contract, in the one form it takes.
+    const vtable = ifilesys.IFileSys.VTable{
+        .read = read_,
+        .list = list_,
+        .kind = kind_,
+        .write = ifilesys.read_only.write,
+        .remove = ifilesys.read_only.remove,
+        .mkdir = ifilesys.read_only.mkdir,
+        .rmdir = ifilesys.read_only.rmdir,
+    };
     fn fs(self: *FakeFs) ifilesys.IFileSys {
         return .{ .ctx = self, .vtable = &vtable };
     }

@@ -34,6 +34,7 @@ const COMMANDS = [_]Command{
     .{ .name = "calc", .run = @import("cmd/calc.zig").run },
     .{ .name = "background", .run = @import("cmd/background.zig").run },
     .{ .name = "ai", .run = @import("cmd/ai.zig").run },
+    .{ .name = "compile", .run = @import("cmd/compile.zig").run },
     .{ .name = "feature", .run = @import("cmd/feature.zig").run },
     .{ .name = "show", .run = @import("cmd/show.zig").run },
     .{ .name = "flipstat", .run = @import("cmd/flipstat.zig").run },

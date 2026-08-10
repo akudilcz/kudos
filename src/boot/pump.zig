@@ -22,12 +22,14 @@ const jobs = @import("../kernel/sched/jobs.zig");
 const smp = @import("../kernel/smp/smp.zig");
 const virt = @import("../kernel/virt/virt.zig");
 const ivirt = @import("ivirt");
+const idesk = @import("idesk"); // the desktop-control seam: window requests in, the window list out
 const power = @import("../kernel/power/reboot.zig");
 const framebuffer = @import("../ui/screen/framebuffer.zig");
 const hud = @import("../ui/desktop/hud.zig");
 const prof = @import("../drivers/gpu/prof.zig");
 const iaccel = @import("iaccel");
 const Desktop = @import("../ui/desktop/desktop.zig").Desktop;
+const lifecycle = @import("../ui/desktop/lifecycle.zig"); // window close, the deferred path
 const Window = @import("../ui/wm/window.zig").Window;
 
 /// The window whose title was last published to the remote-request inbox. Only
@@ -56,6 +58,59 @@ const BOOTLOG_PERIOD_TICKS: u64 = BOOTLOG_PERIOD_MS * timer.TICK_HZ / 1000;
 
 /// Open an application window by name — the desktop-side of the agent's
 /// application tool (AGT-006). Unknown names are an error the caller traces.
+/// Apply one desktop-control request (AGT-023). A request that names no window
+/// acts on the focused one, which is what "maximise it" means when nobody said
+/// which; a name that matches nothing is TRACED, because silence reads exactly
+/// like a window that never opened.
+fn applyWindowAction(d: *Desktop, req: idesk.Request) void {
+    var msg: [96]u8 = undefined;
+    // Named by a substring of its title, minimised ones included: a window in
+    // the dock is still a window the user can point at, and `restore` is
+    // precisely how they bring it back — so this is a plain scan of the list
+    // rather than wm.focusByTitle, which only considers visible windows.
+    const target: ?*Window = if (req.name.len == 0) d.wm.focused else blk: {
+        for (d.wm.windows.items) |w| {
+            if (std.mem.indexOf(u8, w.title, req.name) != null) break :blk w;
+        }
+        break :blk null;
+    };
+    const win = target orelse {
+        klog.puts(std.fmt.bufPrint(&msg, "desk: no window matching '{s}'\n", .{req.name}) catch "desk: no match\n");
+        return;
+    };
+    switch (req.action) {
+        .focus => d.wm.focus(win),
+        .maximise => d.toggleMaximise(win),
+        .minimise => d.wm.minimise(win),
+        .restore => d.wm.unminimise(win),
+        .close => lifecycle.requestClose(d, win),
+    }
+    publishWindowList(d);
+}
+
+/// Publish the window list through the desktop-control seam: one line per
+/// window, in the desktop's own order, carrying what a person sees at a glance —
+/// which window has focus and which are in the dock. Written whenever the list
+/// or the focus can have changed, so a reader always has the desktop's last word
+/// rather than a pointer into state it does not own.
+fn publishWindowList(d: *Desktop) void {
+    var buf: [idesk.MAX_WINDOWS_TEXT]u8 = undefined;
+    var used: usize = 0;
+    for (d.wm.windows.items) |w| {
+        const line = std.fmt.bufPrint(buf[used..], "{s}{s}  {d}x{d} at {d},{d}{s}\n", .{
+            if (w == d.wm.focused) "*" else " ",
+            w.title,
+            w.w,
+            w.h,
+            w.x,
+            w.y,
+            if (w.minimized) "  [dock]" else "",
+        }) catch break; // full: a partial list is still an answer
+        used += line.len;
+    }
+    idesk.publishWindows(buf[0..used]);
+}
+
 fn spawnByName(d: *Desktop, name: []const u8) !void {
     const eql = std.mem.eql;
     if (eql(u8, name, "ai")) return d.spawnAgent();
@@ -99,11 +154,19 @@ fn dispatchInput(d: *Desktop) bool {
             klog.puts(std.fmt.bufPrint(&msg, "focus: no visible window matching '{s}'\n", .{needle}) catch "focus: no match\n");
         }
     }
+    // A window operation asked for through the desktop-control seam (AGT-023):
+    // the same five things a person does with the title bar and the dock, run
+    // here because the window list is the desktop's and this is its core.
+    if (idesk.takeAction()) |req| {
+        applyWindowAction(d, req);
+        changed = true;
+    }
     // Publish where a keystroke would land, for the remote injector that has to
     // know before it types.
     if (d.wm.focused != last_published_focus) {
         last_published_focus = d.wm.focused;
         fileserv.publishFocus(d.wm.focusedTitle());
+        publishWindowList(d);
     }
     while (keyboard.poll()) |ev| {
         // PERF-008: this event's visible effect (echo, spawned window) rides the

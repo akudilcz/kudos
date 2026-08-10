@@ -92,6 +92,21 @@ FILE_SCRIPT = [
     final_response("I wrote /ramdisk/agent-note.txt, read it back, checked state, and opened the clock."),
 ]
 
+# The directory half of the same surface: make a directory, write into it (and
+# into one the write itself creates), list, then take it all back down again.
+DIR_SCRIPT = [
+    # An empty directory can be made and unmade...
+    tool_call_response("make_dir", {"path": "scratch"}),
+    tool_call_response("delete_dir", {"path": "scratch"}),
+    # ...and a nested write makes the directories its path names.
+    tool_call_response("write_file", {"path": "notes/deep/inner.txt", "content": "nested"}),
+    tool_call_response("list_dir", {"path": "/ramdisk/notes"}),
+    tool_call_response("delete_dir", {"path": "notes"}),
+    tool_call_response("delete_file", {"path": "notes/deep/inner.txt"}),
+    tool_call_response("list_dir", {"path": "/ramdisk"}),
+    final_response("Made a directory, filled one by writing into it, and cleared both."),
+]
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     step = 0

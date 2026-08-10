@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Boot-1 integration run — the emulated-VGA track (no GPU). `make test-boot-1-qemu`.
+# Boot-1 integration run — the emulated-VGA track (no GPU). `make test-boot B=1`.
 #
 # Builds the single-core ISO with the test instrumentation (-Dtest-hooks: the
 # terminal-output mirror), boots it headless via vm/run.sh, waits for boot, then runs

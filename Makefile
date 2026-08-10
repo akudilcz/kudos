@@ -9,14 +9,11 @@
 # one to run before a branch lands — see scripts/tests/check.sh.
 
 .DEFAULT_GOAL := help
-.PHONY: help setup build coverage iso netboot netboot-serve netboot-stop netboot-log watch \
-	lemon-setup lemon-boot lemon-heartbeat lemon-status lemon-recover \
-	start start-smp start-perf start-gpu gui boot stop rig clean \
-	check check-hw check-fast status test test-unit test-usbdisk test-boot-1-qemu test-boot-2-qemu test-guest-qemu \
-	test-boot-1-smp-qemu test-boot-2-smp-qemu test-boot-3-qemu \
-	test-boot-1-native test-boot-2-native test-boot-3-native test-models shot usbdisk-provision \
-	bootlog bootlog-all \
-	shaders shaders-setup gltf-validate factory factory-setup test-agent
+.PHONY: help setup build iso netboot netboot-serve netboot-stop netboot-log watch \
+	lemon start gui boot stop rig clean \
+	check check-hw check-fast status test test-unit test-usbdisk test-agent \
+	test-boot test-guest-qemu guest-bench test-models shot usbdisk-provision \
+	bootlog shaders shaders-setup factory factory-setup
 
 help: ## show this help
 	@echo "kudos — make targets"
@@ -96,22 +93,23 @@ netboot-log: ## the DHCP/TFTP/HTTP conversation — why a netboot did or did not
 # no desktop, no GPU — the smallest kudos that can prove it is alive, and the only
 # thing that tests power.reboot() on this silicon. GSP_FW_DIR= so the 4090 is never
 # touched. Start `make netboot-serve` first.
-lemon-heartbeat: ## netboot lemon into the bounded heartbeat image (30 s, then self-reboot)
-	zig build -p build --cache-dir build/.zig-cache -Dheartbeat
-	GSP_FW_DIR= scripts/netboot/mknetboot.sh $(VARIANT)
-	scripts/netboot/lemon.sh boot
-
-lemon-boot: netboot ## netboot lemon into the current build (one-shot; nothing staged on lemon)
-	scripts/netboot/lemon.sh boot
-
-lemon-status: ## is lemon running Ubuntu or kudos? what is armed? what are we serving?
-	scripts/netboot/lemon.sh status
-
-lemon-recover: ## bring lemon back to Ubuntu now (only works while Linux is up)
-	scripts/netboot/lemon.sh recover
-
-lemon-setup: ## once: install lemon's GRUB stub (needed only for the DISK fallback path)
-	scripts/netboot/lemon.sh setup
+# lemon, by verb. `boot` netboots it into the current build one-shot (nothing is
+# staged on lemon and the next reset falls back to Ubuntu on its own);
+# `heartbeat` netboots the bring-up image instead — net plus a 1 Hz KMR1
+# heartbeat, then it reboots itself: the smallest kudos that can prove it is
+# alive, and the only thing that tests power.reboot() on this silicon. Start
+# `make netboot-serve` first.
+lemon: ## lemon: make lemon DO=boot|status|recover|heartbeat|setup
+	@case "$(or $(DO),status)" in \
+	  boot)      $(MAKE) netboot && scripts/netboot/lemon.sh boot ;; \
+	  status)    scripts/netboot/lemon.sh status ;; \
+	  recover)   scripts/netboot/lemon.sh recover ;; \
+	  setup)     scripts/netboot/lemon.sh setup ;; \
+	  heartbeat) zig build -p build --cache-dir build/.zig-cache -Dheartbeat && \
+	             GSP_FW_DIR= scripts/netboot/mknetboot.sh $(VARIANT) && \
+	             scripts/netboot/lemon.sh boot ;; \
+	  *) echo "make lemon DO=boot|status|recover|heartbeat|setup" >&2; exit 2 ;; \
+	esac
 
 iso: ## build both bootable ISOs (kudos.iso + kudos-smp.iso)
 	zig build iso iso-smp -p build --cache-dir build/.zig-cache
@@ -119,22 +117,15 @@ iso: ## build both bootable ISOs (kudos.iso + kudos-smp.iso)
 # No `iso` prerequisite on either: each branch of --auto builds the image it needs
 # (passthrough.sh builds the GPU image over SSH; run.sh builds the soft-display one
 # for the local window), so a prerequisite here would only build a third.
-start: ## start kudos: 4090 passthrough over SSH, interactive window locally
-	scripts/vm/run.sh --auto
-
-start-smp: ## start kudos-smp: same as start but boots the 4-vCPU SMP kernel
-	scripts/vm/run.sh --auto --smp
-
-# The GPU run WITHOUT the SSH heuristic, for the one-machine setup: the 4090 in
-# this box is the card kudos drives, so the Linux desktop must go down first and
-# you cannot be sitting in it. Run it from a text console (Ctrl+Alt+F3) or an SSH
-# session; `make stop` gives the desktop back.
-start-gpu: ## run kudos on the REAL 4090 in this machine (desktop goes down; make stop restores)
-	scripts/vm/passthrough.sh --manage-vfio
-
-start-perf: ## start + measure: one FLIPSTAT 60Hz verdict over netdebug, then run as normal
-	zig build iso -Dflip-sample=true -p build --cache-dir build/.zig-cache
-	scripts/vm/run.sh --auto --build-opts -Dflip-sample=true
+start: ## start kudos: 4090 passthrough over SSH, window locally. SMP=1 · GPU=1 (this box's 4090) · PERF=1 (one 60Hz verdict)
+	@if [ -n "$(PERF)" ]; then \
+	  zig build iso -Dflip-sample=true -p build --cache-dir build/.zig-cache && \
+	  scripts/vm/run.sh --auto --build-opts -Dflip-sample=true; \
+	elif [ -n "$(GPU)" ]; then \
+	  scripts/vm/passthrough.sh --manage-vfio; \
+	else \
+	  scripts/vm/run.sh --auto $(if $(SMP),--smp); \
+	fi
 
 # The window shows the SOFT-DISPLAY image, built here: no GPU reaches a guest except
 # by passthrough, and without one a default image publishes no draw device and the
@@ -186,9 +177,6 @@ test: ## run ONE register track and record it: make test T=host:ui (make status 
 test-unit: ## host unit tests; ONLY=<substr> narrows to matching test roots
 	zig build test $(if $(ONLY),-Dtest-only=$(ONLY)) -p build --cache-dir build/.zig-cache
 
-coverage: ## host tests under kcov → build/coverage/index.html (full suite, slow; needs kcov)
-	scripts/tests/coverage.sh run
-
 # The tightest edit loop: Debug builds ride Zig's self-hosted x86_64 backend and
 # incremental compilation, and ONLY=<substr> narrows to the test roots whose
 # path contains it. Recompiles land in about a second after the first build.
@@ -204,8 +192,31 @@ test-agent: ## agent pipeline on the host: factory + loader + full agent loop (n
 	python3 scripts/agent/test_factory.py
 	python3 scripts/agent/test_agent.py
 
-test-boot-1-qemu: ## boot-1: shell + WM suite in QEMU (auto-runs on lemon for the stick; NO reboot)
-	scripts/tests/run_emulated.sh && scripts/tests/check.sh --stamp qemu-boot-1
+# THE BOOT SUITES, as two coordinates rather than eight targets: WHICH cycle
+# (B=1 shell+WM, 2 GPU/desktop, 3 the SMP scheduler stress) and WHERE it runs
+# (ON=qemu emulated, smp the 4-vCPU kernel, native lemon's bare metal). The
+# combinations that are register tracks run THROUGH the register, so passing
+# records evidence; the rest call their runner directly.
+#
+# QEMU is where confidence is built — boot-1 runs inside lemon's Ubuntu in a VM,
+# no netboot and no wear. Native is where it is CONFIRMED: injection is KMR1
+# (:9515) and readback is netdebug (:9514), because there is no emulator to ask,
+# and every bug that has actually cost a trip to lemon (a DHCP lease thrown away,
+# SuperSpeedPlus babble, a bulk TRB straddling 64 KiB) was invisible under QEMU.
+# ON=native netboots one-shot and always returns lemon to Ubuntu.
+test-boot: ## a boot suite: make test-boot B=1|2|3 ON=qemu|smp|native (default B=1 ON=qemu; B=2 needs `make rig`)
+	@B="$(or $(B),1)"; ON="$(or $(ON),qemu)"; \
+	case "$$B/$$ON" in \
+	  1/qemu)   scripts/tests/check.sh run qemu-boot-1 ;; \
+	  1/smp)    KUDOS_SMP=1 scripts/tests/run_emulated.sh ;; \
+	  1/native) scripts/tests/check.sh run boot-1-native ;; \
+	  2/qemu)   scripts/tests/run_passthrough.sh ;; \
+	  2/smp)    KUDOS_SMP=1 scripts/tests/run_passthrough.sh ;; \
+	  2/native) scripts/tests/check.sh run boot-2-native ;; \
+	  3/qemu)   scripts/tests/run_boot3_qemu.sh ;; \
+	  3/native) scripts/tests/check.sh run boot-3-native ;; \
+	  *) echo "no such suite: B=$$B ON=$$ON  (B=1|2|3, ON=qemu|smp|native; boot-3 IS the SMP kernel, so it has no smp variant)" >&2; exit 2 ;; \
+	esac
 
 # The NESTED track: kudos as a hypervisor, running a Linux guest, inside QEMU.
 # The only suite that runs on a developer laptop — no GPU, no USB stick, no lemon
@@ -218,7 +229,7 @@ test-boot-1-qemu: ## boot-1: shell + WM suite in QEMU (auto-runs on lemon for th
 test-guest-qemu: ## nested: boot a Linux guest inside kudos under QEMU (laptop-friendly)
 	@[ -f assets/virt/bzImage ] && [ -f assets/virt/initramfs.cpio.gz ] || { \
 	  echo "no Linux guest staged in assets/virt/ — build it first (a kernel build, ~10 min):"; \
-	  echo "    scripts/virt/build_guest.sh"; exit 2; }
+	  echo "    scripts/virt/build_guest.sh staged"; exit 2; }
 	zig build iso -Dtest-hooks -p build --cache-dir build/.zig-cache
 	python3 scripts/tests/guest_boot.py
 
@@ -226,49 +237,11 @@ guest-bench: ## how fast is a kudos guest? same workloads native vs QEMU/KVM vs 
 	zig build iso -Dtest-hooks -p build --cache-dir build/.zig-cache
 	python3 scripts/tests/guest_bench.py
 
-test-boot-2-qemu: ## boot-2: the real 4090 under QEMU passthrough; needs `make rig` first
-	scripts/tests/run_passthrough.sh
-
-# The SMP variants: the SAME driver + shared cases.py, but booting kudos-smp.iso on 4
-# vCPUs. KUDOS_SMP=1 flips the runner to build/boot the multi-core kernel; the driver
-# then adds the SMP proofs (APs online, per-core `ps`), the cross-core echo (boot-1),
-# and — for free — runs the 60 Hz idle + under-load cadence phases on many cores (boot-2).
-test-boot-1-smp-qemu: ## boot-1 on the 4-vCPU SMP kernel: APs online, per-core terminals, cross-core echo (NO reboot)
-	KUDOS_SMP=1 scripts/tests/run_emulated.sh
-
-test-boot-2-smp-qemu: ## boot-2 on the SMP kernel: GPU/desktop + 60 Hz idle & under-load on many cores; needs `make rig`
-	KUDOS_SMP=1 scripts/tests/run_passthrough.sh
-
-# boot-3 is its own track, not a variant: kudos-smp is the kernel under test and the
-# driver (boot3_native.py) stresses the SCHEDULER — placement/oversubscription, deadline
-# sleep + tick under load, session churn, guest vCPUs, cadence throughout — with a
-# no-silent-loss counter watch per phase. The qemu twin proves the suite's logic (8
-# vCPUs, in-kernel -Dverify-script stages first); no GPU asserts and no lemon reboot.
-test-boot-3-qemu: ## boot-3 smoke: SMP scheduling stress on QEMU -smp 8 (NO reboot, no GPU asserts)
-	scripts/tests/run_boot3_qemu.sh
-
-# The NATIVE tracks: the same cases and assertions, run on lemon's BARE METAL. Injection
-# is KMR1 (:9515), readback is netdebug (:9514) — there is no emulator to ask. Every bug
-# that has actually cost us a trip to lemon (a DHCP lease thrown away, SuperSpeedPlus
-# babble, a bulk TRB straddling 64 KiB) was invisible under QEMU; these are the tracks
-# that catch them. Netbooted one-shot — the run always returns lemon to Ubuntu.
-test-boot-1-native: ## boot-1 on lemon's bare metal, no GPU firmware
-	scripts/tests/run_native.sh
-
-test-boot-2-native: ## boot-2 on lemon's bare metal: GSP + the 4090 running natively
-	scripts/tests/run_native.sh --gpu
-
-test-boot-3-native: ## boot-3 on lemon's bare metal: kudos-smp + GSP, the SMP scheduling stress suite
-	scripts/tests/run_native.sh --smp
-
 test-models: ## sweep every .glb on the stick through a live kudos (real 4090; needs `make rig`)
 	scripts/tests/run_model_sweep.sh
 
 shot: ## ONE command: screenshot a model on the 4090 in QEMU passthrough (auto-rigs; MODEL=x.glb optional)
 	scripts/tests/shot.sh $(MODEL)
-
-gltf-validate: ## validate every shipped glTF asset (glbcheck + the required Khronos gltf_validator; spec TEST-007)
-	scripts/tests/gltf-validate.sh
 
 usbdisk-provision: ## write the manifest's files onto the USB stick (mutates it; not a test)
 	python3 scripts/tests/usbdisk.py provision
@@ -279,16 +252,13 @@ usbdisk-provision: ## write the manifest's files onto the USB stick (mutates it;
 # up, or died in a way that took the network with it, this is the only record there is.
 # Read straight off the stick with mtools — nothing is mounted, so it does not disturb
 # the next passthrough run.
-bootlog: ## the last boot's full kernel trace, off the USB stick (the flight recorder)
-	python3 scripts/debug/bootlog.py pull --last
-
-bootlog-all: ## every boot in the ring (~50 boots of history), oldest first
-	python3 scripts/debug/bootlog.py pull
+bootlog: ## the last boot's kernel trace off the USB stick (ALL=1: every boot in the ring, oldest first)
+	python3 scripts/debug/bootlog.py pull $(if $(ALL),,--last)
 
 # BACK TO A FRESH CHECKOUT. Everything generated goes, wherever it landed: the
 # build tree and both zig caches, the test register inside build/verified, the
 # python bytecode, the transient validator reports, the downloaded screenshots,
-# and the staged Linux guest (assets/virt/ — rebuild with scripts/virt/build_guest.sh,
+# and the staged Linux guest (assets/virt/ — rebuild with scripts/virt/build_guest.sh staged,
 # a full kernel build, so `make test-guest-qemu` is the one target this costs).
 # What it never touches: files git tracks, and local configuration that is not
 # generated — .env, .claude/, .vscode/. `make setup` restores the .zig-cache

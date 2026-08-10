@@ -35,3 +35,27 @@ test "a staged guest is a well-formed 64-bit bzImage the loader accepts" {
     // proceeds instead of returning error.NotStaged.
     try std.testing.expect(gueststage.staged());
 }
+
+test "every bakeable name is a catalog id, and every catalog id is bakeable (VIRT-019)" {
+    // build.zig has to repeat this list — a build script cannot read Zig source
+    // — so this is the only thing standing between the two. A name in one and
+    // not the other is a guest that cannot be baked, or an embed nothing reads.
+    const guestlist = @import("testroot").kernel.guestlist;
+    try std.testing.expectEqual(guestlist.CATALOG.len, gueststage.BAKEABLE.len);
+    for (guestlist.CATALOG) |img| {
+        var found = false;
+        for (gueststage.BAKEABLE) |id| found = found or std.mem.eql(u8, id, img.id);
+        try std.testing.expect(found);
+    }
+}
+
+test "a baked guest is offered only when BOTH halves are in this build (VIRT-019)" {
+    // Half an image is not an image: a build that embedded a kernel and no root
+    // must fetch, not hand the loader an empty initramfs.
+    for (gueststage.BAKEABLE) |id| {
+        const b = gueststage.bakedFor(id) orelse continue;
+        try std.testing.expect(b.bzimage.len > 0);
+        try std.testing.expect(b.initramfs.len > 0);
+    }
+    try std.testing.expect(gueststage.bakedFor("no-such-guest") == null);
+}

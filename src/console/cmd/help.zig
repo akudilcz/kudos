@@ -24,6 +24,7 @@ const HELP =
     \\  show PATH [max] open a spinning 3D model window (.glb; max: maximised)
     \\  vm [N]          guest VMs: N boots image N | list | status | stop ID
     \\  ai [PROMPT]     talk to the AI agent (or /help inside for its commands)
+    \\  compile SRC [N] compile a .zig file into a .kudos app named N
     \\  run NAME        run a loaded .kudos application module
     \\  feature SUB     manage loaded .kudos feature modules (feature help)
     \\  flipstat        re-arm the present-cadence sample (-Dflip-sample builds):

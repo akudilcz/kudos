@@ -591,3 +591,16 @@ pub const SerialQueue = struct {
         return self.q.isEmpty();
     }
 };
+
+/// Whether the VM window shows the guest's SCANOUT rather than its serial
+/// console (spec VIRT-016).
+///
+/// Two conditions, and the second is the one that is easy to miss: a guest
+/// arms its scanout (SET_SCANOUT) before it has drawn a single pixel into it,
+/// so a window that switched on the texture alone would blank a console still
+/// carrying the boot log — replacing the one thing the user needs to read
+/// during bring-up with an empty rectangle. The window waits for the guest's
+/// first FLUSH, and only then is there something to show.
+pub fn showsScanout(has_texture: bool, flushed_once: bool) bool {
+    return has_texture and flushed_once;
+}

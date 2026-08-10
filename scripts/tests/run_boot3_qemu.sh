@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # boot-3-QEMU — the SMP scheduling-stress suite's emulated smoke twin.
-# `make test-boot-3-qemu`.
+# `make test-boot B=3`.
 #
 # Proves the boot-3 suite's own logic without spending a lemon reboot: boots
 # kudos-smp on 8 vCPUs (so phase LOAD's oversubscription means something) and

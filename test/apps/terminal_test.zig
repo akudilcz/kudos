@@ -64,6 +64,28 @@ test "the AI agent window prompts `ai>`; a shell terminal prompts `#<core>` (AGT
     try expectEqual(@as(u8, '>'), ai_term.cells[row + 2].ch);
 }
 
+test "a window that opened AS the agent stays marked as one after leaving it (AGT-002)" {
+    const a = std.testing.allocator;
+    const win = try window.create(a, 1, 0, 0, 400, 300, "t");
+    defer a.destroy(win);
+
+    // `/quit` asks the console which kind of leaving this is: a shell terminal
+    // that typed `ai` goes back to its prompt, the dedicated agent window has no
+    // prompt behind it and closes. Only this flag can tell them apart once
+    // ai_mode has been turned off, so it must NOT move with ai_mode.
+    const ai_term = try Terminal.create(a, win, undefined, 0, null, true);
+    defer ai_term.destroy(a);
+    try expect(ai_term.agent_window);
+    ai_term.ai_mode = false; // what leaving the conversation does
+    try expect(ai_term.agent_window);
+
+    const shell_term = try Terminal.create(a, win, undefined, 0, null, false);
+    defer shell_term.destroy(a);
+    try expect(!shell_term.agent_window);
+    shell_term.ai_mode = true; // what `ai` does to a shell terminal
+    try expect(!shell_term.agent_window);
+}
+
 test "visible cols/rows always follow the window's content area" {
     var f = try Fixture.init(400, 300);
     defer f.deinit();

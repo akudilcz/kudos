@@ -8,7 +8,7 @@ per-window geometry/maximise, pointer on button edges), and the perf records
 (`FLIPSTAT`/`FLIPREC`, present.zig).
 
 **Start with `make check`.** It is the gate — see `check.sh` below and CLAUDE.md
-"Verification". Every test target is `make test-*`.
+"Verification". Every test target starts `make test`.
 
 ## The gate
 
@@ -25,14 +25,16 @@ The stamp is a digest of the WORKING TREE, not the commit — an uncommitted edi
 | file | role |
 |------|------|
 | `cases.py` | THE case table (command, expected substrings, track) + shared record parsers. One line per regression. **Shared by every track**, so a regression cannot pass on one and hide on another. |
-| `run_emulated.sh` | `make test-boot-1-qemu`: build `-Dtest-hooks`, bring up a tap + dnsmasq (readback is the network — there is no serial port), boot headless QEMU, drive `boot1_emulated.py`. Single-instance locked. Needs the physical USB stick, so it runs on lemon. |
+| `run_emulated.sh` | `make test-boot B=1`: build `-Dtest-hooks`, bring up a tap + dnsmasq (readback is the network — there is no serial port), boot headless QEMU, drive `boot1_emulated.py`. Single-instance locked. Needs the physical USB stick, so it runs on lemon. |
 | `boot1_emulated.py` | Boot-1 driver: 5 phases — devices, every no-GPU command, windows/hotkeys/history, mouse-driven WM (closed-loop via `wm.ptr`), close-recovery. QMP injection (`scripts/debug/qmp.py`). |
-| `run_passthrough.sh` | `make test-boot-2-qemu`: REQUIRES a rigged machine (`make rig`). Builds `-Dtest-hooks -Dflip-sample`, captures netdebug, drives passthrough + `boot2_passthrough.py`. Tears down the GUEST only — `make stop` restores the desktop. |
+| `run_passthrough.sh` | `make test-boot B=2`: REQUIRES a rigged machine (`make rig`). Builds `-Dtest-hooks -Dflip-sample`, captures netdebug, drives passthrough + `boot2_passthrough.py`. Tears down the GUEST only — `make stop` restores the desktop. |
 | `boot2_passthrough.py` | Boot-2 driver: GSP bring-up, idle 60 Hz FLIPSTAT, the PERF-002/PERF-014 boot milestones (`bootmark.py`), every command, five models rendering at once (incl. off the USB disk), 60 Hz UNDER LOAD via the `flipstat` re-arm, WM-under-GPU + screenshot artifact, stress thrash. |
-| `run_native.sh` | The NATIVE tracks on lemon's bare metal: no flag → `test-boot-1-native`, `--gpu` → `test-boot-2-native`, `--smp` → `test-boot-3-native` (the kudos-smp kernel). Netboots one-shot and **always returns lemon to Ubuntu**, pass or fail. Stamps the tree on success. |
+| `run_native.sh` | The NATIVE tracks on lemon's bare metal: no flag → `test-boot B=1 ON=native`, `--gpu` → `test-boot B=2 ON=native`, `--smp` → `test-boot B=3 ON=native` (the kudos-smp kernel). Netboots one-shot and **always returns lemon to Ubuntu**, pass or fail. Stamps the tree on success. |
 | `boot1_native.py` | Boot-1-native driver — imports `boot1_emulated` and re-points it at KMR1 injection + netdebug readback, so the cases run unchanged. |
-| `run_boot3_qemu.sh` | `make test-boot-3-qemu`: the boot-3 smoke twin — kudos-smp on 8 vCPUs, all slirp (KMR1 in via hostfwd, trace out via the loopback), the `-Dverify-script` in-kernel stages gating the boot, then the driver's phases with no GPU asserts. No stick, no lemon. |
+| `run_boot3_qemu.sh` | `make test-boot B=3`: the boot-3 smoke twin — kudos-smp on 8 vCPUs, all slirp (KMR1 in via hostfwd, trace out via the loopback), the `-Dverify-script` in-kernel stages gating the boot, then the driver's phases with no GPU asserts. No stick, no lemon. |
 | `boot3_native.py` | Boot-3 driver (both machines, `BOOT3_TRACK`): the SMP scheduling stress phases — INSTRUMENTS (every probe the suite leans on is itself asserted; a dead FLIPSTAT/SHOT/KMR1 fails by name), LOAD (placement/oversubscription + tick + rt under load + cadence), GUEST (exactly-once `vm boot`, PERF-017), CHURN (session spaces + TLB shootdowns), WAKE STORM — plus a no-silent-loss counter sweep per phase, one printed seed (`BOOT3_SEED`), and `BOOT3_SOAK_MIN` soak loops. |
+| `compile_run.py` | `make test T=compile-run`: the WRITE-COMPILE-RUN loop end to end, on a laptop — no GPU, no stick, no lemon. Starts the factory on the host, boots kudos-smp under QEMU, types `net ip` / `compile factory` / `compile hello.zig hello` / `run hello`, and asserts the program's own output and `[exit 0]` come back on the terminal. Readback is netdebug out of QEMU's packet dump (same decoder as `guest_boot.py`); injection is QMP. |
+| `guest_boot.py` | `make test-guest-qemu`: the NESTED track — kudos as hypervisor booting the staged Linux guest inside QEMU, on a laptop. Injection QMP, readback the guest's serial console mirrored onto the kudos trace bus. |
 | `kmr1_input.py` | The native injector: KMR1 over UDP (:9515), shaped like `qmp.py` so the emulated phases run untouched. Uses `OP_MOUSE_ABS` — kudos ACCELERATES relative motion, so a drag written as coordinates must bypass the curve to land on them. |
 | `run_model_sweep.sh` / `model_sweep.py` | `make test-models`: every `.glb`/`.gltf` on the stick through a live 4090 kudos; refuses to run without the six TEST-005 geometry-tier models staged. |
 | `cadence.py` | The ONE home for reading + judging a `FLIPSTAT` verdict — the passthrough and native drivers share it so "smooth 60 Hz" means one thing. |

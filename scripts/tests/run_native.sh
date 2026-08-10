@@ -64,7 +64,7 @@ LEMON_IP="${LEMON_IP:-$(scripts/netboot/lemonip.sh)}"
 # guarantee: phase_cadence judges the same 10 s "smooth from the first present" verdict
 # boot2_passthrough does (shared cadence.py). It does NOT run the under-load/thrash
 # FLIPSTAT phases, the model sweep, or the screenshot artifact — those live in
-# `make test-boot-2-qemu`.
+# `make test-boot B=2`.
 if [ "$SMP" = 1 ]; then
     TRACK="boot-3-native (kudos-smp + GSP: SMP scheduling stress)"
     STAMP=boot-3-native

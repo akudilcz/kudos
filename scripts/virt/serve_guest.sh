@@ -6,8 +6,9 @@
 # is reachable at once under its own directory — one server, and a catalog URL
 # that names exactly one image:
 #
-#     http://<this-host>:8000/ssh/bzImage       (build_ssh_guest.sh)
-#     http://<this-host>:8000/firefox/bzImage   (build_firefox_guest.sh)
+#     http://<this-host>:8000/firefox/bzImage     (build_guest.sh firefox)
+#     http://<this-host>:8000/zigserver/bzImage   (build_guest.sh zigserver)
+#     http://<this-host>:8000/ubuntu/bzImage      (build_guest.sh ubuntu)
 #
 # where <this-host> is 10.0.2.2 when kudos runs under QEMU slirp on this machine
 # (slirp's address for the host), or this machine's LAN IP when kudos runs on

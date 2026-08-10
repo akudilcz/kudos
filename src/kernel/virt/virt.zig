@@ -240,6 +240,13 @@ pub const stagedRamBytes = gueststage.ramBytes;
 /// The staged guest's name, for anything that lists it (the `vm boot` menu).
 pub const stagedName = gueststage.name;
 
+/// Whether catalog guest `id` is carried in this build (`-Dbake`) — what the
+/// boot list tells the user before they wait for a download that will not
+/// happen.
+pub fn guestBaked(id: []const u8) bool {
+    return gueststage.bakedFor(id) != null;
+}
+
 /// Bring up the guest staged into this build with `ram_bytes` of RAM, and
 /// return the mailbox slot the caller must open a console window on. The SMP
 /// build spawns the guest's vCPU as a floating task (VIRT-021); the single-core
@@ -328,6 +335,15 @@ pub fn setStartError(name: []const u8) void {
 pub fn netbootBegin(image_no: u8) BootError!ivirt.Id {
     if (!probed) return error.NotAvailable;
     const img = images.byNumber(image_no) orelse return error.BadImage;
+
+    // Baked into this build (-Dbake): the image is already in memory, so there
+    // is nothing to fetch, nothing to wait for and no network to require. The
+    // guest starts here, synchronously, exactly as the staged built-in does.
+    if (gueststage.bakedFor(img.id)) |b| {
+        klog.puts("virt: booting a guest carried in this image (no download)\n");
+        return boot(@as(u64, img.ram_mb) * 1024 * 1024, b.bzimage, b.initramfs, img.cmdline);
+    }
+
     if (netboot.active) return error.Busy;
     const net = inet.instance orelse return error.NoNetwork;
     if (!net.isUp()) return error.NoNetwork;

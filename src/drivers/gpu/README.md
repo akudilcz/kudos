@@ -5,7 +5,7 @@ firmware boot, channels, copy engine, display, and the present path that puts th
 compositor on real panels.
 
 **Status: it works, on real silicon.** GSP-RM boots, the desktop composites and
-presents at 3440x1440, and `make test-boot-2-native` drives the whole thing on lemon's
+presents at 3440x1440, and `make test-boot B=2 ON=native` drives the whole thing on lemon's
 bare metal — 103 assertions, including a steady-60 Hz FLIPSTAT verdict both idle and
 under five spinning GL windows. (This file used to say "design only — no code yet",
 which stopped being true a long time ago.)

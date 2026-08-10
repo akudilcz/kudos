@@ -1,3 +1,4 @@
 # Requirements not yet cited by any test — the reqtrace ratchet (process.md §Traceability).
 # A row leaves this file in the same change that adds the citation; rows are never added
 # for existing requirements — only a NEW requirement landing ahead of its test may join.
+#

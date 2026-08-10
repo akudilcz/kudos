@@ -14,6 +14,33 @@ const inet = @import("inet");
 /// request stages its head into.
 pub const MAX_REQUEST_HEAD: usize = 2048;
 
+/// How long a request waits for its NEXT byte before calling the peer silent.
+/// A budget for the next byte, not for the whole transaction: progress renews
+/// it, so transfer time scales with body size while a peer that stops talking
+/// still fails inside one window.
+pub const GET_STALL_MS: u64 = 8_000;
+
+/// The same budget for a POST, which is a different kind of wait. A GET asks a
+/// server for bytes it already has; every POST kudos makes asks a service to
+/// COMPUTE, and the factory (ARCH-012) answers nothing at all until zig is done.
+/// Eight seconds is shorter than a real compile, and the failure mode is worse
+/// than slow: a compile that FAILS takes longest of all, because zig runs to
+/// completion to produce the errors — so the client used to give up on exactly
+/// the answers the agent needed to fix its code, and the late response then
+/// arrived on a connection nobody was reading. Set ABOVE the factory's own
+/// per-compile budget (scripts/agent/factory.py, 180 s in the zig-server guest),
+/// not equal to it: a client that gives up at the same instant the service does
+/// turns "compile timed out after 180s" — a true answer the user can act on —
+/// into "the factory could not be reached", which is not even true. The
+/// service's verdict decides the outcome; this is only the backstop for a
+/// service that has stopped talking altogether.
+pub const POST_STALL_MS: u64 = 240_000;
+
+/// The stall budget for a request, by whether it carries a body to be worked on.
+pub fn stallMs(is_post: bool) u64 {
+    return if (is_post) POST_STALL_MS else GET_STALL_MS;
+}
+
 /// The two header names that frame a response body (RFC 9112 §6).
 const TRANSFER_ENCODING = "Transfer-Encoding";
 const CONTENT_LENGTH = "Content-Length";

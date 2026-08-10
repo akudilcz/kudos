@@ -347,3 +347,14 @@ test "a full serial queue refuses rather than overwriting (VIRT-036)" {
     try expect(!q.offer('y'));
     try expectEqual(@as(?u8, 'x'), q.next());
 }
+
+test "the guest's scanout is shown once it holds real pixels (VIRT-016)" {
+    // The whole rule, and why it is two conditions rather than one: a guest arms
+    // its scanout before drawing into it, so switching on the texture alone
+    // would blank a console still carrying the boot log — the one thing worth
+    // reading while a guest comes up.
+    try expect(!vmconsole.showsScanout(false, false)); // nothing published yet
+    try expect(!vmconsole.showsScanout(true, false)); // armed, never painted
+    try expect(!vmconsole.showsScanout(false, true)); // flushed, texture retracted
+    try expect(vmconsole.showsScanout(true, true)); // real pixels — show them
+}

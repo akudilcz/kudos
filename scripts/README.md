@@ -61,7 +61,7 @@ lemon FETCHES the build from us at boot; nothing is installed on it.
 - `lemon.sh {setup|boot|status|recover}` — arm and drive lemon. The boot is armed
   ONE-SHOT, so ANY later reset (panic, self-reboot, power cut) lands back in Ubuntu
   and lemon returns on its own, with nobody in the room.
-Backs `make netboot*`, `make lemon-*`, and the native test tracks.
+Backs `make netboot*`, `make lemon DO=*`, and the native test tracks.
 
 ## debug/ — the channels into a running kudos
 - `qmp.py` — QMP injection for EMULATED runs (PS/2 keys, relative mouse,
@@ -74,7 +74,7 @@ Backs `make netboot*`, `make lemon-*`, and the native test tracks.
   boots of history). Unlike netdebug it needs NO listener and survives a crash, a wedge
   and a power cut — if the machine died before the network came up, or died in a way
   that took the network with it, this is the only record that exists.
-  - `pull [--last]` (`make bootlog` / `make bootlog-all`) — read it straight off the
+  - `pull [--last]` (`make bootlog` / `make bootlog ALL=1`) — read it straight off the
     stick with mtools, NOTHING MOUNTED. `read` needs a mountpoint, and mounting the
     stick is exactly what makes usb-host passthrough fail with EBUSY — so `pull` is the
     one that does not sabotage the next run.
@@ -84,7 +84,7 @@ To watch the raw :9514 trace without the MCP: `socat -u udp-recv:9514 -`. Only O
 process can bind that port — the MCP and a running integration suite contend for it.
 
 ## tests/ — the integration regression suite (see tests/README.md)
-Every test target is `make test-*`. `make check` is the ITERATION gate (host tests +
+Every test target starts `make test`. `make check` is the ITERATION gate (host tests +
 QEMU; never reboots lemon); `make check-hw` is the FINAL one.
 - `layering.sh` — CLAUDE.md's architecture rules, made executable: a group importing
   sideways, a driver embedding a UI asset, a `.zig` nested too deep, or prose under
@@ -96,9 +96,9 @@ QEMU; never reboots lemon); `make check-hw` is the FINAL one.
   stamps a digest of the source it covers into `build/verified/`, so the gate knows
   what is stale with no cron and no CI. Confidence is built on QEMU; it is CONFIRMED
   on silicon.
-- Runners: `run_emulated.sh` (`test-boot-1-qemu`) · `run_passthrough.sh`
-  (`test-boot-2-qemu`, needs `make rig`) · `run_native.sh` (`test-boot-1-native`,
-  `--gpu` → `test-boot-2-native`) ·
+- Runners: `run_emulated.sh` (`test-boot B=1`) · `run_passthrough.sh`
+  (`test-boot B=2`, needs `make rig`) · `run_native.sh` (`test-boot B=1 ON=native`,
+  `--gpu` → `test-boot B=2 ON=native`) ·
   `run_model_sweep.sh` (`test-models`).
 - Drivers: `boot1_emulated.py` · `boot1_native.py` · `boot2_passthrough.py` ·
   `model_sweep.py`. Injection: `qmp.py` (emulated) /
@@ -111,17 +111,24 @@ QEMU; never reboots lemon); `make check-hw` is the FINAL one.
 - All artifacts land in `build/logs/` (persistent — survives a power-cycle).
 
 ## virt/ — the Linux guests kudos boots
-Each builder produces a kernel + initramfs pair into `assets/virt/`, on the host
-and as a plain user. They differ only in what userland they carry, so the kernel
-fragment is shared and each adds what its userland needs on top.
-- `guest_kernel.config` — the kconfig fragment all three share: serial console,
-  virtio-mmio discovery, virtio-gpu. Merged onto `tinyconfig`.
-- `build_guest.sh` — the staged built-in guest (busybox on a serial console),
-  the one `make test-guest-qemu` boots.
-- `build_ssh_guest.sh` — the lab image: Alpine + bash + dropbear, for logging
-  into a guest over the network; `test_ssh_guest.sh` exercises it.
-- `build_firefox_guest.sh` — the browser image: Alpine + Mesa's llvmpipe + a
-  Wayland kiosk + Firefox, rendering into the guest's virtio-gpu scanout.
+One builder, one subcommand per image, producing a kernel + initramfs pair into
+`assets/virt/`, on the host and as a plain user. The images differ only in what
+userland they carry, so the kernel fragment is shared and each adds what its
+userland needs on top.
+- `guest_kernel.config` — the kconfig fragment every image shares: serial
+  console, virtio-mmio discovery, virtio-gpu. Merged onto `tinyconfig`.
+- `build_guest.sh <image>` — the builder. `staged`: busybox on a serial console,
+  the guest staged INTO the kernel binary and the one `make test-guest-qemu`
+  boots. `firefox`: Alpine + Mesa's llvmpipe + a Wayland kiosk + Firefox,
+  rendering into the guest's virtio-gpu scanout. `zigserver`: the pinned Zig
+  toolchain plus `agent/factory.py`, serving the `.kudos` compile factory on
+  port 8623. `ubuntu`: the ubuntu-base userland with apt, running from RAM.
+  The last three are the `vm boot` catalog (`src/kernel/virt/guestlist.zig`).
+- `test_guest.sh <image>` — the acceptance gate: boots a built pair under plain
+  QEMU and waits for that image's up-marker, so a broken image is the image's
+  fault and not the hypervisor's. For `zigserver` it also compiles
+  `agent/samples/hello.zig` through the running guest and checks the answer is
+  a real `.kudos` image.
 - `serve_guest.sh` — serves `assets/virt/` over HTTP for `vm boot`: every built
   image at once, each under its own directory, as the catalog URLs name them.
 - `pack_initramfs.py` — the shared packer: reproducible newc cpio, root:root

@@ -110,13 +110,36 @@ src/apps/vmconsole.zig: pub const Color = ?u4;
 src/apps/vmconsole.zig: pub fn keySequence(ascii: u8) ?[]const u8
 src/apps/vmconsole.zig: pub const Console = struct
 src/apps/vmconsole.zig: pub const SerialQueue = struct
+src/apps/vmconsole.zig: pub fn showsScanout(has_texture: bool, flushed_once: bool) bool
 src/apps/vm.zig: pub const Vm = struct
 src/boot/pump.zig: pub var desktop: *Desktop = undefined;
 src/boot/pump.zig: pub fn systemLoop() noreturn
 src/boot/pump.zig: pub fn orderlyFlush() void
 src/boot/pump.zig: pub fn pollInputOnly() void
 src/boot/pump.zig: pub fn desktopPump(force_full_present: bool) void
-src/console/cmd/ai.zig: pub fn initMcpServer() void
+src/console/agenttools.zig: pub fn setToken(tok: []const u8) void
+src/console/agenttools.zig: pub fn setMcpServer(url: []const u8) void
+src/console/agenttools.zig: pub fn setBuf(dst: []u8, len: *usize, src: []const u8) void
+src/console/agenttools.zig: pub fn setFactory(factory: []const u8) void
+src/console/agenttools.zig: pub fn factoryHost() ?[]const u8
+src/console/agenttools.zig: pub fn compileSource(
+src/console/agenttools.zig: pub fn initMcpServer() void
+src/console/agenttools.zig: pub fn discoverRemoteTools() void
+src/console/agenttools.zig: pub fn mergedToolsJson(alloc: std.mem.Allocator) ![]u8
+src/console/agenttools.zig: pub var announce: ?*const fn (text: []const u8) void = null;
+src/console/agenttools.zig: pub fn invoke(ctx: *anyopaque, name: []const u8, args: []const u8, out: *std.array_list.Managed(u8)) anyerror!void
+src/console/apprun.zig: pub const abi = runner.abi;
+src/console/apprun.zig: pub const Error = runner.LoadError || error{
+src/console/apprun.zig: pub fn reason(e: anyerror) []const u8
+src/console/apprun.zig: pub const Options = struct
+src/console/apprun.zig: pub fn execute(out: Out, blob: []const u8, region: []u8, opts: Options) Error!i32
+src/console/apprun.zig: pub const Sandbox = struct
+src/console/apprun.zig: pub var sandbox: ?Sandbox = null;
+src/console/apprun.zig: pub const MAX_OUTPUT_BYTES: usize = 8 * 1024;
+src/console/apprun.zig: pub const RUN_BUDGET_MS: u64 = 10_000;
+src/console/apprun.zig: pub const RunError = Error || error{
+src/console/apprun.zig: pub const Result = struct
+src/console/apprun.zig: pub fn runContained(blob: []const u8, budget_ms: u64) RunError!Result
 src/console/cmd/ai.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/background.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/calc.zig: pub fn run(c: console.Console, _: []const u8) void
@@ -124,6 +147,7 @@ src/console/cmd/cat.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/cd.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/clear.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/clock.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/compile.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/crash.zig: pub fn run(out: Out, args: []const u8) void
 src/console/cmd/echo.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/exit.zig: pub fn run(c: console.Console, _: []const u8) void
@@ -186,6 +210,7 @@ src/console/session.zig: pub const MAX_SESSIONS = percpu.MAX_CPUS;
 src/console/session.zig: pub fn claim() ?*Session
 src/console/session.zig: pub fn release(sess: *Session) void
 src/console/session.zig: pub fn open() ?*Session
+src/console/session.zig: pub fn publishSandbox() void
 src/console/session.zig: pub fn abort(sess: *Session) void
 src/console/session.zig: pub fn nextFreeId() ?u32
 src/console/session.zig: pub fn taskCpuMs(id: u32) ?u64
@@ -2154,6 +2179,9 @@ src/drivers/net/stack/fetchjob.zig: pub const Phase = enum { connecting, sending
 src/drivers/net/stack/fetchjob.zig: pub const Progress = struct { received: usize, total: ?usize };
 src/drivers/net/stack/fetchjob.zig: pub const FetchJob = struct
 src/drivers/net/stack/http_wire.zig: pub const MAX_REQUEST_HEAD: usize = 2048;
+src/drivers/net/stack/http_wire.zig: pub const GET_STALL_MS: u64 = 8_000;
+src/drivers/net/stack/http_wire.zig: pub const POST_STALL_MS: u64 = 240_000;
+src/drivers/net/stack/http_wire.zig: pub fn stallMs(is_post: bool) u64
 src/drivers/net/stack/http_wire.zig: pub const Scheme = enum { http, https };
 src/drivers/net/stack/http_wire.zig: pub const Url = struct
 src/drivers/net/stack/http_wire.zig: pub const UrlError = error{ BadScheme, EmptyHost };
@@ -2313,9 +2341,11 @@ src/drivers/storage/ramdisk.zig: pub const File = struct
 src/drivers/storage/ramdisk.zig: pub fn fileCrc(f: *File) u32
 src/drivers/storage/ramdisk.zig: pub const iramdisk = @import("iramdisk");
 src/drivers/storage/ramdisk.zig: pub fn fs() iramdisk.IRamdisk
+src/drivers/storage/ramdisk.zig: pub const ifilesys = @import("ifilesys");
 src/drivers/storage/ramdisk.zig: pub fn fileSys() ifilesys.IFileSys
 src/drivers/storage/ramdisk.zig: pub fn init(a: std.mem.Allocator) void
 src/drivers/storage/ramdisk.zig: pub fn put(name: []const u8, data: []const u8) !void
+src/drivers/storage/ramdisk.zig: pub fn putStatic(name: []const u8, data: []const u8) !void
 src/drivers/storage/ramdisk.zig: pub fn get(name: []const u8) ?[]const u8
 src/drivers/storage/ramdisk.zig: pub fn list() []const File
 src/drivers/storage/ramdisk.zig: pub fn deinit() void
@@ -2326,6 +2356,10 @@ src/drivers/storage/vfs.zig: pub fn unmountAllForTest() void
 src/drivers/storage/vfs.zig: pub fn normalize(cwd: []const u8, arg: []const u8, out: *[MAX_PATH]u8) ?[]const u8
 src/drivers/storage/vfs.zig: pub fn read(abs: []const u8) ?[]const u8
 src/drivers/storage/vfs.zig: pub fn kind(abs: []const u8) ?ifilesys.Kind
+src/drivers/storage/vfs.zig: pub fn write(abs: []const u8, data: []const u8) ifilesys.WriteError!void
+src/drivers/storage/vfs.zig: pub fn remove(abs: []const u8) ifilesys.WriteError!void
+src/drivers/storage/vfs.zig: pub fn mkdir(abs: []const u8) ifilesys.WriteError!void
+src/drivers/storage/vfs.zig: pub fn rmdir(abs: []const u8) ifilesys.WriteError!void
 src/drivers/storage/vfs.zig: pub fn list(abs: []const u8, cb: ifilesys.ListFn, cb_ctx: ?*anyopaque) ifilesys.Error!void
 src/drivers/usb/debounce.zig: pub const STABLE_MS: u32 = 100; // HUB_DEBOUNCE_STABLE: unchanged this long => stable
 src/drivers/usb/debounce.zig: pub const STEP_MS: u32 = 25; // HUB_DEBOUNCE_STEP: sample cadence
@@ -2508,6 +2542,18 @@ src/iface/iaccel.zig: pub var input_latch: input_latency.Latch = .{};
 src/iface/iblockdev.zig: pub const SECTOR: usize = 512;
 src/iface/iblockdev.zig: pub const Error = error{
 src/iface/iblockdev.zig: pub const IBlockDev = struct
+src/iface/idesk.zig: pub const Action = enum(u8)
+src/iface/idesk.zig: pub const MAX_NAME: usize = 48;
+src/iface/idesk.zig: pub const MAX_WINDOWS_TEXT: usize = 1024;
+src/iface/idesk.zig: pub const MAX_DASHBOARD_TEXT: usize = 2048;
+src/iface/idesk.zig: pub const Request = struct
+src/iface/idesk.zig: pub fn postAction(action: Action, name: []const u8) bool
+src/iface/idesk.zig: pub fn takeAction() ?Request
+src/iface/idesk.zig: pub fn publishWindows(text: []const u8) void
+src/iface/idesk.zig: pub fn windows() []const u8
+src/iface/idesk.zig: pub fn publishDashboard(text: []const u8) void
+src/iface/idesk.zig: pub fn dashboard() []const u8
+src/iface/idesk.zig: pub fn reset() void
 src/iface/idevices.zig: pub const Usb = struct
 src/iface/idevices.zig: pub const Devices = struct
 src/iface/idevices.zig: pub var instance: Devices = .{};
@@ -2563,8 +2609,10 @@ src/iface/idraw.zig: pub var device: ?IDraw = null;
 src/iface/ifilesys.zig: pub const Kind = enum { file, dir };
 src/iface/ifilesys.zig: pub const Entry = struct
 src/iface/ifilesys.zig: pub const Error = error{
+src/iface/ifilesys.zig: pub const WriteError = error{
 src/iface/ifilesys.zig: pub const ListFn = *const fn (ctx: ?*anyopaque, entry: Entry) void;
 src/iface/ifilesys.zig: pub const IFileSys = struct
+src/iface/ifilesys.zig: pub const read_only = struct
 src/iface/ilog.zig: pub const ILog = struct
 src/iface/ilog.zig: pub var sink: ?ILog = null;
 src/iface/ilog.zig: pub fn puts(s: []const u8) void
@@ -3143,6 +3191,9 @@ src/kernel/virt/guestmem.zig: pub const GuestMem = struct
 src/kernel/virt/guestmem.zig: pub const CreateError = error{ NoGuestRam, NoEptTables, EptBuildFailed };
 src/kernel/virt/guestmem.zig: pub fn create(ram_bytes: u64, caps: vmxcaps.EptCaps) CreateError!GuestMem
 src/kernel/virt/gueststage.zig: pub fn name() []const u8
+src/kernel/virt/gueststage.zig: pub const Baked = struct
+src/kernel/virt/gueststage.zig: pub const BAKEABLE = [_][]const u8{ "firefox", "zigserver", "ubuntu" };
+src/kernel/virt/gueststage.zig: pub fn bakedFor(id: []const u8) ?Baked
 src/kernel/virt/gueststage.zig: pub fn bzImage() []const u8
 src/kernel/virt/gueststage.zig: pub fn initramfs() []const u8
 src/kernel/virt/gueststage.zig: pub fn header() ?bzimage.BzInfo
@@ -3307,6 +3358,7 @@ src/kernel/virt/virt.zig: pub fn snapshot(out: []GuestInfo) usize
 src/kernel/virt/virt.zig: pub const BootError = error{
 src/kernel/virt/virt.zig: pub const stagedRamBytes = gueststage.ramBytes;
 src/kernel/virt/virt.zig: pub const stagedName = gueststage.name;
+src/kernel/virt/virt.zig: pub fn guestBaked(id: []const u8) bool
 src/kernel/virt/virt.zig: pub fn bootStaged(ram_bytes: u64, cmdline: []const u8) BootError!ivirt.Id
 src/kernel/virt/virt.zig: pub fn guestStaged() bool
 src/kernel/virt/virt.zig: pub fn guestCore(id: ivirt.Id) ?u32
@@ -3688,6 +3740,7 @@ src/ui/wm/chrome.zig: pub const TL_Y: f32 = TITLE_H * 0.5;
 src/ui/wm/chrome.zig: pub const Button = enum { close, minimise, zoom };
 src/ui/wm/chrome.zig: pub fn buttonX(b: Button) f32
 src/ui/wm/chrome.zig: pub fn draw(
+src/ui/wm/chrome.zig: pub fn titleX(w: f32, text_w: f32) f32
 src/ui/wm/chrome.zig: pub fn buttonAt(px: f32, py: f32) ?Button
 src/ui/wm/chrome.zig: pub fn onTitleBar(px: f32, py: f32) bool
 src/ui/wm/glcomp.zig: pub const Window = struct

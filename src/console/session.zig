@@ -26,6 +26,7 @@ const percpu = @import("../kernel/sched/percpu.zig");
 const sched = @import("../kernel/sched/sched.zig");
 const taskstat = @import("../kernel/sched/taskstat.zig");
 const klog = @import("../kernel/debug/klog.zig");
+const apprun = @import("apprun.zig");
 const shell = @import("shell.zig");
 const editline = @import("editline.zig");
 const Ring = @import("ring").Ring;
@@ -196,6 +197,17 @@ pub fn release(sess: *Session) void {
 /// slot is taken or the task could not be created — the caller reports it; there
 /// is no fallback that quietly shares a slot between two terminals.
 pub fn open() ?*Session {
+    // A terminal's task publishes itself on entry (see `run`), so nothing here
+    // has to.
+    return start("term", taskEntry, false);
+}
+
+/// Claim a slot, build its private address space, and start `entry` on a task
+/// inside it — what a session IS, under both the terminal it was written for
+/// and the contained module run below. `publish_task` records the task on the
+/// slot BEFORE it is dispatched, for a task that runs no loop of its own and so
+/// never publishes itself; the reaper's exit hook clears it either way.
+fn start(name: []const u8, entry: *const fn () void, publish_task: bool) ?*Session {
     const sess = claim() orelse return null;
     // The session's own address space and arena first (MEM-002): the task's
     // stack lives in the arena, behind the guard page (MEM-010).
@@ -203,7 +215,7 @@ pub fn open() ?*Session {
         unclaim(sess.id);
         return null;
     };
-    const t = sched.spawnStacked("term", taskEntry, sessionspace.taskStack(sess.id)) catch {
+    const t = sched.spawnStacked(name, entry, sessionspace.taskStack(sess.id)) catch {
         sessionspace.destroy(sess.id);
         unclaim(sess.id);
         return null;
@@ -214,9 +226,45 @@ pub fn open() ?*Session {
     // never from a shared one-slot mailbox two concurrent opens could race.
     t.exit_hook = &taskReaped;
     t.exit_ctx = sess.id;
+    if (publish_task) {
+        // Safe before dispatch precisely because the task cannot have exited
+        // yet: publishing AFTER it might store a pointer the reaper has already
+        // cleared, to a task the scheduler has already freed.
+        const if_was = sess.task_lock.acquireIrqSave();
+        sess.task = t;
+        sess.task_lock.releaseIrqRestore(if_was);
+    }
     sched.setAddressSpace(t, sessionspace.cr3Of(sess.id));
     sched.dispatch(t);
     return sess;
+}
+
+// ── the contained-run sandbox (console/apprun.zig) ──────────────────────────
+//
+// A `.kudos` app the agent runs has no terminal behind it, so it gets a session
+// of its own: the same private address space a terminal has, holding only the
+// image and its arena. apprun sits BELOW this file (it is the loader side of a
+// run and must not reach up into the slot table), so the capability is
+// published to it rather than imported from it.
+
+fn sandboxStart(_: *anyopaque, name: []const u8, entry: *const fn () void) ?u32 {
+    const sess = start(name, entry, true) orelse return null;
+    return sess.id;
+}
+
+fn sandboxFinish(_: *anyopaque, id: u32) bool {
+    const sess = &sessions[id];
+    cancelTask(sess); // a no-op once the task has exited
+    release(sess); // waits for the reaper, then returns the space and the slot
+    return @atomicLoad(bool, &sess.retired, .acquire);
+}
+
+var sandbox_ctx: u8 = 0;
+
+/// Let contained module runs claim sessions (main_root.zig, SMP only — the
+/// single-core build has no session spaces, so it runs no images at all).
+pub fn publishSandbox() void {
+    apprun.sandbox = .{ .ctx = &sandbox_ctx, .start = sandboxStart, .finish = sandboxFinish };
 }
 
 /// Give a just-claimed slot back on an open() failure path — the task never

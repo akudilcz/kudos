@@ -108,7 +108,7 @@ first: run this from a **text console** (Ctrl+Alt+F3) or an SSH session, not fro
 inside the desktop you are about to stop.
 
 ```sh
-make start-gpu  # desktop down, card bound to vfio, kudos on your monitors
+make start GPU=1  # desktop down, card bound to vfio, kudos on your monitors
 make stop       # card back to nvidia, Linux desktop back
 ```
 
@@ -129,7 +129,7 @@ opens the QEMU window.
 
 A healthy run logs `gpu: GSP init bring-up result: ok` on the trace, and the
 display test logs the head-0 surface readback (a mismatch aborts with
-`SurfaceReadbackMismatch`). `make start-gpu` also **asserts the running guest's
+`SurfaceReadbackMismatch`). `make start GPU=1` also **asserts the running guest's
 `kudos build #N` banner matches the ISO it just built**, so a stale ISO cannot
 silently be what you tested. The card is released back to nvidia on every exit
 path it handles, Ctrl-C included.
@@ -221,9 +221,9 @@ environment variables (`scripts/gpu/env.sh`):
 | `make status` | Reads the test register (~1 s): what has passed against this exact tree, what is stale | nothing |
 | `make test-guest-qemu` | Nested: kudos boots a Linux guest, under QEMU. The one suite needing no hardware beyond KVM | `scripts/virt/build_guest.sh` run once (a kernel build) |
 | `make test-agent` | The agent pipeline on the host: factory + loader + full agent loop | zig |
-| `make test-boot-1-qemu` | Shell + window-manager suite against a full boot in QEMU | the USB stick |
-| `make test-boot-2-qemu` | The real 4090 under QEMU passthrough | the 4090 (`make rig` first) |
-| `make test-boot-{1,2,3}-native` | The same suites on **bare metal**, netbooted | the remote rig below |
+| `make test-boot B=1` | Shell + window-manager suite against a full boot in QEMU | the USB stick |
+| `make test-boot B=2` | The real 4090 under QEMU passthrough | the 4090 (`make rig` first) |
+| `make test-boot B={1,2,3} ON=native` | The same suites on **bare metal**, netbooted | the remote rig below |
 | `make shot` | One command: screenshot a model rendered on the 4090 | the 4090 + the stick |
 
 Tests are **register-incremental**: `build/verified/` records the content digest
@@ -293,7 +293,7 @@ fail in a way that does *not* name the missing tool:
 | `socat` | capturing the netdebug trace (:9514) — every test track | `socat` |
 | `dnsmasq` | the emulated track's tap needs a DHCP server (KMR1 is unicast) | `dnsmasq` |
 | `python3` | the test drivers + the debug channel | `python3` |
-| `gltf_validator` | the glTF asset gate (`make gltf-validate`, spec TEST-007) | *(Khronos release — `make setup` fetches it)* |
+| `gltf_validator` | the glTF asset gate (`make test T=gltf-validate`, spec TEST-007) | *(Khronos release — `make setup` fetches it)* |
 | `uv` | runs the netdebug MCP server | *(astral.sh — `make setup` fetches it)* |
 
 A bootable ISO needs **two** boot paths built into it: an old-style BIOS one and
@@ -343,7 +343,7 @@ Everything above is one machine. The way this project is actually developed is
 two: a laptop to write on, and a headless box (called `lemon` throughout
 `scripts/netboot/`) that holds the 4090 and the stick. The box PXE-boots the build
 served from the laptop, one-shot, so any later reset returns it to its own OS
-unattended — that is what `make netboot-serve`, `make lemon-boot` and the
+unattended — that is what `make netboot-serve`, `make lemon DO=boot` and the
 `test-boot-*-native` tracks are for, and what the `LEMON_HOST` / `LEMON_IP`
 environment variables point at (an ssh-config entry and working keys are assumed).
 None of it is needed for the three options above.

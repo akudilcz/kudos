@@ -966,7 +966,21 @@ pub const Volume = struct {
         }
     }
 
-    const filesys_vtable = ifilesys.IFileSys.VTable{ .read = vtRead, .list = vtList, .kind = vtKind };
+    // The volume CAN write — `create`, `mkdir`, `remove` and `LogFile` above are
+    // the real thing — but none of that is published through the VFS seam: the
+    // stick is the boot medium, and the only writers it has are the deliberate,
+    // named ones that call this Volume directly (the boot log, the screenshot
+    // save). A VFS caller asking to mutate /usbdisk is told so, not silently
+    // given the boot medium.
+    const filesys_vtable = ifilesys.IFileSys.VTable{
+        .read = vtRead,
+        .list = vtList,
+        .kind = vtKind,
+        .write = ifilesys.read_only.write,
+        .remove = ifilesys.read_only.remove,
+        .mkdir = ifilesys.read_only.mkdir,
+        .rmdir = ifilesys.read_only.rmdir,
+    };
 
     /// The volume as an ifilesys.IFileSys (mounted at /usbdisk).
     pub fn fileSys(self: *Volume) ifilesys.IFileSys {

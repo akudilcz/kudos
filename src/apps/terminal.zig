@@ -94,6 +94,13 @@ pub const Terminal = struct {
     /// normal terminal leaves this false and runs lines as shell commands.
     ai_mode: bool = false,
 
+    /// Whether this terminal WAS OPENED as the agent window, as opposed to a
+    /// shell terminal the `ai` command later moved into a conversation. Fixed at
+    /// create: `ai_mode` moves, this does not, and leaving the agent means
+    /// different things for the two — the shell terminal goes back to its
+    /// prompt, the dedicated window has no prompt to go back to and closes.
+    agent_window: bool = false,
+
     // Test-hooks terminal-output mirror (build.zig `-Dtest-hooks`; compiled out
     // otherwise). Accumulates the characters written to the grid a line at a time
     // so the integration harness can read command output back over the trace
@@ -119,7 +126,7 @@ pub const Terminal = struct {
         const rows = win.contentH() / font.HEIGHT;
         const cells = try a.alloc(Cell, MAX_COLS * MAX_ROWS);
         const t = try a.create(Terminal);
-        t.* = .{ .a = a, .win = win, .desktop = desktop, .cols = cols, .rows = rows, .cells = cells, .id = id, .session = session, .ai_mode = ai_mode };
+        t.* = .{ .a = a, .win = win, .desktop = desktop, .cols = cols, .rows = rows, .cells = cells, .id = id, .session = session, .ai_mode = ai_mode, .agent_window = ai_mode };
         counter.register(&cnt_key_drops); // idempotent — first terminal wins
         t.setCwd("/ramdisk");
         t.clearGrid();
@@ -564,6 +571,7 @@ pub const Terminal = struct {
             .win = self.win,
             .a = self.a,
             .ai_mode = self.ai_mode,
+            .agent_window = self.agent_window,
             .setAiModeFn = conSetAiMode,
         };
     }

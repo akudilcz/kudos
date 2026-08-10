@@ -108,6 +108,11 @@ mutation-test every regression test (reintroduce the bug, confirm RED, restore).
 
 ## Verification
 
+- **Write the whole batch, then verify it once.** A gate run costs tens of minutes, so the
+  unit of work is a BATCH of tasks, not a task: implement every task in the batch — source,
+  tests, docs, gate rows — and only then run the suite. Never interleave one change with one
+  run. A run that reports five failures at once is five fixes for the price of one wait; five
+  runs reporting one failure each is the same information for five times the cost.
 - Cheapest signal first: fast host/unit tests → integration/simulation → the real environment
   LAST; never spend an expensive run on what a cheap one could answer.
 - Verification is incremental: `build/verified/` is the test register — a passing track

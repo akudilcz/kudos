@@ -41,7 +41,16 @@ const FakeFs = struct {
         if (path.len == 0) return .dir;
         return if (read(c, path) != null) .file else null;
     }
-    const vtable = ifilesys.IFileSys.VTable{ .read = read, .list = list, .kind = kind };
+    // Read-only: the asset pipeline never writes through the VFS.
+    const vtable = ifilesys.IFileSys.VTable{
+        .read = read,
+        .list = list,
+        .kind = kind,
+        .write = ifilesys.read_only.write,
+        .remove = ifilesys.read_only.remove,
+        .mkdir = ifilesys.read_only.mkdir,
+        .rmdir = ifilesys.read_only.rmdir,
+    };
     var ctx: u8 = 0;
     fn iface() ifilesys.IFileSys {
         return .{ .ctx = &ctx, .vtable = &vtable };

@@ -11,6 +11,10 @@ const expect = std.testing.expect;
 const expectError = std.testing.expectError;
 const expectEqualStrings = std.testing.expectEqualStrings;
 
+/// A credential of the shape and length the store really holds, with a body
+/// that CANNOT be a key: the real form is 64 hex digits, and a fixture spelled
+/// that way is indistinguishable from a live credential to a secret scanner,
+/// which then blocks the push. Keep the non-hex body.
 const SECRET = "sk-or-v1-this-is-a-test-fixture-not-a-credential-xxxxxxxxxxxxxxxxxxxxxx";
 const SALT: [keystore.SALT_BYTES]u8 = @splat(0x5A);
 const NONCE: [keystore.NONCE_BYTES]u8 = @splat(0x11);

@@ -71,6 +71,7 @@ all_tracks() {
     for g in $(host_groups); do echo "host:$g"; done
     echo "stackframes"
     echo "agent-pipeline"
+    echo "compile-run"
     echo "gltf-validate"
     echo "coverage"
     echo "qemu-boot-1"
@@ -93,6 +94,11 @@ paths_for() {
             echo "src build.zig linker.ld scripts/tests/stackframes.sh scripts/tests/stackframes.py scripts/tests/stackdebt.txt" ;;
         agent-pipeline)
             echo "scripts/agent" ;;
+        compile-run)
+            # The write-compile-run loop, end to end inside a booted kudos: the
+            # shell command, the factory client, the loader and the contained
+            # run, plus the factory itself and the sample it compiles.
+            echo "src/console src/kernel/loader src/drivers/net scripts/agent/factory.py scripts/agent/samples scripts/tests/compile_run.py" ;;
         gltf-validate)
             echo "assets/models src/ui/assets scripts/tests/gltf-validate.sh" ;;
         coverage)
@@ -163,6 +169,8 @@ track_cmd() { # track -> runs it (exit status is the verdict)
                             && python3 scripts/agent/test_agent.py \
                             && python3 scripts/agent/test_mcp_stdio.py ;;
         gltf-validate)  scripts/tests/gltf-validate.sh ;;
+        compile-run)    zig build iso-smp -Dtest-hooks -p build --cache-dir build/.zig-cache &&
+                        python3 scripts/tests/compile_run.py ;;
         coverage)       scripts/tests/coverage.sh run && scripts/tests/coverage.sh check 90 ;;
         qemu-boot-1)    scripts/tests/run_emulated.sh ;;
         boot-1-native)  scripts/tests/run_native.sh ;;         # stamps itself on pass
@@ -333,7 +341,7 @@ echo "▸ mutation gate (regression tests must be able to fail)"
 scripts/tests/mutcheck.sh
 
 # ── 4. The remaining stamped tracks, cheapest first.
-for t in gltf-validate agent-pipeline stackframes; do
+for t in gltf-validate agent-pipeline compile-run stackframes; do
     echo
     echo "▸ $t"
     if fresh_pass "$t"; then
@@ -443,7 +451,7 @@ check: FAIL — code that ONLY REAL HARDWARE CAN EXERCISE has changed since a na
 
        Run:
 EOF
-for t in $STALE; do echo "           make test-$t" >&2; done
+for t in $STALE; do echo "           make test T=$t" >&2; done
 cat >&2 <<EOF
 
        Then re-run: make check-hw

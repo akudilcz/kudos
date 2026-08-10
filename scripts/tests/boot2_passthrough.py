@@ -72,8 +72,9 @@ SMP = os.environ.get("KUDOS_SMP") == "1"
 # The five simultaneously-spinning models (phase 4/5): ramdisk + USB-disk paths.
 FIVE_MODELS = [
     # APP-008: several 3D models shown at once, one window each, composited
-    # live on the GPU; APP-010: alpha-blended materials render correctly (the
-    # render-oracle suite holds AlphaBlendModeTest to its published reference).
+    # live on the GPU. (Alpha blending is judged by the render-oracle suite
+    # against Khronos' AlphaBlendModeTest reference — none of these five models
+    # is blended, so this run is not evidence for it and no longer claims to be.)
     "show duck.glb",
     "show teapot.glb",
     "show /usbdisk/models/rabbit.glb",

@@ -38,7 +38,12 @@ ABI_ZIG = os.path.join(REPO_ROOT, "src", "kernel", "loader", "abi.zig")
 HARNESS_DIR = os.path.join(os.path.dirname(__file__), "harness")
 
 ZIG = os.environ.get("ZIG", "zig")
-BUILD_TIMEOUT_S = 30
+# How long one compile may run. Tunable because the same factory runs in two
+# very different places: on a host with a warm build cache, where 30 seconds is
+# already generous, and inside a kudos guest whose whole filesystem is a tmpfs
+# and whose first compile builds compiler_rt from scratch. Every wait states a
+# budget; this one states whose.
+BUILD_TIMEOUT_S = int(os.environ.get("FACTORY_BUILD_TIMEOUT_S", "30"))
 HEADER_SIZE = 24  # six u32 fields; asserted against abi.zig below
 
 # Module names become workspace file names and URL path segments, so the set of
@@ -315,7 +320,14 @@ def serve(host, port, workspace=None):
     Handler.abi = abi
     Handler.workspace = workspace
     Handler.token = os.environ.get("FACTORY_TOKEN") or None
-    httpd = http.server.HTTPServer((host, port), Handler)
+    # THREADING, not one request at a time: a compile holds the handler for as
+    # long as zig runs, and a single-threaded server therefore blocks every other
+    # caller behind it — the agent asking for /abi while its own compile was
+    # running saw the read time out, retried, and burned its turn budget on a
+    # service that was merely busy. Each compile already works in its own temp
+    # directory, so they are independent; the workspace write is the only shared
+    # state and it is one small file per successful build.
+    httpd = http.server.ThreadingHTTPServer((host, port), Handler)
     print("factory: serving /compile on %s:%d (abi v%d, magic %#x, workspace %s, auth %s)"
           % (host, port, abi["version"], abi["magic"],
              workspace or "none", "token" if Handler.token else "open"))

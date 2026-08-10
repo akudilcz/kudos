@@ -31,6 +31,7 @@ def build_hostagent():
     subprocess.check_call([
         os.environ.get("ZIG", "zig"), "build-exe",
         "--dep", "loop", "--dep", "prompt", "--dep", "hotload", "--dep", "inet",
+        "--dep", "ramdisk", "--dep", "vfs", "--dep", "ifilesys",
         "-Mroot=" + os.path.join(HERE, "hostagent.zig"),
         # loop streams its chat through inet.BodySink (the injected transport's
         # contract type), so loop's module must see the inet app-seam — the same
@@ -40,6 +41,13 @@ def build_hostagent():
         "--dep", "abi", "-Mhotload=" + os.path.join(REPO, "src", "kernel", "loader", "hotload.zig"),
         "-Mabi=" + os.path.join(REPO, "src", "kernel", "loader", "abi.zig"),
         "-Minet=" + os.path.join(REPO, "src", "iface", "inet.zig"),
+        # The file tools run the REAL ramdisk under the REAL vfs, so the tree
+        # the model meets on the host is the tree it meets in the kernel.
+        "--dep", "iramdisk", "--dep", "ifilesys",
+        "-Mramdisk=" + os.path.join(REPO, "src", "drivers", "storage", "ramdisk.zig"),
+        "--dep", "ifilesys", "-Mvfs=" + os.path.join(REPO, "src", "drivers", "storage", "vfs.zig"),
+        "-Mifilesys=" + os.path.join(REPO, "src", "iface", "ifilesys.zig"),
+        "-Miramdisk=" + os.path.join(REPO, "src", "iface", "iramdisk.zig"),
         "-femit-bin=" + out,
     ])
     return out
@@ -108,6 +116,28 @@ def test_agent_uses_the_file_and_state_tools():
     assert "requested to open the clock window" in p.stdout, p.stdout
 
 
+# AGT-006: the directory half of the file surface — an agent that can organise
+# what it generates, not just drop names at the root.
+def test_agent_makes_and_clears_directories():
+    if not HAVE_ZIG:
+        print("SKIP: zig not on PATH")
+        return
+
+    p = _run_agent(stub_openrouter.DIR_SCRIPT, "organise some notes")
+    assert p.returncode == 0, p.stderr
+    # An empty directory exists between its mkdir and its rmdir.
+    assert "created directory /ramdisk/scratch" in p.stdout, p.stdout
+    assert "deleted directory /ramdisk/scratch" in p.stdout, p.stdout
+    # A nested write makes the directories its path names, and they list as such.
+    assert "wrote 6 bytes to /ramdisk/notes/deep/inner.txt" in p.stdout, p.stdout
+    assert "d deep (0 bytes)" in p.stdout, p.stdout
+    # A directory holding something is not silently emptied...
+    assert "cannot delete /ramdisk/notes: NotEmpty" in p.stdout, p.stdout
+    # ...and one that only existed because of what was under it goes when that does.
+    assert "deleted /ramdisk/notes/deep/inner.txt" in p.stdout, p.stdout
+    assert "(empty)" in p.stdout, p.stdout
+
+
 def test_agent_improves_with_feature():
     if not HAVE_ZIG:
         print("SKIP: zig not on PATH")
@@ -130,6 +160,7 @@ def main():
     failed = 0
     for t in (test_agent_builds_and_runs_primesum,
               test_agent_uses_the_file_and_state_tools,
+              test_agent_makes_and_clears_directories,
               test_agent_improves_with_feature):
         try:
             t()

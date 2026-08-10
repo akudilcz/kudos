@@ -70,7 +70,16 @@ const FakeFs = struct {
         if (path.len == 0) return .dir;
         return if (read(c, path) != null) .file else null;
     }
-    const vtable = ifilesys.IFileSys.VTable{ .read = read, .list = list, .kind = kind };
+    // Read-only: the asset pipeline never writes through the VFS.
+    const vtable = ifilesys.IFileSys.VTable{
+        .read = read,
+        .list = list,
+        .kind = kind,
+        .write = ifilesys.read_only.write,
+        .remove = ifilesys.read_only.remove,
+        .mkdir = ifilesys.read_only.mkdir,
+        .rmdir = ifilesys.read_only.rmdir,
+    };
     var ctx: u8 = 0;
     fn iface() ifilesys.IFileSys {
         return .{ .ctx = &ctx, .vtable = &vtable };
@@ -231,13 +240,22 @@ const REFERENCES = [_]Reference{
     //   TextureCoordinateTest  19.9 once baseColorFactor modulated the
     //                          base-colour texture; bar kept at its gap-era 40,
     //                          which the cross-model matrix already cleared
+    // APP-010 is cited HERE, against the Khronos AlphaBlendModeTest reference,
+    // because this is where alpha blending is actually judged. It used to be
+    // cited only from a comment over an unrelated list of five opaque models in
+    // a passthrough run, which bears on blending not at all.
     .{ .file = "AlphaBlendModeTest.glb", .ref_png = @embedFile("ref_alphablendmodetest"), .yaw_deg = 0, .pitch_deg = 0, .dist = 3.8, .threshold = 30 },
     .{ .file = "VertexColorTest.glb", .ref_png = @embedFile("ref_vertexcolortest"), .yaw_deg = 0, .pitch_deg = 0, .dist = 2.0, .threshold = 30 },
     .{ .file = "OrientationTest.glb", .ref_png = @embedFile("ref_orientationtest"), .yaw_deg = -45, .pitch_deg = 30, .dist = 4.2, .threshold = 45, .lit = true },
     .{ .file = "TextureCoordinateTest.glb", .ref_png = @embedFile("ref_texturecoordinatetest"), .yaw_deg = 0, .pitch_deg = 0, .dist = 2.0, .threshold = 40 },
-    // Documented gaps — each threshold is the bar a MEANINGFUL pass would need
-    // (under every cross-model error); the render is asserted to stay above it
-    // until the named feature exists.
+    // Documented gaps (spec TEST-008) — each threshold is the bar a MEANINGFUL
+    // pass would need (under every cross-model error); the render is asserted to
+    // stay ABOVE it until the named feature exists.
+    //
+    // These two are deliberately NOT part of TEST-006's conformance set: that
+    // requirement is scoped to "features it implements", and listing these by
+    // name alongside the conforming four made it read as a claim to render all
+    // six correctly while the suite asserted the opposite for two of them.
     .{ .file = "NormalTangentTest.glb", .ref_png = @embedFile("ref_normaltangenttest"), .yaw_deg = 0, .pitch_deg = 0, .dist = 2.0, .threshold = 30, .gap = "the sphere shapes are normal-map content on flat quads; the unlit chart never enters the PBR path, so its normal maps stay unread" },
     .{ .file = "MetalRoughSpheres.glb", .ref_png = @embedFile("ref_metalroughspheres"), .yaw_deg = 0, .pitch_deg = 0, .dist = 2.3, .threshold = 30, .lit = true, .gap = "the metal/roughness response matrix reads as sharp mirrored environment detail per sphere; the analytic environment has no such detail to reflect" },
 };

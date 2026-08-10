@@ -76,7 +76,11 @@ fn writePpm(g: *gles.Context, path: []const u8) !void {
     try w.flush();
 }
 
-test "the guest's boot lands in the console grid (VIRT-016)" {
+// VIRT-010, not VIRT-016: this replays a SERIAL transcript into the text grid,
+// so it is evidence for the console, not for the guest's virtio-gpu scanout —
+// which is never involved here. The scanout's display rule is asserted by
+// vmconsole's `showsScanout`.
+test "the guest's boot lands in the console grid (VIRT-010)" {
     var c = replay();
     // The grid holds the last screenful, so the prompt is what survives — the
     // marker the initramfs prints scrolls off exactly as it would on a terminal.

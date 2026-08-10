@@ -31,7 +31,8 @@ const usbshot = @import("drivers/gpu/usbshot.zig");
 const net = @import("drivers/net/stack/net.zig");
 const netdebug = @import("drivers/net/debug/netdebug.zig");
 const fileserv = @import("drivers/net/debug/fileserv.zig");
-const ai_cmd = @import("console/cmd/ai.zig");
+const agenttools = @import("console/agenttools.zig");
+const session = @import("console/session.zig");
 const xhci = @import("drivers/usb/xhci.zig");
 const gate = @import("kernel/debug/gate.zig");
 const backtrace = @import("kernel/debug/backtrace.zig");
@@ -49,6 +50,7 @@ const cpu = @import("kernel/cpu/cpu.zig");
 const tsc = @import("kernel/cpu/tsc.zig");
 const counter = @import("kernel/debug/counter.zig");
 const virt = @import("kernel/virt/virt.zig");
+const gueststage = @import("kernel/virt/gueststage.zig"); // the guests this build carries
 const ivirt = @import("ivirt");
 const gpu = @import("drivers/gpu/gpu.zig");
 const idraw = @import("idraw"); // the draw seam — the desktop renders through gles onto it
@@ -317,7 +319,11 @@ pub fn run(mb_info: u64) noreturn {
     ramdisk.init(a);
     seedRamdisk();
     fileserv.init(ramdisk.fs()); // netdebug file server reads through the iramdisk seam
-    ai_cmd.initMcpServer(); // serve the agent's tool registry as MCP over netdebug (AGT-011/AGT-013)
+    agenttools.initMcpServer(); // serve the agent's tool registry as MCP over netdebug (AGT-011/AGT-013)
+    // Let the agent run a compiled module in a session of its own (AGT-008).
+    // Single-core kudos has no session spaces, so it never offers one — and
+    // apprun refuses the run rather than executing a module uncontained.
+    if (buildinfo.smp) session.publishSandbox();
     net.wait_hook = &netKeepalive; // a long fetch must not blind netdebug/KMR1 (see netKeepalive)
     net.publish(); // apps reach the network through iface/inet.zig, never the stack itself
     devices.publish(); // …and the peripherals through iface/idevices.zig
@@ -735,8 +741,28 @@ fn seedRamdisk() void {
         // The default desktop wallpaper (spec R23) — the desktop reads it back
         // through the VFS at GL init, same path a user-chosen image takes.
         .{ "background.png", @embedFile("background_png") },
+        // Something to compile the moment the machine is up: `compile hello.zig
+        // hello` sends this to the factory (ARCH-012) and `run hello` executes
+        // what comes back. It is the same source the host factory tests use, so
+        // the sample the user compiles and the sample the gate compiles are one
+        // file.
+        .{ "hello.zig", @embedFile("hello_zig") },
     };
     inline for (seeds) |s| {
         ramdisk.put(s[0], s[1]) catch @panic("ramdisk: seeding a boot file failed (heap broken at init)");
+    }
+
+    // The guest images this build carries (-Dbake), under /ramdisk/virt/<id>/,
+    // so a baked guest is a thing the user can SEE and copy rather than a claim
+    // the `vm` list makes. Seeded BORROWED (putStatic): the bytes already live
+    // in the kernel image and are hundreds of megabytes — a heap copy would pay
+    // for them twice and change nothing about them.
+    inline for (gueststage.BAKEABLE) |id| {
+        if (gueststage.bakedFor(id)) |b| {
+            ramdisk.putStatic("virt/" ++ id ++ "/bzImage", b.bzimage) catch
+                @panic("ramdisk: seeding a baked guest failed (heap broken at init)");
+            ramdisk.putStatic("virt/" ++ id ++ "/initramfs.cpio.gz", b.initramfs) catch
+                @panic("ramdisk: seeding a baked guest failed (heap broken at init)");
+        }
     }
 }

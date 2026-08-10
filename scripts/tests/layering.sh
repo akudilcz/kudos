@@ -177,7 +177,7 @@ check "no _impl/_utils/_helper/_manager files" \
 # Runtime abstractions live only at REAL seams — hardware, IO, time, network,
 # randomness (spec ARCH-004). The interface layer is therefore a CLOSED set: a new
 # contract is an architecture decision, declared here or refused at review.
-IFACE_ALLOWED="iaccel iblockdev idevices idisplay idraw ifilesys ilog imouse inet ipci ipresent iramdisk ivirt iwindow"
+IFACE_ALLOWED="iaccel iblockdev idesk idevices idisplay idraw ifilesys ilog imouse inet ipci ipresent iramdisk ivirt iwindow"
 undeclared_ifaces() {
     local f stem
     for f in src/iface/*.zig; do
@@ -188,6 +188,33 @@ undeclared_ifaces() {
 check "the interface layer is a closed, declared seam set (ARCH-004)" \
     "a new runtime abstraction is an architecture decision — declare it in IFACE_ALLOWED, or pass a value instead of a dependency" \
     undeclared_ifaces
+
+# A contract must not reach into an implementation (spec ARCH-002). The point of
+# the interface layer is that the subsystems either side of it stay MUTUALLY
+# UNAWARE; a contract that imports a driver, an app or the desktop has connected
+# them after all, and the seam is decorative.
+#
+# What this checks and what it does not: it enforces the mutual-unawareness half
+# of ARCH-002 — contracts may name only `std`, other contracts, and kernel
+# primitives. The "never logic" half is not machine-checkable and is not claimed
+# here; src/iface/ivirt.zig genuinely carries rings and counters, which is a
+# known deviation recorded against ARCH-002 rather than hidden behind a green
+# check.
+iface_reaches_down() {
+    local f imp
+    for f in src/iface/*.zig; do
+        [ -f "$f" ] || continue
+        while read -r imp; do
+            case "$imp" in
+                std|abi|ring|input_latency) continue ;;          # primitives
+                *) [ -f "src/iface/${imp}.zig" ] || echo "$f imports '$imp' (not a contract or primitive)" ;;
+            esac
+        done < <(grep -ohE '@import\("[^"]+"\)' "$f" | sed 's/@import("//; s/")//')
+    done
+}
+check "an interface contract names no implementation (ARCH-002)" \
+    "a contract that imports a driver, app or the desktop has connected the two sides it exists to keep apart" \
+    iface_reaches_down
 
 # One conformance suite per shared contract (spec TEST-003): every contract that a
 # real driver and a fake both implement is exercised by ONE vector suite that every
@@ -383,7 +410,7 @@ klevel() {
                          # loop, so a defect here stops the machine like a kernel one
     iface)  echo K1 ;;   # contracts compiled into K1 paths inherit K1
     drivers) echo K2 ;;  # a defect can take a subsystem or a device for all its users
-    console) echo K3 ;;  # session plumbing — contained by K1 machinery (KRN-006)
+    console) echo K3 ;;  # session plumbing — contained by K1 machinery
     ui)     echo K3 ;;
     widgets) echo K3 ;;
     apps)   echo K3 ;;

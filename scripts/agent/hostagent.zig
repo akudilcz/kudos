@@ -11,6 +11,9 @@
 
 const std = @import("std");
 const inet = @import("inet");
+const ifilesys = @import("ifilesys");
+const ramdisk = @import("ramdisk");
+const vfs = @import("vfs");
 const loop = @import("loop");
 const agent_tools = loop.tools;
 const prompt = @import("prompt");
@@ -25,9 +28,6 @@ const Agent = struct {
     factory_base: []const u8,
     // Blobs produced by the compile tools, keyed by name, for run/load tools.
     blobs: std.StringHashMap([]u8),
-    // In-memory VFS for the file tools' host parity — the kernel side reads/writes
-    // the ramdisk; here a name→bytes map stands in.
-    files: std.StringHashMap([]u8),
     // Scratch captured from a running app's api.print.
     run_out: std.array_list.Managed(u8),
     arena: []u8,
@@ -206,15 +206,29 @@ const Agent = struct {
     }
 
     // ── AGT-006 tool surface (host parity): files + system state ──────────────
+    // These run the REAL store and the REAL namespace (drivers/storage), so the
+    // tree semantics the model meets here are the ones it meets in the kernel.
+
+    /// The absolute VFS path a tool argument names; a bare or relative one means
+    /// the ramdisk. Same rule as the kernel's file tools (console/agenttools.zig).
+    fn absPath(buf: *[vfs.MAX_PATH]u8, path: []const u8) ?[]const u8 {
+        if (path.len != 0 and path[0] == '/') return vfs.normalize("/", path, buf);
+        return vfs.normalize("/ramdisk", path, buf);
+    }
+
+    fn argPath(args_json: []const u8, a: std.mem.Allocator, buf: *[vfs.MAX_PATH]u8) !?[]const u8 {
+        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a, args_json, .{});
+        return absPath(buf, parsed.object.get("path").?.string);
+    }
+
     fn toolReadFile(ctx: *anyopaque, args_json: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
         const self: *Agent = @ptrCast(@alignCast(ctx));
         var a = std.heap.ArenaAllocator.init(self.alloc);
         defer a.deinit();
-        const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a.allocator(), args_json, .{});
-        const path = parsed.object.get("path").?.string;
-        const name = if (std.mem.startsWith(u8, path, "/ramdisk/")) path["/ramdisk/".len..] else path;
-        const body = self.files.get(name) orelse {
-            try agent_tools.printTo(out, "no such file: {s}", .{path});
+        var buf: [vfs.MAX_PATH]u8 = undefined;
+        const abs = (try argPath(args_json, a.allocator(), &buf)) orelse return out.appendSlice("path too long");
+        const body = vfs.read(abs) orelse {
+            try agent_tools.printTo(out, "no such file: {s}", .{abs});
             return;
         };
         try out.appendSlice(body);
@@ -225,17 +239,84 @@ const Agent = struct {
         var a = std.heap.ArenaAllocator.init(self.alloc);
         defer a.deinit();
         const parsed = try std.json.parseFromSliceLeaky(std.json.Value, a.allocator(), args_json, .{});
-        const path = parsed.object.get("path").?.string;
+        var buf: [vfs.MAX_PATH]u8 = undefined;
+        const abs = absPath(&buf, parsed.object.get("path").?.string) orelse return out.appendSlice("path too long");
         const content = parsed.object.get("content").?.string;
-        const name = if (std.mem.startsWith(u8, path, "/ramdisk/")) path["/ramdisk/".len..] else path;
-        try self.files.put(try self.alloc.dupe(u8, name), try self.alloc.dupe(u8, content));
-        try agent_tools.printTo(out, "wrote {d} bytes to /ramdisk/{s}", .{ content.len, name });
+        vfs.write(abs, content) catch |e| {
+            try agent_tools.printTo(out, "cannot write {s}: {s}", .{ abs, @errorName(e) });
+            return;
+        };
+        try agent_tools.printTo(out, "wrote {d} bytes to {s}", .{ content.len, abs });
+    }
+
+    fn toolDeleteFile(ctx: *anyopaque, args_json: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
+        const self: *Agent = @ptrCast(@alignCast(ctx));
+        var a = std.heap.ArenaAllocator.init(self.alloc);
+        defer a.deinit();
+        var buf: [vfs.MAX_PATH]u8 = undefined;
+        const abs = (try argPath(args_json, a.allocator(), &buf)) orelse return out.appendSlice("path too long");
+        vfs.remove(abs) catch |e| {
+            try agent_tools.printTo(out, "cannot delete {s}: {s}", .{ abs, @errorName(e) });
+            return;
+        };
+        try agent_tools.printTo(out, "deleted {s}", .{abs});
+    }
+
+    fn toolMakeDir(ctx: *anyopaque, args_json: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
+        const self: *Agent = @ptrCast(@alignCast(ctx));
+        var a = std.heap.ArenaAllocator.init(self.alloc);
+        defer a.deinit();
+        var buf: [vfs.MAX_PATH]u8 = undefined;
+        const abs = (try argPath(args_json, a.allocator(), &buf)) orelse return out.appendSlice("path too long");
+        vfs.mkdir(abs) catch |e| {
+            try agent_tools.printTo(out, "cannot create {s}: {s}", .{ abs, @errorName(e) });
+            return;
+        };
+        try agent_tools.printTo(out, "created directory {s}", .{abs});
+    }
+
+    fn toolDeleteDir(ctx: *anyopaque, args_json: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
+        const self: *Agent = @ptrCast(@alignCast(ctx));
+        var a = std.heap.ArenaAllocator.init(self.alloc);
+        defer a.deinit();
+        var buf: [vfs.MAX_PATH]u8 = undefined;
+        const abs = (try argPath(args_json, a.allocator(), &buf)) orelse return out.appendSlice("path too long");
+        vfs.rmdir(abs) catch |e| {
+            try agent_tools.printTo(out, "cannot delete {s}: {s}", .{ abs, @errorName(e) });
+            return;
+        };
+        try agent_tools.printTo(out, "deleted directory {s}", .{abs});
+    }
+
+    /// The listing sink: one line per entry, directories marked — the kernel
+    /// tool's shape, so a model's expectations carry across.
+    const ListSink = struct {
+        out: *std.array_list.Managed(u8),
+        fn cb(ctx: ?*anyopaque, e: ifilesys.Entry) void {
+            const self: *ListSink = @ptrCast(@alignCast(ctx.?));
+            const tag = if (e.kind == .dir) "d" else "-";
+            agent_tools.printTo(self.out, "{s} {s} ({d} bytes)\n", .{ tag, e.name, e.size }) catch {};
+        }
+    };
+
+    fn toolListDir(ctx: *anyopaque, args_json: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
+        const self: *Agent = @ptrCast(@alignCast(ctx));
+        var a = std.heap.ArenaAllocator.init(self.alloc);
+        defer a.deinit();
+        var buf: [vfs.MAX_PATH]u8 = undefined;
+        const abs = (try argPath(args_json, a.allocator(), &buf)) orelse return out.appendSlice("path too long");
+        var sink = ListSink{ .out = out };
+        vfs.list(abs, ListSink.cb, &sink) catch |e| {
+            try agent_tools.printTo(out, "cannot list {s}: {s}", .{ abs, @errorName(e) });
+            return;
+        };
+        if (out.items.len == 0) try out.appendSlice("(empty)");
     }
 
     fn toolSystemState(ctx: *anyopaque, args_json: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
         _ = args_json;
         const self: *Agent = @ptrCast(@alignCast(ctx));
-        try agent_tools.printTo(out, "uptime_ms: 0\ncounters:\n  host.files = {d}\n  host.blobs = {d}\n", .{ self.files.count(), self.blobs.count() });
+        try agent_tools.printTo(out, "uptime_ms: 0\ncounters:\n  host.files = {d}\n  host.blobs = {d}\n", .{ ramdisk.list().len, self.blobs.count() });
     }
 
     fn toolOpenApp(ctx: *anyopaque, args_json: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
@@ -263,8 +344,12 @@ const registry = agent_tools.Registry{ .tools = &.{
     .{ .name = "invoke_command", .description = "run a feature-registered command", .params_schema = SCHEMA_INVOKE, .handler = Agent.toolInvoke },
     .{ .name = "list_sources", .description = "list module sources in the factory workspace", .params_schema = SCHEMA_NONE, .handler = Agent.toolListSources },
     .{ .name = "read_source", .description = "read one module source from the factory workspace", .params_schema = SCHEMA_RUN, .handler = Agent.toolReadSource },
-    .{ .name = "read_file", .description = "read a file from the virtual file system by absolute path", .params_schema = SCHEMA_PATH, .handler = Agent.toolReadFile },
-    .{ .name = "write_file", .description = "write a file into the ramdisk", .params_schema = SCHEMA_WRITE, .handler = Agent.toolWriteFile },
+    .{ .name = "read_file", .description = "read a file from the virtual file system", .params_schema = SCHEMA_PATH, .handler = Agent.toolReadFile },
+    .{ .name = "write_file", .description = "create or replace a file under /ramdisk", .params_schema = SCHEMA_WRITE, .handler = Agent.toolWriteFile },
+    .{ .name = "delete_file", .description = "delete a file under /ramdisk", .params_schema = SCHEMA_PATH, .handler = Agent.toolDeleteFile },
+    .{ .name = "make_dir", .description = "create a directory under /ramdisk", .params_schema = SCHEMA_PATH, .handler = Agent.toolMakeDir },
+    .{ .name = "delete_dir", .description = "delete an empty directory under /ramdisk", .params_schema = SCHEMA_PATH, .handler = Agent.toolDeleteDir },
+    .{ .name = "list_dir", .description = "list a directory", .params_schema = SCHEMA_PATH, .handler = Agent.toolListDir },
     .{ .name = "system_state", .description = "report uptime and counters", .params_schema = SCHEMA_NONE, .handler = Agent.toolSystemState },
     .{ .name = "open_app", .description = "open an application window by name", .params_schema = SCHEMA_RUN, .handler = Agent.toolOpenApp },
 } };
@@ -343,11 +428,19 @@ fn apiAlloc(p: *anyopaque, n: usize, log2_align: u8) callconv(.c) ?[*]u8 {
     s.used = base + n;
     return s.arena.ptr + base;
 }
-fn apiFileRead(_: *anyopaque, _: [*]const u8, _: usize, _: [*]u8, _: usize) callconv(.c) isize {
-    return -1;
+fn ramName(path: []const u8) []const u8 {
+    const pfx = "/ramdisk/";
+    return if (std.mem.startsWith(u8, path, pfx)) path[pfx.len..] else path;
 }
-fn apiFileWrite(_: *anyopaque, _: [*]const u8, _: usize, _: [*]const u8, _: usize) callconv(.c) bool {
-    return false;
+fn apiFileRead(_: *anyopaque, path: [*]const u8, path_len: usize, out: [*]u8, cap: usize) callconv(.c) isize {
+    const data = ramdisk.get(ramName(path[0..path_len])) orelse return -1;
+    const n = @min(data.len, cap);
+    @memcpy(out[0..n], data[0..n]);
+    return @intCast(n);
+}
+fn apiFileWrite(_: *anyopaque, path: [*]const u8, path_len: usize, data: [*]const u8, len: usize) callconv(.c) bool {
+    ramdisk.put(ramName(path[0..path_len]), data[0..len]) catch return false;
+    return true;
 }
 fn apiGetInterface(_: *anyopaque, _: u32, _: u32) callconv(.c) ?*const anyopaque {
     return null;
@@ -382,6 +475,11 @@ pub fn main(init: std.process.Init) !void {
         try prompt_text.appendSlice(std.mem.span(w));
     }
 
+    // The real store, mounted in the real namespace — the file tools and the
+    // app Api both reach the system through it, as they do in the kernel.
+    ramdisk.init(a);
+    vfs.mount("ramdisk", ramdisk.fileSys());
+
     var http = std.http.Client{ .allocator = a, .io = init.io };
     defer http.deinit();
 
@@ -391,7 +489,6 @@ pub fn main(init: std.process.Init) !void {
         .openrouter_url = openrouter_url,
         .factory_base = factory_base,
         .blobs = std.StringHashMap([]u8).init(a),
-        .files = std.StringHashMap([]u8).init(a),
         .run_out = std.array_list.Managed(u8).init(a),
         .arena = try a.alloc(u8, abi.APP_ARENA_MAX_BYTES),
     };

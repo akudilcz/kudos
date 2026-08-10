@@ -70,9 +70,16 @@ pub fn writeList(w: anytype) void {
     }) catch return;
     w.write(first);
     for (virt.images.CATALOG, 2..) |img, n| {
-        const row = std.fmt.bufPrint(&buf, "  {d: >2}  {s}  (~{d} MB fetch, {d} MB RAM)\n", .{
-            n, img.name, img.approx_mb, img.ram_mb,
-        }) catch continue;
+        // A baked guest costs no download and no network at all, which is the
+        // one thing worth knowing before choosing a 256 MB entry.
+        const row = if (virt.guestBaked(img.id))
+            std.fmt.bufPrint(&buf, "  {d: >2}  {s}  (in this image, {d} MB RAM)\n", .{
+                n, img.name, img.ram_mb,
+            }) catch continue
+        else
+            std.fmt.bufPrint(&buf, "  {d: >2}  {s}  (~{d} MB fetch, {d} MB RAM)\n", .{
+                n, img.name, img.approx_mb, img.ram_mb,
+            }) catch continue;
         w.write(row);
     }
 }

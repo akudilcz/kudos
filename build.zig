@@ -120,6 +120,49 @@ pub fn build(b: *std.Build) void {
     else
         empty_guest.add("guest_initramfs.absent", "");
 
+    // `-Dbake=<csv|all>`: carry catalog guests INSIDE the image instead of
+    // fetching them. `vm boot` then reaches a baked guest with no network at
+    // all and no wait — for the browser image that is the difference between
+    // booting and pulling 256 MiB through the TCP stack first — at the cost of
+    // exactly those bytes in the kernel's .rodata and therefore in RAM.
+    // Default: bake nothing, so an ordinary build stays the size it was.
+    //
+    // The bakeable names are the catalog's own ids (kernel/virt/guestlist.zig)
+    // and the build_guest.sh subcommands that produce them; a host test asserts
+    // this list and the catalog agree, because nothing else can — the build
+    // script cannot read the kernel's source.
+    const bakeable = [_][]const u8{ "firefox", "zigserver", "ubuntu" };
+    const bake_opt = b.option([]const u8, "bake", "carry these catalog guests in the image: csv of firefox|zigserver|ubuntu, or all") orelse "";
+    var baked_paths: [bakeable.len][2]std.Build.LazyPath = undefined;
+    for (bakeable, 0..) |id, i| {
+        const wanted = std.mem.eql(u8, bake_opt, "all") or blk: {
+            var it = std.mem.splitScalar(u8, bake_opt, ',');
+            while (it.next()) |w| if (std.mem.eql(u8, std.mem.trim(u8, w, " "), id)) break :blk true;
+            break :blk false;
+        };
+        const bz_rel = b.fmt("assets/virt/{s}/bzImage", .{id});
+        const initrd_rel = b.fmt("assets/virt/{s}/initramfs.cpio.gz", .{id});
+        const present = blk: {
+            const io = b.graph.io;
+            std.Io.Dir.cwd().access(io, b.pathFromRoot(bz_rel), .{}) catch break :blk false;
+            std.Io.Dir.cwd().access(io, b.pathFromRoot(initrd_rel), .{}) catch break :blk false;
+            break :blk true;
+        };
+        // A guest named for baking that was never built is a mistake, not an
+        // absence to work around: the image would silently ship without it and
+        // fall back to fetching, which is exactly what the flag was asking to
+        // avoid.
+        if (wanted and !present)
+            std.debug.panic("-Dbake={s}: no bzImage + initramfs.cpio.gz in assets/virt/{s}/ (build it: scripts/virt/build_guest.sh {s})", .{ bake_opt, id, id });
+        baked_paths[i] = if (wanted)
+            .{ b.path(bz_rel), b.path(initrd_rel) }
+        else
+            .{
+                empty_guest.add(b.fmt("baked_{s}_bzimage.absent", .{id}), ""),
+                empty_guest.add(b.fmt("baked_{s}_initramfs.absent", .{id}), ""),
+            };
+    }
+
     // Two kernel variants from one shared source tree:
     //   kudos       — single-core, BSP only (root src/main_root.zig)
     //   kudos-smp   — multi-core, brings APs online (root src/main_smp.zig)
@@ -378,6 +421,10 @@ pub fn build(b: *std.Build) void {
     // fileSys() + storage/fat.zig; the vfs host tests fake it inline).
     // iblockdev: the 512-byte-sector block seam (real: usb/msc.zig ONLY —
     // the storage-safety contract; fat.zig consumes it, tests fake it).
+    // idesk: the desktop-control seam (AGT-023/AGT-024) — the agent and the
+    // shell park window requests here and read what the desktop published;
+    // ui/desktop is the only thing that applies or publishes.
+    const idesk_mod = b.createModule(.{ .root_source_file = b.path("src/iface/idesk.zig") });
     const ifilesys_mod = b.createModule(.{ .root_source_file = b.path("src/iface/ifilesys.zig") });
     const iblockdev_mod = b.createModule(.{ .root_source_file = b.path("src/iface/iblockdev.zig") });
     // vfs: the / namespace (mount table = GLOBAL state) — a named module so
@@ -417,6 +464,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "ipresent", .mod = ipresent_mod },
         .{ .name = "imouse", .mod = imouse_mod },
         .{ .name = "ivirt", .mod = ivirt_mod },
+        .{ .name = "idesk", .mod = idesk_mod },
         .{ .name = "ring", .mod = ring_mod },
         .{ .name = "algn", .mod = algn_mod },
         .{ .name = "overlay_plane", .mod = overlay_plane_shared },
@@ -552,6 +600,14 @@ pub fn build(b: *std.Build) void {
         // PEM bundle at assets/net/cacert.pem, embedded so the TLS client can
         // verify every HTTPS chain with no filesystem. Regenerate from a
         // maintained host: cp /etc/ssl/certs/ca-certificates.crt assets/net/cacert.pem
+        // The sample app (spec ARCH-012): the one hand-written .kudos source in
+        // the tree, which the factory tests compile on the host and the shell's
+        // `compile` command compiles from the ramdisk. Seeded so a fresh boot
+        // has something to compile without fetching anything first.
+        kernel.root_module.addAnonymousImport("hello_zig", .{
+            .root_source_file = b.path("scripts/agent/samples/hello.zig"),
+        });
+
         kernel.root_module.addAnonymousImport("cacert_pem", .{
             .root_source_file = b.path("assets/net/cacert.pem"),
         });
@@ -566,6 +622,16 @@ pub fn build(b: *std.Build) void {
         kernel.root_module.addAnonymousImport("guest_initramfs", .{
             .root_source_file = guest_initramfs_path,
         });
+
+        // The baked catalog guests (-Dbake), by the same real-or-empty rule.
+        for (bakeable, 0..) |id, i| {
+            kernel.root_module.addAnonymousImport(b.fmt("baked_{s}_bzimage", .{id}), .{
+                .root_source_file = baked_paths[i][0],
+            });
+            kernel.root_module.addAnonymousImport(b.fmt("baked_{s}_initramfs", .{id}), .{
+                .root_source_file = baked_paths[i][1],
+            });
+        }
 
         b.installArtifact(kernel);
     }
@@ -752,6 +818,7 @@ pub fn build(b: *std.Build) void {
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/memory/pmm_test.zig" }, // frame-bitmap core (FrameBitmap; kernel wrappers never analyzed on host)
         .{ .n = "imouse", .s = "src/iface/imouse.zig" }, // pointer-event coalescing (ilog's sink defaults to null → silent, correct on the host)
         .{ .n = "iwindow", .s = "src/iface/iwindow.zig" }, // blob-window cross-core mailbox: open handshake, clamp, one-at-a-time, blit→dirty
+        .{ .n = "idesk", .s = "src/iface/idesk.zig" }, // desktop-control mailbox: one request at a time, published readback
         .{ .n = "armpolicy", .s = "src/kernel/sched/armpolicy.zig" }, // tickless arming policy: idle disarms (KRN-007), due sleepers never stranded
         .{ .n = "tracering", .s = "src/kernel/debug/tracering.zig" }, // lock-free trace-ring reservation algebra: a dead writer cannot wedge the bus
         .{ .n = "hudcontrol", .s = "src/widgets/hudcontrol.zig" }, // HUD control state + counter rates: latch, freeze, sampling period
@@ -892,6 +959,10 @@ pub fn build(b: *std.Build) void {
         const mod = b.createModule(.{ .root_source_file = b.path("src/test_root.zig") });
         mod.addAnonymousImport("guest_bzimage", .{ .root_source_file = guest_bzimage_path });
         mod.addAnonymousImport("guest_initramfs", .{ .root_source_file = guest_initramfs_path });
+        for (bakeable, 0..) |id, i| {
+            mod.addAnonymousImport(b.fmt("baked_{s}_bzimage", .{id}), .{ .root_source_file = baked_paths[i][0] });
+            mod.addAnonymousImport(b.fmt("baked_{s}_initramfs", .{id}), .{ .root_source_file = baked_paths[i][1] });
+        }
         const t = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("test/kernel/virt/gueststage_test.zig"), .target = b.graph.host, .optimize = optimize }) });
         t.root_module.addImport("testroot", mod);
         if (testWired(test_only, t)) test_step.dependOn(&b.addRunArtifact(t).step);
@@ -973,6 +1044,7 @@ pub fn build(b: *std.Build) void {
         const t = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("test/iface/contracts_test.zig"), .target = b.graph.host, .optimize = optimize }) });
         t.root_module.addImport("iaccel", iaccel_mod);
         t.root_module.addImport("iblockdev", iblockdev_mod);
+        t.root_module.addImport("idesk", idesk_mod);
         t.root_module.addImport("idevices", idevices_mod);
         t.root_module.addImport("idisplay", idisplay_mod);
         t.root_module.addImport("idraw", idraw_mod);

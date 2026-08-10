@@ -11,6 +11,12 @@
 //! (virt.bootStaged) and the reachability test (test/kernel/virt/gueststage_test.zig) read
 //! the image through it, so the artifact the tree ships and the artifact the
 //! loader accepts cannot drift.
+//!
+//! `-Dbake=<csv|all>` does the same for CATALOG guests (guestlist.zig): their
+//! halves are embedded here too, and `vm boot` then starts them from memory with
+//! no download at all. Those are hundreds of megabytes, so they are also the
+//! reason `putStatic` exists — seedRamdisk publishes them under /ramdisk/virt/
+//! by BORROWING these bytes rather than copying them onto the heap.
 
 const bzimage = @import("bzimage.zig");
 const layout = @import("layout.zig");
@@ -26,6 +32,42 @@ const guest_initramfs = @embedFile("guest_initramfs");
 /// what the `vm boot` list calls entry 1 cannot drift from what was staged.
 pub fn name() []const u8 {
     return buildinfo.staged_guest;
+}
+
+/// A catalog guest carried INSIDE this build (`-Dbake=<csv|all>`) rather than
+/// fetched at boot: the same two halves, already in memory.
+pub const Baked = struct {
+    bzimage: []const u8,
+    initramfs: []const u8,
+};
+
+/// The catalog guests this build CAN bake. The names are the catalog's ids
+/// (guestlist.zig) and the `scripts/virt/build_guest.sh` subcommands that make
+/// them; build.zig repeats this list because a build script cannot read Zig
+/// source, and a host test asserts the two agree.
+pub const BAKEABLE = [_][]const u8{ "firefox", "zigserver", "ubuntu" };
+
+/// The embedded halves, one row per BAKEABLE name and in that order. Empty
+/// blobs when the build did not bake that guest — the same real-or-empty wiring
+/// the staged pair above uses.
+const baked_images = [BAKEABLE.len]Baked{
+    .{ .bzimage = @embedFile("baked_firefox_bzimage"), .initramfs = @embedFile("baked_firefox_initramfs") },
+    .{ .bzimage = @embedFile("baked_zigserver_bzimage"), .initramfs = @embedFile("baked_zigserver_initramfs") },
+    .{ .bzimage = @embedFile("baked_ubuntu_bzimage"), .initramfs = @embedFile("baked_ubuntu_initramfs") },
+};
+
+/// The baked halves for catalog id `id`, or null when this build did not bake
+/// it — in which case the boot path fetches it over HTTP as before. Both halves
+/// must be present: half an image is not an image.
+pub fn bakedFor(id: []const u8) ?Baked {
+    const eql = @import("std").mem.eql;
+    for (BAKEABLE, 0..) |bakeable_id, i| {
+        if (!eql(u8, bakeable_id, id)) continue;
+        const b = baked_images[i];
+        if (b.bzimage.len == 0 or b.initramfs.len == 0) return null;
+        return b;
+    }
+    return null;
 }
 
 /// The staged bzImage bytes, to hand to the loader (virt/linuxload.zig).

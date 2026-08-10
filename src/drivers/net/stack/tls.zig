@@ -30,7 +30,7 @@ const inet = @import("inet");
 /// on progress, so transfer time scales with body size while a peer that goes
 /// silent still fails within one window. A whole-transaction cap made any
 /// response larger than the link could move in the window impossible — the same
-/// bug fixed for plain HTTP (http.HTTP_STALL_MS). Generous, since TLS adds
+/// bug fixed for plain HTTP (http_wire.GET_STALL_MS). Generous, since TLS adds
 /// handshake round trips.
 const TLS_STALL_MS: u64 = 15_000;
 

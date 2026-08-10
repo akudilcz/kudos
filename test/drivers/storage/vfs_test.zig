@@ -10,8 +10,37 @@ const mount = vfs.mount;
 const read = vfs.read;
 const unmountAllForTest = vfs.unmountAllForTest;
 
-/// One flat fake store: two files, plus a "models" directory holding one.
+/// One fake store: two files, plus a "models" directory holding one. Its four
+/// mutation entries record what reached them rather than doing anything —
+/// routing is what the VFS owns, and a store's own rules are the store's tests.
 const FakeFs = struct {
+    var last_op: []const u8 = "";
+    var last_path: [MAX_PATH]u8 = undefined;
+    var last_path_len: usize = 0;
+    var last_data: []const u8 = "";
+
+    fn record(op: []const u8, path: []const u8, data: []const u8) void {
+        last_op = op;
+        @memcpy(last_path[0..path.len], path);
+        last_path_len = path.len;
+        last_data = data;
+    }
+    fn lastPath() []const u8 {
+        return last_path[0..last_path_len];
+    }
+    fn write_(_: *anyopaque, p: []const u8, data: []const u8) ifilesys.WriteError!void {
+        record("write", p, data);
+    }
+    fn remove_(_: *anyopaque, p: []const u8) ifilesys.WriteError!void {
+        record("remove", p, "");
+    }
+    fn mkdir_(_: *anyopaque, p: []const u8) ifilesys.WriteError!void {
+        record("mkdir", p, "");
+    }
+    fn rmdir_(_: *anyopaque, p: []const u8) ifilesys.WriteError!void {
+        record("rmdir", p, "");
+    }
+
     fn read_(_: *anyopaque, path: []const u8) ?[]const u8 {
         if (std.mem.eql(u8, path, "a.txt")) return "AA";
         if (std.mem.eql(u8, path, "models/r.glb")) return "GLB!";
@@ -35,7 +64,15 @@ const FakeFs = struct {
         if (read_(undefined, path) != null) return .file;
         return null;
     }
-    const vtable = ifilesys.IFileSys.VTable{ .read = read_, .list = list_, .kind = kind_ };
+    const vtable = ifilesys.IFileSys.VTable{
+        .read = read_,
+        .list = list_,
+        .kind = kind_,
+        .write = write_,
+        .remove = remove_,
+        .mkdir = mkdir_,
+        .rmdir = rmdir_,
+    };
     var ctx_byte: u8 = 0;
     fn iface() ifilesys.IFileSys {
         return .{ .ctx = &ctx_byte, .vtable = &vtable };
@@ -115,4 +152,45 @@ test "routing: read/kind/list over mounts; unknown mounts and roots" {
     try std.testing.expectError(ifilesys.Error.NotADirectory, list("/ramdisk/a.txt", Collect.cb, null));
     try std.testing.expectError(ifilesys.Error.NotFound, list("/ramdisk/zz", Collect.cb, null));
     try std.testing.expectError(ifilesys.Error.NotFound, list("/zz", Collect.cb, null));
+}
+
+test "routing: every mutation reaches its mount with the mount-relative path (STO-008)" {
+    unmountAllForTest();
+    mount("ramdisk", FakeFs.iface());
+    const eq = std.testing.expectEqualStrings;
+
+    try vfs.write("/ramdisk/notes/todo.txt", "buy milk");
+    try eq("write", FakeFs.last_op);
+    try eq("notes/todo.txt", FakeFs.lastPath());
+    try eq("buy milk", FakeFs.last_data);
+
+    try vfs.remove("/ramdisk/a.txt");
+    try eq("remove", FakeFs.last_op);
+    try eq("a.txt", FakeFs.lastPath());
+
+    try vfs.mkdir("/ramdisk/notes");
+    try eq("mkdir", FakeFs.last_op);
+    try eq("notes", FakeFs.lastPath());
+
+    try vfs.rmdir("/ramdisk/notes");
+    try eq("rmdir", FakeFs.last_op);
+    try eq("notes", FakeFs.lastPath());
+}
+
+test "routing: the namespace's own shape is not a caller's to change (STO-010)" {
+    unmountAllForTest();
+    mount("ramdisk", FakeFs.iface());
+    const expectError = std.testing.expectError;
+    const ReadOnly = ifilesys.WriteError.ReadOnly;
+
+    // The root holds exactly the mounts, so nothing may be made or unmade there.
+    try expectError(ReadOnly, vfs.write("/x.txt", "hi"));
+    try expectError(ReadOnly, vfs.mkdir("/newmount"));
+    try expectError(ReadOnly, vfs.remove("/ramdisk"));
+    try expectError(ReadOnly, vfs.rmdir("/ramdisk")); // unmounting is not a delete
+    try expectError(ReadOnly, vfs.write("/ramdisk", "hi"));
+
+    // An unknown mount is absent, not read-only: the two need different fixes.
+    try expectError(ifilesys.WriteError.NotFound, vfs.write("/nope/x.txt", "hi"));
+    try expectError(ifilesys.WriteError.NotFound, vfs.rmdir("/nope/dir"));
 }

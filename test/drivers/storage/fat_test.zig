@@ -174,6 +174,16 @@ fn patternByte(i: usize) u8 {
 fn checkVolume(fx: Fixture, comptime hello: []const u8) !void {
     const fs = fx.vol.fileSys();
 
+    // The stick is the boot medium: the volume can write, but not through this
+    // seam (fat.zig) — a VFS caller is told so, and the file it aimed at is
+    // still there afterwards.
+    const ReadOnly = ifilesys.WriteError.ReadOnly;
+    try std.testing.expectError(ReadOnly, fs.write("HELLO.TXT", "clobbered"));
+    try std.testing.expectError(ReadOnly, fs.remove("HELLO.TXT"));
+    try std.testing.expectError(ReadOnly, fs.mkdir("newdir"));
+    try std.testing.expectError(ReadOnly, fs.rmdir("models"));
+    try std.testing.expectEqualStrings(hello, fs.read("HELLO.TXT").?);
+
     // Root listing: 8.3 name, multi-slot LFN, lowercase LFN, directory.
     var c = Collect{};
     try fs.list("", Collect.cb, &c);

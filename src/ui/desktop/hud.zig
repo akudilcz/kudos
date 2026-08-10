@@ -14,6 +14,7 @@ const kgl = @import("kgl");
 const rects = @import("rects");
 const hudview = @import("hudview");
 const hudcontrol = @import("hudcontrol"); // the pure control state + rate arithmetic
+const idesk = @import("idesk"); // publish this sample where readers without a screen can see it
 const framebuffer = @import("../screen/framebuffer.zig");
 
 const pmm = @import("../../kernel/memory/pmm.zig");
@@ -161,6 +162,46 @@ fn sampleNow() void {
 
     rate_base_ms = now;
     have_prev = true;
+    publishSample();
+}
+
+/// Publish this sample through the desktop-control seam (AGT-024), so anything
+/// that cannot see the screen — the agent, a remote client — reads the SAME
+/// numbers the F1 display is drawing, from the same instant. A second sampler
+/// would be a second answer to the same question, and the two would disagree
+/// exactly when it mattered.
+fn publishSample() void {
+    var buf: [idesk.MAX_DASHBOARD_TEXT]u8 = undefined;
+    var used: usize = 0;
+    const put = struct {
+        fn f(b: []u8, comptime fmt: []const u8, args: anytype) usize {
+            return (std.fmt.bufPrint(b, fmt, args) catch return 0).len;
+        }
+    }.f;
+    used += put(buf[used..], "uptime_ms {d}\ncores {d} busy {d}%\n", .{ snap.taken_ms, snap.cores_online, snap.busy_pct });
+    for (snap.cores[0..@min(snap.cores_online, hudview.MAX_CORES)], 0..) |c, i| {
+        used += put(buf[used..], "  core{d} {d}% runnable {d} {s}\n", .{ i, c.busy_pct, c.runnable, c.taskName() });
+    }
+    used += put(buf[used..], "mem_used {d} of {d}\nheap_free {d} largest {d} blocks {d}\n", .{
+        snap.mem_used, snap.mem_total, snap.heap_free, snap.heap_largest, snap.heap_blocks,
+    });
+    used += put(buf[used..], "ramdisk {d} files {d} bytes\n", .{ snap.ramdisk_files, snap.ramdisk_bytes });
+    used += put(buf[used..], "display fps {d} presents {d} pump_avg_us {d} pump_max_us {d} refresh_us {d}\n", .{
+        snap.fps, snap.presents, snap.pump_avg_us, snap.pump_max_us, snap.refresh_us,
+    });
+    used += put(buf[used..], "net link {s} ip {d}.{d}.{d}.{d} tx_dropped {d}\n", .{
+        if (snap.link_up) "up" else "down", snap.ip[0], snap.ip[1], snap.ip[2], snap.ip[3], snap.tx_dropped,
+    });
+    used += put(buf[used..], "usb devices {d} kbd {s} mouse {s} disk {s}\n", .{
+        snap.usb_devices,
+        if (snap.kbd) "yes" else "no",
+        if (snap.mouse) "yes" else "no",
+        if (snap.usbdisk) "yes" else "no",
+    });
+    used += put(buf[used..], "vt-x {s} guests {d}/{d} exits {d}\n", .{
+        if (snap.vt_available) "yes" else "no", snap.guests_running, snap.guest_capacity, snap.guest_exits,
+    });
+    idesk.publishDashboard(buf[0..used]);
 }
 
 fn sampleCores(s: *hudview.Snapshot) void {

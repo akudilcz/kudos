@@ -41,6 +41,27 @@ if [ -n "$missing" ]; then
     fail=1
 fi
 
+# 1b. A test that cites a requirement in its NAME and then asserts nothing.
+#
+# The citation rule is deliberately generous — this project's convention is a
+# comment naming the requirement immediately above the assertions that verify it,
+# and that is a real citation. What is NOT a citation is an empty test body:
+# `test "... (XXX-002)" {}` reads as coverage in every listing, satisfies the
+# gate, and verifies nothing at all. An audit of all 254 requirements found one
+# of exactly this shape, and it is the only citation form that can be judged
+# worthless without reading the surrounding code — so it is the one the gate can
+# honestly refuse.
+empty_tests="$(grep -rhoE "^[[:space:]]*test \"[^\"]*($ID_RE)[^\"]*\"[[:space:]]*\{[[:space:]]*\}" \
+    test/ --include='*.zig' 2>/dev/null | grep -ohE "$ID_RE" | sort -u)"
+if [ -n "$empty_tests" ]; then
+    echo "  ✗ requirement(s) cited by a test whose body is EMPTY — it cannot fail,"
+    echo "    so it is a comment wearing a test's name:"
+    echo "$empty_tests" | sed 's/^/      /'
+    echo "      fix: assert the requirement's claim, or move the citation to the"
+    echo "      test that already does"
+    fail=1
+fi
+
 # 2. Stale ratchet rows: the ID gained a citation — remove the row in the same change.
 stale="$(comm -12 <(echo "$ratchet_ids") <(echo "$cited_by_tests"))"
 if [ -n "$stale" ]; then
@@ -82,6 +103,23 @@ if [ "$uncited" -gt "$CEILING" ]; then
     fail=1
 fi
 
+
+# ── PERF-002: the boot budget in the code IS the number the spec states ────────
+# A requirement that states a number is only as good as the constant enforcing
+# it. Nothing tied the two, so raising BOOT_TO_FIRST_PRESENT_BUDGET_MS to 90 s
+# would have kept every track green while silently abandoning the requirement —
+# the test asserts the kernel's own verdict, and the kernel computes that verdict
+# against its own constant.
+spec_boot_s="$(grep -A 2 '^\*\*PERF-002\.\*\*' spec.md | grep -ohE 'within [0-9]+ seconds' | grep -ohE '[0-9]+')"
+code_boot_ms="$(grep -ohE 'BOOT_TO_FIRST_PRESENT_BUDGET_MS: u64 = [0-9_]+' src/drivers/gpu/gpu.zig | grep -ohE '[0-9_]+$' | tr -d '_')"
+if [ -z "$spec_boot_s" ] || [ -z "$code_boot_ms" ]; then
+    echo "  ✗ PERF-002: could not read the boot budget from spec.md or gpu.zig"
+    fail=1
+elif [ "$code_boot_ms" != "$((spec_boot_s * 1000))" ]; then
+    echo "  ✗ PERF-002: spec says ${spec_boot_s}s, gpu.zig enforces ${code_boot_ms}ms"
+    echo "      fix: change both, or neither — a budget only the code knows is not a requirement"
+    fail=1
+fi
 
 # ── RND-007: every extension the pipeline ADVERTISES is a requirement here ──────
 # The GL_EXTENSIONS string is the promise the pipeline makes to a client; a token

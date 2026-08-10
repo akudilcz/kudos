@@ -66,6 +66,11 @@ pub const Console = struct {
     /// A snapshot: `setAiMode` moves the hosting terminal in and out of it, so a
     /// console value taken before the change does not describe the one after.
     ai_mode: bool,
+    /// Whether this console's window IS the dedicated agent window (AGT-002) —
+    /// opened as the agent rather than turned into it by `ai`. It decides what
+    /// leaving the agent means: a terminal goes back to its shell, while the
+    /// dedicated window has no shell behind it and closes.
+    agent_window: bool,
     /// Enter or leave the agent session on the hosting terminal (AGT-018) — what
     /// makes `ai` turn THIS terminal into the chat rather than opening another
     /// window beside it, and `/quit` hand it back to the shell.

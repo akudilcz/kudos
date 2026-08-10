@@ -162,3 +162,19 @@ test "StreamingBody: close-delimited never self-completes" {
     try std.testing.expect(!try sb.push("def", &out));
     try std.testing.expectEqualStrings("abcdef", out.items);
 }
+
+test "a POST waits for a service to COMPUTE; a GET only waits for bytes (NET-013)" {
+    // The numbers themselves are policy, but their ORDER is a correctness
+    // property: the factory answers nothing until zig has finished, and a
+    // compile that FAILS runs longest of all. A POST budget at or below the GET
+    // one puts the client's patience ahead of the service's answer, which is the
+    // shipped defect this pins — the agent's compile errors timed out instead of
+    // coming back, and the late reply landed on a closed connection.
+    try std.testing.expect(hw.POST_STALL_MS > hw.GET_STALL_MS);
+    try std.testing.expectEqual(hw.POST_STALL_MS, hw.stallMs(true));
+    try std.testing.expectEqual(hw.GET_STALL_MS, hw.stallMs(false));
+    // Strictly LONGER than the factory's own 180 s per-compile budget: equal
+    // budgets race, and the loser is the user, who is told the service could not
+    // be reached instead of being told the compile timed out.
+    try std.testing.expect(hw.POST_STALL_MS > 180_000);
+}

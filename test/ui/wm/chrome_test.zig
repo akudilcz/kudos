@@ -40,3 +40,25 @@ test "onTitleBar is the drag strip minus the buttons and minus the body" {
     // Off the left edge is nothing.
     try expect(!onTitleBar(-1, TL_Y));
 }
+
+test "a title is centred in its bar (DSK-007)" {
+    // Equal gutters either side is what "centred" means, and it is the whole
+    // claim — DSK-007 was previously cited only by a comment asserting that some
+    // other case checked this. No such case existed.
+    const w: f32 = 400;
+    const text_w: f32 = 100;
+    const x = chrome.titleX(w, text_w);
+    try std.testing.expectApproxEqAbs(@as(f32, 150), x, 0.01);
+    try std.testing.expectApproxEqAbs(w - (x + text_w), x, 0.01);
+}
+
+test "a title too wide to centre is pushed clear of the traffic lights (DSK-007)" {
+    // Centring a long title in a narrow window would draw it straight through
+    // the buttons. A title nobody can read is not centred, it is hidden — so
+    // past that point it left-aligns against them instead.
+    const w: f32 = 200;
+    const x = chrome.titleX(w, 190);
+    try std.testing.expect(x > chrome.buttonX(.zoom));
+    // ...and it does not creep back left as the title grows further.
+    try std.testing.expectApproxEqAbs(x, chrome.titleX(w, 400), 0.01);
+}

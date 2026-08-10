@@ -142,6 +142,15 @@ such that the volume mounts on a stock Linux kernel.
 **STO-007.** The Kudos system shall flush all pending file-system writes before
 any reboot or power-off, so that every volume remains valid (STO-006).
 
+**STO-008.** The Kudos system shall create, overwrite and delete ramdisk
+(STO-001) files through the virtual file system (STO-002).
+
+**STO-009.** The Kudos system shall present ramdisk (STO-001) files in a
+hierarchy of directories, which it shall create and delete.
+
+**STO-010.** The Kudos system shall refuse a write to a read-only store
+(STO-002), stating that the store is read-only.
+
 ## Networking
 
 **NET-001.** The Kudos system shall obtain its network configuration via DHCP.
@@ -675,6 +684,18 @@ requested to decrypt the credentials without one.
 the service credentials (AGT-017) are still encrypted, stating how to decrypt
 them.
 
+**AGT-023.** The Kudos system shall let the agent (AGT-001) focus, maximise,
+minimise, restore and close any desktop window (DSK-001).
+
+**AGT-024.** The Kudos system shall report the desktop's open windows (DSK-001)
+to the agent (AGT-001), identifying which one has keyboard focus.
+
+**AGT-025.** The Kudos system shall report the heads-up display's sample
+(HUD-001) to the agent (AGT-001).
+
+**AGT-026.** The Kudos system shall let the agent (AGT-001) place the pointer at
+a screen position and press a pointer button.
+
 ## Diagnostics
 
 **DIAG-001.** The Kudos system shall provide diagnostics reporting the health and
@@ -766,12 +787,15 @@ SimpleMeshes.
 
 **TEST-006.** The Kudos system shall render the feature-validation reference models
 matching its implemented features (TEST-004) — AlphaBlendModeTest (APP-010),
-VertexColorTest, TextureCoordinateTest, OrientationTest, NormalTangentTest, and
-MetalRoughSpheres (APP-011) — consistent with their published reference
-renderings.
+VertexColorTest, TextureCoordinateTest and OrientationTest — consistent with
+their published reference renderings.
 
 **TEST-007.** The Kudos system shall validate every glTF asset it ships with the
 Khronos glTF Validator at build time.
+
+**TEST-008.** The Kudos system shall measure the reference models whose features
+it does not implement (TEST-006) against the error a conforming render would
+reach, and report each as unmet until it does.
 
 # Non-functional requirements
 

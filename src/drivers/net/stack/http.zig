@@ -18,12 +18,6 @@ const timer = @import("../../../kernel/timer/timer.zig");
 const http_wire = @import("http_wire.zig");
 const inet = @import("inet");
 
-/// Budget for the NEXT byte, not the whole transaction: progress renews it in
-/// `Plain.read`, so transfer time scales with body size while a peer that goes
-/// silent still fails within one window. A whole-body cap here made every
-/// response larger than the link could move in the window structurally
-/// impossible. The TLS path carries its own budget (tls.zig).
-const HTTP_STALL_MS: u64 = 8_000;
 /// Bytes of request pushed per TCP segment: the one-connection stream builds a
 /// single segment per `send`, so long bodies are handed over in MTU-sized runs.
 const SEND_CHUNK: usize = 1400;
@@ -70,6 +64,10 @@ const Stream = union(enum) {
 const Plain = struct {
     consumed: usize = 0,
     deadline_ms: u64,
+    /// How long this request waits for the NEXT byte — the method's budget,
+    /// carried on the stream so the renewal below uses the same number the open
+    /// did rather than a constant that only matches for a GET.
+    stall_ms: u64,
 
     fn writeAll(self: *Plain, bytes: []const u8) inet.FetchError!void {
         _ = self;
@@ -92,8 +90,8 @@ const Plain = struct {
         const n = @min(buf.len, src.len);
         @memcpy(buf[0..n], src[0..n]);
         self.consumed += n;
-        // Progress renews the stall budget (see HTTP_STALL_MS).
-        self.deadline_ms = timer.millis() + HTTP_STALL_MS;
+        // Progress renews the stall budget (http_wire.stallMs).
+        self.deadline_ms = timer.millis() + self.stall_ms;
         return n;
     }
 };
@@ -130,7 +128,8 @@ fn openAndSend(
         session.* = try tls.open(u.host);
         stream = .{ .tls = session };
     } else {
-        stream = .{ .plain = .{ .deadline_ms = timer.millis() + HTTP_STALL_MS } };
+        const stall_ms = http_wire.stallMs(method == .POST);
+        stream = .{ .plain = .{ .deadline_ms = timer.millis() + stall_ms, .stall_ms = stall_ms } };
     }
     errdefer if (stream == .tls) session.close();
 

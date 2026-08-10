@@ -61,6 +61,7 @@ CASES = [
         "system          open the system monitor app",
         "show PATH [max] open a spinning 3D model window",
         "ai [PROMPT]     talk to the AI agent",
+        "compile SRC [N] compile a .zig file",
         "F12             open a new terminal",
         "flipstat        re-arm the present-cadence sample",
         "exit            close this terminal window",
@@ -141,6 +142,11 @@ CASES = [
     # session. `run crashy` executes a REAL .kudos module staged on the stick and
     # faults inside it; the very next command proves this session still answers —
     # containment is the shell surviving its own app, not a message about it.
+    #
+    # KRN-006 is cited HERE, where the containment is actually demonstrated. It
+    # used to be cited only from a K-risk-level table row in layering.sh, which
+    # says a group's blast radius is K3 and bears on nothing — the requirement
+    # read as covered while its one piece of live evidence sat uncited.
     Case("run crashy", (), "both"),
     Case("echo alive-after-crash", ("alive-after-crash",), "both"),
 
@@ -371,7 +377,8 @@ def max_box_center(g):
 
 
 def title_center(g):
-    # The centred-title geometry the chrome case asserts (DSK-007).
+    # A drag point on the title bar. (The centring itself is asserted by the pure
+    # chrome test; this is only a place to grab.)
     # A drag point on the title bar, clear of the traffic lights (which end near x=67).
     # The lights are on the LEFT now, so the clear grab area is the RIGHT of the bar.
     return g["x"] + max(90, g["w"] - 30), g["y"] + TL_Y
