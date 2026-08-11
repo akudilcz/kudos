@@ -38,7 +38,11 @@ const features = hotload.features;
 
 /// Where the AI.CFG file lives, named here because the tools that need one
 /// (compile, without a factory) say so in their refusal.
-const CFG_PATH = "/usbdisk/AI.CFG";
+/// The agent's configuration. On the RAMDISK, where a copy is seeded from the
+/// build at boot (main_root.zig): the USB stick this used to live on is a real
+/// device that no emulator run has, so a configuration kept only there was one
+/// the agent could never be given under QEMU — which is where it is developed.
+pub const CFG_PATH = "/ramdisk/AI.CFG";
 
 /// Cap on the feature output captured into one tool result — a chatty feature
 /// must not burn the request's token budget. Overflow is truncated LOUDLY.

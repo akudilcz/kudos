@@ -10,6 +10,7 @@ const HELP =
     \\  cd [PATH]       change directory (no arg: print it); / holds the mounts
     \\  ls [PATH]       list a directory (default: the current one; alias: dir)
     \\  cat PATH        print a file
+    \\  rm PATH         delete a file
     \\  lspci           list pci devices
     \\  net SUBCOMMAND  network: ip | dns NAME | ping HOST | fetch URL [NAME]
     \\  mem             free / total RAM

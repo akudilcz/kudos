@@ -23,6 +23,7 @@ const COMMANDS = [_]Command{
     .{ .name = "ls", .run = @import("cmd/ls.zig").run },
     .{ .name = "dir", .run = @import("cmd/ls.zig").run }, // alias: same runner, one implementation
     .{ .name = "cat", .run = @import("cmd/cat.zig").run },
+    .{ .name = "rm", .run = @import("cmd/rm.zig").run },
     .{ .name = "lspci", .run = @import("cmd/lspci.zig").run },
     .{ .name = "net", .run = @import("cmd/net.zig").run },
     .{ .name = "mem", .run = @import("cmd/mem.zig").run },

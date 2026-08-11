@@ -600,12 +600,12 @@ pub fn build(b: *std.Build) void {
         // PEM bundle at assets/net/cacert.pem, embedded so the TLS client can
         // verify every HTTPS chain with no filesystem. Regenerate from a
         // maintained host: cp /etc/ssl/certs/ca-certificates.crt assets/net/cacert.pem
-        // The sample app (spec ARCH-012): the one hand-written .kudos source in
-        // the tree, which the factory tests compile on the host and the shell's
-        // `compile` command compiles from the ramdisk. Seeded so a fresh boot
-        // has something to compile without fetching anything first.
-        kernel.root_module.addAnonymousImport("hello_zig", .{
-            .root_source_file = b.path("scripts/agent/samples/hello.zig"),
+        // The agent's configuration (spec AGT-017), seeded onto the ramdisk at
+        // boot. Baked in because the alternative home is a USB stick, and no
+        // emulator run has one — so the agent had no configuration at all on
+        // the machine it is developed on.
+        kernel.root_module.addAnonymousImport("ai_cfg", .{
+            .root_source_file = b.path("assets/agent/AI.CFG"),
         });
 
         kernel.root_module.addAnonymousImport("cacert_pem", .{

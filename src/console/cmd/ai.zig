@@ -32,7 +32,6 @@ const prompt = @import("../../agent/prompt.zig");
 const timer = @import("../../kernel/timer/timer.zig");
 const vfs = @import("vfs");
 
-const CFG_PATH = "/usbdisk/AI.CFG";
 const DEFAULT_MODEL = "moonshotai/kimi-k3";
 const HISTORY_TURNS = 32;
 
@@ -148,10 +147,10 @@ fn cmdStatus(c: console.Console) void {
         llmUrl(),
         switch (credential.from()) {
             .sealed => "sealed into this build (AGT-017)",
-            .cfg_file => "from " ++ CFG_PATH,
-            .none => "MISSING — /login to decrypt, or set key= in " ++ CFG_PATH,
+            .cfg_file => "from " ++ agenttools.CFG_PATH,
+            .none => "MISSING — /login to decrypt, or set key= in " ++ agenttools.CFG_PATH,
         },
-        agenttools.factoryHost() orelse "(set factory= in " ++ CFG_PATH ++ ")",
+        agenttools.factoryHost() orelse "(set factory= in " ++ agenttools.CFG_PATH ++ ")",
         if (up) "up" else "down",
         abi.ABI_VERSION,
         lim.max_turns,
@@ -186,7 +185,7 @@ fn cmdApps(c: console.Console) void {
 }
 
 fn loadConfig() config.Config {
-    const text = vfs.read(CFG_PATH) orelse return .{};
+    const text = vfs.read(agenttools.CFG_PATH) orelse return .{};
     return config.parse(text);
 }
 
@@ -217,7 +216,7 @@ fn lockedMessage() []const u8 {
     return if (credential.isSealedIntoBuild())
         "the service credential is encrypted — decrypt it first:\n\n    /login <passphrase>\n\n"
     else
-        "no credential: seal one into the build (scripts/agent/sealkey.sh) or set key= in " ++ CFG_PATH ++ "\n";
+        "no credential: seal one into the build (scripts/agent/sealkey.sh) or set key= in " ++ agenttools.CFG_PATH ++ "\n";
 }
 
 /// `ai ...` — the shell command entry (core-0 table).
@@ -359,7 +358,7 @@ pub fn run(c: console.Console, args: []const u8) void {
 /// the terminal. Shared by a chat prompt and an `/improve` session.
 fn runLoop(c: console.Console, hist: *loop.history.History, p: []const u8, limits: loop.budget.Limits) void {
     if (!credential.isUnlocked()) {
-        c.write("no API key — set `key=<LLM service key>` in " ++ CFG_PATH ++ "\n");
+        c.write("no API key — set `key=<LLM service key>` in " ++ agenttools.CFG_PATH ++ "\n");
         return;
     }
     const arena_alloc = heap.allocator();

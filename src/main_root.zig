@@ -741,12 +741,11 @@ fn seedRamdisk() void {
         // The default desktop wallpaper (spec R23) — the desktop reads it back
         // through the VFS at GL init, same path a user-chosen image takes.
         .{ "background.png", @embedFile("background_png") },
-        // Something to compile the moment the machine is up: `compile hello.zig
-        // hello` sends this to the factory (ARCH-012) and `run hello` executes
-        // what comes back. It is the same source the host factory tests use, so
-        // the sample the user compiles and the sample the gate compiles are one
-        // file.
-        .{ "hello.zig", @embedFile("hello_zig") },
+        // The agent's configuration (AGT-017). Seeded here so `ai` finds one on
+        // every machine: the other home is the USB stick, which no emulator run
+        // has, and a configuration that exists only on hardware is one that
+        // cannot be given to the agent where the agent is developed.
+        .{ "AI.CFG", @embedFile("ai_cfg") },
     };
     inline for (seeds) |s| {
         ramdisk.put(s[0], s[1]) catch @panic("ramdisk: seeding a boot file failed (heap broken at init)");
