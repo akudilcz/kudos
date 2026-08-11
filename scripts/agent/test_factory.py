@@ -296,6 +296,37 @@ def test_factory_token_gates_posts():
         srv.shutdown()
 
 
+def test_entry_owns_byte_zero_of_the_image():
+    # The loader calls byte 0 of the image, so `.entry` has to BE byte 0. A PIE
+    # link also emits ALLOCATED dynamic-linking metadata (.dynsym, .hash, ...);
+    # sections the linker script does not name are orphans it places at the
+    # front, which pushes the code off byte 0. Nothing else notices: the image
+    # has no relocations, the header is well formed, the blob loads — and then
+    # the machine executes a symbol table and dies with a wild instruction
+    # pointer. This source is the shape that triggers it (a helper call and a
+    # @memcpy of a literal); it must RUN, not merely compile.
+    src = (
+        'const abi = @import("abi.zig");\n'
+        "noinline fn label(buf: []u8) usize {\n"
+        '    @memcpy(buf[0..4], "ent=");\n'
+        "    buf[4] = 'o';\n"
+        "    buf[5] = 'k';\n"
+        "    buf[6] = '\\n';\n"
+        "    return 7;\n"
+        "}\n"
+        "pub fn main(api: *const abi.Api) i32 {\n"
+        "    var buf: [16]u8 = undefined;\n"
+        "    const n = label(&buf);\n"
+        "    api.print(api.ctx, &buf, n);\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    res = factory.compile_kudos(src, kind="app", abi=ABI)
+    assert res["ok"], res
+    rc, out = run_blob(res["blob"])
+    assert rc == 0 and "ent=ok" in out, (rc, out)
+
+
 def main():
     if not HAVE_ZIG:
         print("SKIP: zig not on PATH")

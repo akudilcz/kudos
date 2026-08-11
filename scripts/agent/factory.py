@@ -99,6 +99,29 @@ def _readelf_has_relocations(elf):
     return bool(re.search(r"R_X86_64", out))
 
 
+def _entry_is_first(elf):
+    """Whether `.entry` owns byte 0 of the loaded image.
+
+    The loader calls the image's first byte, so the entry MUST be there. The
+    linker script places `.entry` first, but a section it does not name is an
+    orphan the linker may place ahead of it — and the resulting image passes
+    every other check while crashing the instant it is called. Proven here,
+    like position-independence, rather than trusted."""
+    out = subprocess.check_output(["readelf", "-SW", elf], text=True)
+    for ln in out.splitlines():
+        m = re.match(
+            r"\s*\[\s*\d+\]\s+(\S+)\s+\S+\s+([0-9a-fA-F]+)\s+\S+\s+\S+\s+\S+\s+(\S+)",
+            ln,
+        )
+        if not m:
+            continue
+        name, addr, flags = m.groups()
+        if "A" not in flags:
+            continue
+        return name == ".entry" and int(addr, 16) == 0
+    return False
+
+
 def _image_mem_len(elf):
     """Total loaded size incl. the zeroed .bss tail = max(addr+size) over ALLOC
     sections, aligned to 16 (matches app.ld's __image_end)."""
@@ -174,6 +197,12 @@ def compile_kudos(source, kind="app", name="app", abi=None):
             return {"stage": STAGE_RELOC, "ok": False,
                     "errors": "image has load-time relocations; avoid pointers to "
                               "globals / absolute addresses so the code is position-independent"}
+
+        # The loader calls byte 0 of the image, so the entry has to BE byte 0.
+        if not _entry_is_first(elf):
+            return {"stage": STAGE_RELOC, "ok": False,
+                    "errors": "image does not start with .entry: something was laid "
+                              "out ahead of the entry point, so byte 0 is not code"}
 
         mem_len = _image_mem_len(elf)
         binpath = os.path.join(work, "app.bin")

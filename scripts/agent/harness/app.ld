@@ -23,6 +23,16 @@ SECTIONS {
   __image_end = .;
 
   /DISCARD/ : {
+    /* A PIE link emits ALLOCATED dynamic-linking metadata (.dynsym, .hash,
+     * .dynstr and friends). Nothing ever dynamically links a .kudos image, but
+     * a section this script does not NAME is an orphan the linker places
+     * wherever it likes — and it likes the front, ahead of `.entry`. That moves
+     * the code off byte 0 while every other check still passes, so the loader
+     * jumps into a symbol table and the app dies with a wild instruction
+     * pointer. Whether the metadata exists at all depends on the program, which
+     * is why it struck one app and not the next. Named here so it is dropped,
+     * not placed. */
+    *(.dynsym) *(.dynstr) *(.hash) *(.gnu.hash) *(.dynamic) *(.gnu.version*)
     *(.eh_frame*)
     *(.comment)
     *(.note*)
