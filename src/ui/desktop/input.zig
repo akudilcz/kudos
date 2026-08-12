@@ -16,6 +16,7 @@ const smp = @import("../../kernel/smp/smp.zig");
 const sched = @import("../../kernel/sched/sched.zig");
 const debug = @import("../../kernel/debug/debug.zig");
 const iaccel = @import("iaccel"); // the GPU-acceleration seam (iface/iaccel.zig)
+const iwindow = @import("iwindow"); // module windows: pointer + key delivery
 const desktop_mod = @import("desktop.zig");
 const Desktop = desktop_mod.Desktop;
 const lifecycle = @import("lifecycle.zig");
@@ -45,6 +46,25 @@ pub fn onKey(d: *Desktop, ascii: u8) void {
 /// need a second cursor to accumulate against.
 fn forwardPointerToGuest(d: *Desktop, buttons: u8) void {
     const a = d.focusedApp() orelse return;
+    // A loaded module's window gets the pointer the same way a guest's does
+    // (Interface.input): content-local coordinates while the pointer is over
+    // the FOCUSED blob window, an explicit "not here" otherwise — so a module
+    // never sees a frozen last position and mistakes it for a hover.
+    if (a == .blob) {
+        const bwin = a.window();
+        const bw = bwin.contentW();
+        const bh = bwin.contentH();
+        const bx = d.cursor_x - bwin.contentX();
+        const by = d.cursor_y - bwin.contentY();
+        if (bw == 0 or bh == 0 or bx < 0 or by < 0 or
+            bx >= @as(i32, @intCast(bw)) or by >= @as(i32, @intCast(bh)))
+        {
+            iwindow.clearPointer(a.blob.handle);
+        } else {
+            iwindow.pushPointer(a.blob.handle, bx, by, buttons);
+        }
+        return;
+    }
     if (a != .vm) return;
     const win = a.window();
     const cw = win.contentW();

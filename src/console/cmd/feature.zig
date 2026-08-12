@@ -9,6 +9,7 @@
 //! backs any callback it registered — so its image is deliberately never freed.
 
 const std = @import("std");
+const capabilities = @import("../capabilities.zig");
 const console = @import("../console.zig");
 const vfs = @import("vfs");
 const heap = @import("../../kernel/memory/heap.zig");
@@ -89,7 +90,7 @@ pub fn run(c: console.Console, args: []const u8) void {
     const base = std.mem.alignForward(usize, @intFromPtr(raw.ptr), 16);
     const image = @as([*]u8, @ptrFromInt(base))[0..mem_len];
 
-    const rc = hotload.registerBlob(blob, image, consoleSink(&cc)) catch |e| return report(c, e);
+    const rc = hotload.registerBlob(blob, image, consoleSink(&cc), capabilities.feature) catch |e| return report(c, e);
     var buf: [48]u8 = undefined;
     c.write(std.fmt.bufPrint(&buf, "feature '{s}' loaded (rc {d})\n", .{ name, rc }) catch "\n");
 }

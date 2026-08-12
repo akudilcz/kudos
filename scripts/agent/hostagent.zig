@@ -127,7 +127,7 @@ const Agent = struct {
         // Resident on purpose (never munmapped): the image backs the callbacks
         // the feature registered, exactly like the kernel's never-freed image.
         const image = try std.posix.mmap(null, std.mem.alignForward(usize, mem_len, page), .{ .READ = true, .WRITE = true, .EXEC = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
-        const rc = hotload.registerBlob(blob, image[0..mem_len], captureSink(out)) catch |e| {
+        const rc = hotload.registerBlob(blob, image[0..mem_len], captureSink(out), apiGetInterface) catch |e| {
             try agent_tools.printTo(out, "load failed: {s}", .{@errorName(e)});
             return;
         };
@@ -443,6 +443,9 @@ fn apiFileWrite(_: *anyopaque, path: [*]const u8, path_len: usize, data: [*]cons
     return true;
 }
 fn apiGetInterface(_: *anyopaque, _: u32, _: u32) callconv(.c) ?*const anyopaque {
+    // No capability is published on the host rig: no window, no desktop, no
+    // machine behind it. A module binding one takes the same refusal a kudos that
+    // does not publish it would give.
     return null;
 }
 

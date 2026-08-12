@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const buildinfo = @import("buildinfo");
+const redirect = @import("redirect.zig");
 
 pub const Out = @import("out.zig").Out;
 
@@ -58,4 +59,15 @@ pub fn lookup(cmd: []const u8) ?Command {
         if (std.mem.eql(u8, cmd, c.name)) return c;
     }
     return null;
+}
+
+/// Whether `args` asks for a redirection (APP-028), which a local command cannot
+/// serve: these run on the terminal's own core and write through `Out`, which
+/// carries no working directory to resolve a path against — redirection is the
+/// shell's facility (shell.zig). Said plainly here because the alternative is
+/// worse than a refusal: `run app > out.txt` would otherwise reach cmd/run.zig as
+/// a request for a module named "app > out.txt", and the error would name a file
+/// nobody asked for.
+pub fn refusesRedirect(args: []const u8) bool {
+    return redirect.parse(args) != null;
 }

@@ -49,18 +49,27 @@ fn featRegisterCommand(
     return features.registerCommand(name[0..name_len], run_fn, &feat_run_ctx);
 }
 
+/// The `get_interface` a feature is called with — INJECTED, like `sink`, because
+/// the registry that answers it must name things this layer may not (the file
+/// system, the desktop, a session): it lives in `console/capabilities.zig`, above
+/// here. A low layer receiving a capability is the seam; a low layer reaching up
+/// for one is the inversion. Host rigs pass their own.
+pub const GetInterface = *const fn (ctx: *anyopaque, id: u32, version: u32) callconv(.c) ?*const anyopaque;
+
 /// Verify `blob` as a feature, place it into caller-provided executable
-/// `image` memory, and call its `register` with output routed to `sink`.
+/// `image` memory, and call its `register` with output routed to `sink` and
+/// capability requests answered by `get_interface`.
 /// Returns the feature's return code. The image backs every callback the
 /// feature registered, so it must stay live (and executable) as long as those
 /// commands can run — for the kernel, the rest of the boot.
-pub fn registerBlob(blob: []const u8, image: []u8, sink: Sink) runner.LoadError!i32 {
+pub fn registerBlob(blob: []const u8, image: []u8, sink: Sink, get_interface: GetInterface) runner.LoadError!i32 {
     const entry = try runner.loadFeature(blob, image);
     var fapi = abi.FeatureApi{
         .version = abi.ABI_VERSION,
         .ctx = &feat_run_ctx,
         .log = featLog,
         .register_command = featRegisterCommand,
+        .get_interface = get_interface,
     };
     const prev = cur_sink;
     cur_sink = sink;

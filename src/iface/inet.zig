@@ -199,3 +199,88 @@ pub const INet = struct {
 /// The live network, published by the stack at boot. Null when no network stack was
 /// brought up at all — an app must handle that and say so rather than pretending.
 pub var instance: ?INet = null;
+
+// ── the module-fetch mailbox (Interface.net) ─────────────────────────────────
+//
+// A module runs on its own core and must never touch the stack (core-0-owned,
+// single connection), so its fetch is a PARKED REQUEST: it writes url + target
+// name, the system core performs the transfer, the module polls the state. The
+// body crosses as a ramdisk file, so a download's size is nobody's buffer.
+//
+// Lock-free like `iwindow`: the request fields are written before `mf_state` is
+// released to `.requested` and read after it is acquired, so the state IS the
+// barrier. One fetch at a time — the stack has one connection, and a second
+// `begin` is refused rather than queued.
+
+const abi = @import("abi");
+
+/// The mailbox's bounds ARE the ABI's — a module is told NET_URL_MAX, and the
+/// mailbox refusing a different number would be a contract split in two.
+pub const MFETCH_URL_MAX: usize = abi.NET_URL_MAX;
+pub const MFETCH_NAME_MAX: usize = 64;
+
+pub const MFetchState = enum(u8) {
+    /// No fetch parked; `requestModuleFetch` may start one.
+    idle,
+    /// Parked, not yet taken by the pump.
+    requested,
+    /// The pump is transferring.
+    in_flight,
+    /// The body was written to the ramdisk; `finishModuleFetch` returns to idle.
+    done,
+    /// The transfer failed; `finishModuleFetch` returns to idle.
+    failed,
+};
+
+var mf_state: MFetchState = .idle;
+var mf_url_buf: [MFETCH_URL_MAX]u8 = undefined;
+var mf_url_len: usize = 0;
+var mf_name_buf: [MFETCH_NAME_MAX]u8 = undefined;
+var mf_name_len: usize = 0;
+
+/// PRODUCER (the module, via its capability adapter): park a fetch of `url`
+/// into ramdisk file `name`. False when one is already parked or in flight, or
+/// either argument is over its bound.
+pub fn requestModuleFetch(url: []const u8, name: []const u8) bool {
+    if (@atomicLoad(MFetchState, &mf_state, .acquire) != .idle) return false;
+    if (url.len == 0 or url.len > MFETCH_URL_MAX) return false;
+    if (name.len == 0 or name.len > MFETCH_NAME_MAX) return false;
+    @memcpy(mf_url_buf[0..url.len], url);
+    mf_url_len = url.len;
+    @memcpy(mf_name_buf[0..name.len], name);
+    mf_name_len = name.len;
+    @atomicStore(MFetchState, &mf_state, .requested, .release); // barrier: publishes url+name
+    return true;
+}
+
+pub const MFetchReq = struct { url: []const u8, name: []const u8 };
+
+/// CONSUMER (the system core's pump): take the parked request, moving it to
+/// `.in_flight`. The returned slices point into this mailbox and stay valid
+/// until the fetch completes (the producer cannot park another until then).
+pub fn takeModuleFetchRequest() ?MFetchReq {
+    if (@atomicLoad(MFetchState, &mf_state, .acquire) != .requested) return null;
+    @atomicStore(MFetchState, &mf_state, .in_flight, .release);
+    return .{ .url = mf_url_buf[0..mf_url_len], .name = mf_name_buf[0..mf_name_len] };
+}
+
+/// CONSUMER: the transfer ended — the body is on the ramdisk (`ok`) or nothing
+/// is (`!ok`).
+pub fn completeModuleFetch(ok: bool) void {
+    @atomicStore(MFetchState, &mf_state, if (ok) .done else .failed, .release);
+}
+
+/// PRODUCER: the parked fetch's current state.
+pub fn moduleFetchState() MFetchState {
+    return @atomicLoad(MFetchState, &mf_state, .acquire);
+}
+
+/// PRODUCER: acknowledge a done/failed result, freeing the slot. A no-op in
+/// any other state, so a confused module cannot cancel a live transfer that
+/// the pump still owns.
+pub fn finishModuleFetch() void {
+    const s = @atomicLoad(MFetchState, &mf_state, .acquire);
+    if (s == .done or s == .failed) {
+        @atomicStore(MFetchState, &mf_state, .idle, .release);
+    }
+}

@@ -65,6 +65,7 @@ src/agent/openrouter.zig: pub const SseAccumulator = struct
 src/agent/prompt.zig: pub const abi_ref = abi;
 src/agent/prompt.zig: pub const API_METHODS: []const u8 = methodsOf(abi.Api, "api");
 src/agent/prompt.zig: pub const FEATURE_API_METHODS: []const u8 = methodsOf(abi.FeatureApi, "api");
+src/agent/prompt.zig: pub const CAPABILITIES_DOC: []const u8 = capabilitiesDoc();
 src/agent/prompt.zig: pub const SYSTEM: []const u8 =
 src/agent/prompt.zig: pub const IMPROVE_SYSTEM: []const u8 =
 src/agent/tools.zig: pub fn jsonTo(w: anytype, alloc: std.mem.Allocator, v: anytype) !void
@@ -75,6 +76,7 @@ src/agent/tools.zig: pub const DispatchError = error{UnknownTool} || anyerror;
 src/agent/tools.zig: pub const Registry = struct
 src/apps/app.zig: pub const Kind = @import("../console/console.zig").AppKind;
 src/apps/app.zig: pub const App = union(enum)
+src/apps/blobwin.zig: pub const BlobWindow = struct
 src/apps/calchistory.zig: pub const ROWS: usize = 8;
 src/apps/calchistory.zig: pub const CAP: usize = 96;
 src/apps/calchistory.zig: pub const History = struct
@@ -117,6 +119,7 @@ src/boot/pump.zig: pub fn systemLoop() noreturn
 src/boot/pump.zig: pub fn orderlyFlush() void
 src/boot/pump.zig: pub fn pollInputOnly() void
 src/boot/pump.zig: pub fn desktopPump(force_full_present: bool) void
+src/console/agenttools.zig: pub const CFG_PATH = "/ramdisk/AI.CFG";
 src/console/agenttools.zig: pub fn setToken(tok: []const u8) void
 src/console/agenttools.zig: pub fn setMcpServer(url: []const u8) void
 src/console/agenttools.zig: pub fn setBuf(dst: []u8, len: *usize, src: []const u8) void
@@ -140,9 +143,24 @@ src/console/apprun.zig: pub const RUN_BUDGET_MS: u64 = 10_000;
 src/console/apprun.zig: pub const RunError = Error || error{
 src/console/apprun.zig: pub const Result = struct
 src/console/apprun.zig: pub fn runContained(blob: []const u8, budget_ms: u64) RunError!Result
+src/console/apprun.zig: pub fn startWindowed(blob: []const u8) RunError!void
+src/console/apprun.zig: pub fn reapWindowed() void
+src/console/apprun.zig: pub const SPAWN_ID: u32 = 1;
+src/console/apprun.zig: pub fn spawnModule(name: []const u8) u32
+src/console/apprun.zig: pub fn stopSpawned(id: u32) bool
+src/console/capabilities.zig: pub const Grant = grants.Grant;
+src/console/capabilities.zig: pub fn get(grant: Grant, id: u32, version: u32) ?*const anyopaque
+src/console/capabilities.zig: pub fn appTerminal(_: *anyopaque, id: u32, version: u32) callconv(.c) ?*const anyopaque
+src/console/capabilities.zig: pub fn appHeadless(_: *anyopaque, id: u32, version: u32) callconv(.c) ?*const anyopaque
+src/console/capabilities.zig: pub fn feature(_: *anyopaque, id: u32, version: u32) callconv(.c) ?*const anyopaque
+src/console/capabilities.zig: pub const Entry = struct
+src/console/capabilities.zig: pub fn count() usize
+src/console/capabilities.zig: pub fn at(i: usize) Entry
+src/console/capabilities.zig: pub fn service() void
 src/console/cmd/ai.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/background.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/calc.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/caps.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/cat.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/cd.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/clear.zig: pub fn run(c: console.Console, _: []const u8) void
@@ -163,6 +181,7 @@ src/console/cmd/net.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/prime.zig: pub fn run(out: Out, args: []const u8) void
 src/console/cmd/ps.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/reboot.zig: pub fn run(_: console.Console, _: []const u8) void
+src/console/cmd/rm.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/rt.zig: pub const RtResult = struct
 src/console/cmd/rt.zig: pub fn lastRt() RtResult
 src/console/cmd/rt.zig: pub fn run(out: Out, args: []const u8) void
@@ -193,13 +212,24 @@ src/console/editline.zig: pub const Screen = struct
 src/console/editline.zig: pub const Action = enum { none, commit, complete, recalled, recall_empty };
 src/console/editline.zig: pub const Completion = enum { none, grew, ambiguous };
 src/console/editline.zig: pub const Editor = struct
+src/console/grants.zig: pub const Grant = enum
+src/console/grants.zig: pub const Row = struct
+src/console/grants.zig: pub const TABLE = [_]Row{
+src/console/grants.zig: pub fn allows(grant: Grant, id: u32, version: u32) bool
+src/console/grants.zig: pub fn find(id: u32, version: u32) ?Row
 src/console/localcmd.zig: pub const Out = @import("out.zig").Out;
 src/console/localcmd.zig: pub const Command = struct
 src/console/localcmd.zig: pub const COMMANDS = if (buildinfo.test_hooks)
 src/console/localcmd.zig: pub const NAMES: [COMMANDS.len][]const u8 = blk:
 src/console/localcmd.zig: pub fn lookup(cmd: []const u8) ?Command
+src/console/localcmd.zig: pub fn refusesRedirect(args: []const u8) bool
 src/console/out.zig: pub const Out = struct
 src/console/patharg.zig: pub fn resolve(c: console.Console, arg: []const u8, buf: *[vfs.MAX_PATH]u8) ?[]const u8
+src/console/redirect.zig: pub const MAX_BYTES: usize = 16 << 10;
+src/console/redirect.zig: pub const Mode = enum
+src/console/redirect.zig: pub const Parsed = struct
+src/console/redirect.zig: pub fn parse(line: []const u8) ?Parsed
+src/console/redirect.zig: pub const Sink = struct
 src/console/session.zig: pub const ReqKind = enum(u8) { echo, backspace, run_line, complete };
 src/console/session.zig: pub const Request = struct
 src/console/session.zig: pub const Key = struct { ascii: u8 };
@@ -2020,6 +2050,12 @@ src/drivers/net/debug/fileproto.zig: pub const OP_TEXT: u8 = 0x10;
 src/drivers/net/debug/fileproto.zig: pub const OP_TEXT_R: u8 = 0x90;
 src/drivers/net/debug/fileproto.zig: pub const OP_FOCUS: u8 = 0x11;
 src/drivers/net/debug/fileproto.zig: pub const OP_FOCUS_R: u8 = 0x91;
+src/drivers/net/debug/fileproto.zig: pub const OP_WRITE_AT: u8 = 0x13;
+src/drivers/net/debug/fileproto.zig: pub const OP_WRITE_AT_R: u8 = 0x93;
+src/drivers/net/debug/fileproto.zig: pub const WRITE_AT_MAX_BYTES: u32 = 512 * 1024;
+src/drivers/net/debug/fileproto.zig: pub const OP_RESEND: u8 = 0x12;
+src/drivers/net/debug/fileproto.zig: pub const OP_RESEND_R: u8 = 0x92;
+src/drivers/net/debug/fileproto.zig: pub const RESEND_MAX_LINES: u8 = 9;
 src/drivers/net/debug/fileproto.zig: pub const MCP_RESPONSE_FILE = "mcp-response.json";
 src/drivers/net/debug/fileproto.zig: pub const OP_ERR: u8 = 0xff;
 src/drivers/net/debug/fileproto.zig: pub const KEY_NONE: u8 = 0;
@@ -2045,6 +2081,9 @@ src/drivers/net/debug/fileproto.zig: pub fn writeErr(buf: []u8, request_id: u16,
 src/drivers/net/debug/fileproto.zig: pub fn writeKeyReq(buf: []u8, request_id: u16, ascii: u8, named: u8) usize
 src/drivers/net/debug/fileproto.zig: pub fn writeTextReq(buf: []u8, request_id: u16, s: []const u8) usize
 src/drivers/net/debug/fileproto.zig: pub fn writeFocusReq(buf: []u8, request_id: u16, needle: []const u8) usize
+src/drivers/net/debug/fileproto.zig: pub fn writeResendReq(buf: []u8, request_id: u16, from_seq: u32, count: u8) usize
+src/drivers/net/debug/fileproto.zig: pub const ResendReq = struct { from_seq: u32, count: u8 };
+src/drivers/net/debug/fileproto.zig: pub fn parseResendReq(body: []const u8) ?ResendReq
 src/drivers/net/debug/fileproto.zig: pub fn writeMouseReq(buf: []u8, request_id: u16, dx: i16, dy: i16, buttons: u8) usize
 src/drivers/net/debug/fileproto.zig: pub fn writeMouseAbsReq(buf: []u8, request_id: u16, x: i16, y: i16, buttons: u8) usize
 src/drivers/net/debug/fileproto.zig: pub fn writeShotReq(buf: []u8, request_id: u16) usize
@@ -2072,10 +2111,17 @@ src/drivers/net/debug/fileserv.zig: pub fn setMcpHandler(h: *const fn (body: []c
 src/drivers/net/debug/fileserv.zig: pub fn pingCount() u64
 src/drivers/net/debug/fileserv.zig: pub fn service() void
 src/drivers/net/debug/lineasm.zig: pub fn Assembler(comptime CAP: usize) type
+src/drivers/net/debug/linestore.zig: pub const SEQ_DIGITS = 6;
+src/drivers/net/debug/linestore.zig: pub const SEQ_PREFIX_LEN = SEQ_DIGITS + 3;
+src/drivers/net/debug/linestore.zig: pub const SEQ_MOD: u32 = 1_000_000;
+src/drivers/net/debug/linestore.zig: pub const Pushed = enum { stored, dropped_pending };
+src/drivers/net/debug/linestore.zig: pub const Filled = struct { bytes: usize, lines: usize };
+src/drivers/net/debug/linestore.zig: pub fn Store(comptime capacity: usize, comptime line_cap: usize) type
 src/drivers/net/debug/netdebug.zig: pub var collector: ?[4]u8 = null;
 src/drivers/net/debug/netdebug.zig: pub const PORT: u16 = 9514;
 src/drivers/net/debug/netdebug.zig: pub fn setGentle(g: bool) void
 src/drivers/net/debug/netdebug.zig: pub fn start() bool
+src/drivers/net/debug/netdebug.zig: pub fn resendInto(from: u32, n: u32, out: []u8) usize
 src/drivers/net/debug/netdebug.zig: pub fn flushNow() void
 src/drivers/net/debug/netdebug.zig: pub fn replayRing(max_bytes: usize) void
 src/drivers/net/debug/netdebug.zig: pub fn drain() void
@@ -2642,6 +2688,15 @@ src/iface/inet.zig: pub const Lease = struct
 src/iface/inet.zig: pub const VTable = struct
 src/iface/inet.zig: pub const INet = struct
 src/iface/inet.zig: pub var instance: ?INet = null;
+src/iface/inet.zig: pub const MFETCH_URL_MAX: usize = abi.NET_URL_MAX;
+src/iface/inet.zig: pub const MFETCH_NAME_MAX: usize = 64;
+src/iface/inet.zig: pub const MFetchState = enum(u8)
+src/iface/inet.zig: pub fn requestModuleFetch(url: []const u8, name: []const u8) bool
+src/iface/inet.zig: pub const MFetchReq = struct { url: []const u8, name: []const u8 };
+src/iface/inet.zig: pub fn takeModuleFetchRequest() ?MFetchReq
+src/iface/inet.zig: pub fn completeModuleFetch(ok: bool) void
+src/iface/inet.zig: pub fn moduleFetchState() MFetchState
+src/iface/inet.zig: pub fn finishModuleFetch() void
 src/iface/ipci.zig: pub const Device = struct
 src/iface/ipci.zig: pub var devices: []const Device = &.{};
 src/iface/ipresent.zig: pub const MapError = error{ BackendMapFailed, BackendVaExhausted, BackendVramExhausted };
@@ -2652,6 +2707,39 @@ src/iface/iramdisk.zig: pub var instance: ?IRamdisk = null;
 src/iface/iramdisk.zig: pub const PutError = error{OutOfMemory};
 src/iface/iramdisk.zig: pub const Entry = struct
 src/iface/iramdisk.zig: pub const IRamdisk = struct
+src/iface/iscene.zig: pub const Cmd = struct
+src/iface/iscene.zig: pub const Op = enum(u16)
+src/iface/iscene.zig: pub const MAX_CMDS = 512;
+src/iface/iscene.zig: pub const MAX_FLOATS = 64 * 1024;
+src/iface/iscene.zig: pub const MAX_INDICES = 16 * 1024;
+src/iface/iscene.zig: pub const Slot = struct
+src/iface/iscene.zig: pub const MAX_WINDOWS: usize = abi.WINDOW_MAX_COUNT;
+src/iface/iscene.zig: pub fn recording(win: usize) *Slot
+src/iface/iscene.zig: pub fn canPublish(win: usize) bool
+src/iface/iscene.zig: pub fn publish(win: usize) void
+src/iface/iscene.zig: pub fn resetSlot(s: *Slot) void
+src/iface/iscene.zig: pub fn record(s: *Slot, cmd: Cmd) void
+src/iface/iscene.zig: pub fn pushFloats(s: *Slot, data: []const f32) u32
+src/iface/iscene.zig: pub fn pushIndices(s: *Slot, data: []const u16) u32
+src/iface/iscene.zig: pub fn takeFrame(win: usize) ?*const Slot
+src/iface/iscene.zig: pub fn release(win: usize) void
+src/iface/iscene.zig: pub fn reset(win: usize) void
+src/iface/iscene.zig: pub fn resetAll() void
+src/iface/iscene.zig: pub const GL_MODELVIEW: u32 = 0x1700;
+src/iface/iscene.zig: pub const GL_PROJECTION: u32 = 0x1701;
+src/iface/iscene.zig: pub const GL_TRIANGLES: u32 = 0x0004;
+src/iface/iscene.zig: pub const GL_TRIANGLE_STRIP: u32 = 0x0005;
+src/iface/iscene.zig: pub const GL_TRIANGLE_FAN: u32 = 0x0006;
+src/iface/iscene.zig: pub const GL_LINES: u32 = 0x0001;
+src/iface/iscene.zig: pub const GL_DEPTH_TEST: u32 = 0x0B71;
+src/iface/iscene.zig: pub const GL_CULL_FACE: u32 = 0x0B44;
+src/iface/iscene.zig: pub const GL_LIGHTING: u32 = 0x0B50;
+src/iface/iscene.zig: pub const GL_CW: u32 = 0x0900;
+src/iface/iscene.zig: pub const GL_CCW: u32 = 0x0901;
+src/iface/iscene.zig: pub const GL_NEVER: u32 = 0x0200;
+src/iface/iscene.zig: pub const GL_ALWAYS: u32 = 0x0207;
+src/iface/iscene.zig: pub const Verdict = enum
+src/iface/iscene.zig: pub fn validate(s: *const Slot) Verdict
 src/iface/ivirt.zig: pub const MAX_VMS: usize = 4;
 src/iface/ivirt.zig: pub const Id = usize;
 src/iface/ivirt.zig: pub const State = enum(u8) { absent, fetching, booting, running, halted, failed };
@@ -2706,17 +2794,38 @@ src/iface/ivirt.zig: pub fn markFbDirty(id: Id) void
 src/iface/ivirt.zig: pub fn fbDirty(id: Id) bool
 src/iface/ivirt.zig: pub fn takeFbDirty(id: Id) bool
 src/iface/ivirt.zig: pub fn reset(id: Id) void
-src/iface/iwindow.zig: pub fn requestOpen(w: u32, h: u32) void
-src/iface/iwindow.zig: pub const OpenReq = struct { w: u32, h: u32 };
-src/iface/iwindow.zig: pub fn takeOpenRequest() ?OpenReq
-src/iface/iwindow.zig: pub fn provide(new_handle: u32, buf: [*]u32, w: u32, h: u32) void
-src/iface/iwindow.zig: pub fn handle() u32
-src/iface/iwindow.zig: pub fn blit(h_handle: u32, pixels: [*]const u32, w: u32, h: u32) void
-src/iface/iwindow.zig: pub const Frame = struct { buf: [*]u32, w: u32, h: u32 };
-src/iface/iwindow.zig: pub fn takeDirty() ?Frame
-src/iface/iwindow.zig: pub fn requestClose() void
-src/iface/iwindow.zig: pub fn takeClose() bool
+src/iface/iwindow.zig: pub const MAX_WINDOWS: usize = abi.WINDOW_MAX_COUNT;
+src/iface/iwindow.zig: pub const KEY_RING_CAP = 128;
+src/iface/iwindow.zig: pub const Mode = enum(u8) { pixels, scene };
+src/iface/iwindow.zig: pub fn requestCreate(w: u32, h: u32, want: Mode, title: []const u8) u32
+src/iface/iwindow.zig: pub fn live(h: u32) bool
+src/iface/iwindow.zig: pub fn closed(h: u32) bool
+src/iface/iwindow.zig: pub fn size(h: u32, out_w: *u32, out_h: *u32) bool
+src/iface/iwindow.zig: pub fn focused(h: u32) bool
+src/iface/iwindow.zig: pub fn mode(h: u32) ?Mode
+src/iface/iwindow.zig: pub fn indexOf(h: u32) ?usize
+src/iface/iwindow.zig: pub fn retitle(h: u32, title: []const u8) bool
+src/iface/iwindow.zig: pub fn requestClose(h: u32) void
+src/iface/iwindow.zig: pub fn blit(h: u32, pixels: [*]const u32, w: u32, hgt: u32) void
+src/iface/iwindow.zig: pub fn popKey(h: u32) ?u8
+src/iface/iwindow.zig: pub const Pointer = struct { x: i32, y: i32, buttons: u8 };
+src/iface/iwindow.zig: pub fn pointer(h: u32) ?Pointer
+src/iface/iwindow.zig: pub fn count() u32
+src/iface/iwindow.zig: pub fn at(i: u32) u32
+src/iface/iwindow.zig: pub const CreateReq = struct { handle: u32, w: u32, h: u32, mode: Mode, title: []const u8 };
+src/iface/iwindow.zig: pub fn takeCreateRequest() ?CreateReq
+src/iface/iwindow.zig: pub fn provide(h: u32) void
+src/iface/iwindow.zig: pub fn takeClose() ?u32
+src/iface/iwindow.zig: pub fn destroy(h: u32) void
 src/iface/iwindow.zig: pub fn reset() void
+src/iface/iwindow.zig: pub const Frame = struct { buf: [*]const u32, w: u32, h: u32 };
+src/iface/iwindow.zig: pub fn takeDirty(h: u32) ?Frame
+src/iface/iwindow.zig: pub fn setSize(h: u32, w: u32, hgt: u32) void
+src/iface/iwindow.zig: pub fn setFocused(h: u32, on: bool) void
+src/iface/iwindow.zig: pub fn pushKey(h: u32, ascii: u8) void
+src/iface/iwindow.zig: pub fn keysDropped(h: u32) u64
+src/iface/iwindow.zig: pub fn pushPointer(h: u32, x: i32, y: i32, buttons: u8) void
+src/iface/iwindow.zig: pub fn clearPointer(h: u32) void
 src/kernel/acpi/acpi.zig: pub const LAPIC_DEFAULT_BASE: u32 = 0xFEE00000;
 src/kernel/acpi/acpi.zig: pub const MAX_CPUS = 64;
 src/kernel/acpi/acpi.zig: pub const MAX_IOAPICS = 8;
@@ -2913,16 +3022,68 @@ src/kernel/interrupts/pic.zig: pub fn spurious(irq: u8) bool
 src/kernel/interrupts/pic.zig: pub fn setMask(irq: u8) void
 src/kernel/interrupts/pic.zig: pub fn clearMask(irq: u8) void
 src/kernel/loader/abi.zig: pub const ABI_MAGIC: u32 = 0x534f_444b;
-src/kernel/loader/abi.zig: pub const ABI_VERSION: u32 = 1;
+src/kernel/loader/abi.zig: pub const ABI_VERSION: u32 = 2;
 src/kernel/loader/abi.zig: pub const Kind = enum(u32)
 src/kernel/loader/abi.zig: pub const Header = extern struct
 src/kernel/loader/abi.zig: pub const HEADER_SIZE: usize = @sizeOf(Header);
 src/kernel/loader/abi.zig: pub const APP_ARENA_MAX_BYTES: usize = 16 << 20;
 src/kernel/loader/abi.zig: pub const Api = extern struct
 src/kernel/loader/abi.zig: pub const Interface = enum(u32)
-src/kernel/loader/abi.zig: pub const DRAW_MAX_W: u32 = 1024;
-src/kernel/loader/abi.zig: pub const DRAW_MAX_H: u32 = 768;
-src/kernel/loader/abi.zig: pub const DrawApi = extern struct
+src/kernel/loader/abi.zig: pub const CAPABILITIES = [_]struct { id: Interface, version: u32, vtable: type }{
+src/kernel/loader/abi.zig: pub const WINDOW_MAX_W: u32 = 1024;
+src/kernel/loader/abi.zig: pub const WINDOW_MAX_H: u32 = 768;
+src/kernel/loader/abi.zig: pub const WINDOW_MAX_COUNT: u32 = 4;
+src/kernel/loader/abi.zig: pub const WINDOW_TITLE_MAX: usize = 48;
+src/kernel/loader/abi.zig: pub const WINDOW_PIXELS: u32 = 0;
+src/kernel/loader/abi.zig: pub const WINDOW_SCENE: u32 = 1;
+src/kernel/loader/abi.zig: pub const WindowApi = extern struct
+src/kernel/loader/abi.zig: pub const GL_MODELVIEW: u32 = 0x1700;
+src/kernel/loader/abi.zig: pub const GL_PROJECTION: u32 = 0x1701;
+src/kernel/loader/abi.zig: pub const GL_TRIANGLES: u32 = 0x0004;
+src/kernel/loader/abi.zig: pub const GL_TRIANGLE_STRIP: u32 = 0x0005;
+src/kernel/loader/abi.zig: pub const GL_TRIANGLE_FAN: u32 = 0x0006;
+src/kernel/loader/abi.zig: pub const GL_LINES: u32 = 0x0001;
+src/kernel/loader/abi.zig: pub const GL_DEPTH_TEST: u32 = 0x0B71;
+src/kernel/loader/abi.zig: pub const GL_CULL_FACE: u32 = 0x0B44;
+src/kernel/loader/abi.zig: pub const GL_LIGHTING: u32 = 0x0B50;
+src/kernel/loader/abi.zig: pub const GL_CW: u32 = 0x0900;
+src/kernel/loader/abi.zig: pub const GL_CCW: u32 = 0x0901;
+src/kernel/loader/abi.zig: pub const GL_LESS: u32 = 0x0201;
+src/kernel/loader/abi.zig: pub const GL_LEQUAL: u32 = 0x0203;
+src/kernel/loader/abi.zig: pub const GlApi = extern struct
+src/kernel/loader/abi.zig: pub const TaskInfo = extern struct
+src/kernel/loader/abi.zig: pub const TASK_UNKNOWN: u32 = 0;
+src/kernel/loader/abi.zig: pub const TASK_RUNNING: u32 = 1;
+src/kernel/loader/abi.zig: pub const TASK_READY: u32 = 2;
+src/kernel/loader/abi.zig: pub const TASK_BLOCKED: u32 = 3;
+src/kernel/loader/abi.zig: pub const TASK_DONE: u32 = 4;
+src/kernel/loader/abi.zig: pub const TaskApi = extern struct
+src/kernel/loader/abi.zig: pub const TaskCtlApi = extern struct
+src/kernel/loader/abi.zig: pub const VFS_PATH_MAX: usize = 64;
+src/kernel/loader/abi.zig: pub const VfsApi = extern struct
+src/kernel/loader/abi.zig: pub const NET_URL_MAX: usize = 256;
+src/kernel/loader/abi.zig: pub const NET_IDLE: u32 = 0;
+src/kernel/loader/abi.zig: pub const NET_IN_FLIGHT: u32 = 1;
+src/kernel/loader/abi.zig: pub const NET_DONE: u32 = 2;
+src/kernel/loader/abi.zig: pub const NET_FAILED: u32 = 3;
+src/kernel/loader/abi.zig: pub const NetApi = extern struct
+src/kernel/loader/abi.zig: pub const InputApi = extern struct
+src/kernel/loader/abi.zig: pub const DESK_FOCUS: u32 = 1;
+src/kernel/loader/abi.zig: pub const DESK_MAXIMISE: u32 = 2;
+src/kernel/loader/abi.zig: pub const DESK_MINIMISE: u32 = 3;
+src/kernel/loader/abi.zig: pub const DESK_RESTORE: u32 = 4;
+src/kernel/loader/abi.zig: pub const DESK_CLOSE: u32 = 5;
+src/kernel/loader/abi.zig: pub const DeskApi = extern struct
+src/kernel/loader/abi.zig: pub const GUEST_ABSENT: u32 = 0;
+src/kernel/loader/abi.zig: pub const GUEST_FETCHING: u32 = 1;
+src/kernel/loader/abi.zig: pub const GUEST_BOOTING: u32 = 2;
+src/kernel/loader/abi.zig: pub const GUEST_RUNNING: u32 = 3;
+src/kernel/loader/abi.zig: pub const GUEST_HALTED: u32 = 4;
+src/kernel/loader/abi.zig: pub const GUEST_FAILED: u32 = 5;
+src/kernel/loader/abi.zig: pub const GuestsApi = extern struct
+src/kernel/loader/abi.zig: pub const METRICS_NAME_MAX: usize = 48;
+src/kernel/loader/abi.zig: pub const FrameStats = extern struct
+src/kernel/loader/abi.zig: pub const MetricsApi = extern struct
 src/kernel/loader/abi.zig: pub const FeatureApi = extern struct
 src/kernel/loader/abi.zig: pub const VerifyError = error{
 src/kernel/loader/abi.zig: pub const Loadable = struct
@@ -2940,9 +3101,9 @@ src/kernel/loader/hotload.zig: pub const runner = @import("runner.zig");
 src/kernel/loader/hotload.zig: pub const features = @import("features.zig");
 src/kernel/loader/hotload.zig: pub const abi = runner.abi;
 src/kernel/loader/hotload.zig: pub const Sink = struct
-src/kernel/loader/hotload.zig: pub fn registerBlob(blob: []const u8, image: []u8, sink: Sink) runner.LoadError!i32
+src/kernel/loader/hotload.zig: pub const GetInterface = *const fn (ctx: *anyopaque, id: u32, version: u32) callconv(.c) ?*const anyopaque;
+src/kernel/loader/hotload.zig: pub fn registerBlob(blob: []const u8, image: []u8, sink: Sink, get_interface: GetInterface) runner.LoadError!i32
 src/kernel/loader/hotload.zig: pub fn dispatch(sink: Sink, name: []const u8, args: []const u8) bool
-src/kernel/loader/interfaces.zig: pub fn get(id: u32, version: u32) ?*const anyopaque
 src/kernel/loader/runner.zig: pub const abi = @import("abi");
 src/kernel/loader/runner.zig: pub const AppEntry = *const fn (api: *const abi.Api) callconv(.c) i32;
 src/kernel/loader/runner.zig: pub const FeatureEntry = *const fn (api: *const abi.FeatureApi) callconv(.c) i32;
@@ -3090,6 +3251,9 @@ src/kernel/sched/taskstat.zig: pub fn cpuPercentSince(pc: *percpu.PerCpu) u32
 src/kernel/sched/taskstat.zig: pub const TaskInfo = struct
 src/kernel/sched/taskstat.zig: pub fn taskCpuMs(t: *const Task) u64
 src/kernel/sched/taskstat.zig: pub fn snapshotTasks(core_index: u32, out: []TaskInfo) usize
+src/kernel/sched/taskstat.zig: pub const MAX_ROWS = 64;
+src/kernel/sched/taskstat.zig: pub fn snapshotAll() usize
+src/kernel/sched/taskstat.zig: pub fn rowAt(i: usize) ?TaskInfo
 src/kernel/sched/task.zig: pub const STACK_SIZE: usize = 512 * 1024;
 src/kernel/sched/task.zig: pub const TASK_LABEL_LEN: usize = 16;
 src/kernel/sched/task.zig: pub const Context = extern struct
@@ -3617,6 +3781,7 @@ src/ui/desktop/input.zig: pub fn drainFaults(d: *Desktop) bool
 src/ui/desktop/lifecycle.zig: pub fn spawnTerm(d: *Desktop, x: i32, y: i32, w: usize, h: usize, title: ?[]const u8, ai_mode: bool) !*Window
 src/ui/desktop/lifecycle.zig: pub fn spawnApp(d: *Desktop, kind: Kind) !void
 src/ui/desktop/lifecycle.zig: pub fn spawnVmWindow(d: *Desktop, id: ivirt.Id) !void
+src/ui/desktop/lifecycle.zig: pub fn spawnBlobWindow(d: *Desktop, req: iwindow.CreateReq) !void
 src/ui/desktop/lifecycle.zig: pub fn spawnAgent(d: *Desktop) !void
 src/ui/desktop/lifecycle.zig: pub fn focusRunning(d: *Desktop, kind: Kind) bool
 src/ui/desktop/lifecycle.zig: pub fn restoreMinimised(d: *Desktop, kind: Kind) bool
@@ -3627,6 +3792,7 @@ src/ui/desktop/lifecycle.zig: pub fn destroyWindow(d: *Desktop, win: *Window) vo
 src/ui/desktop/lifecycle.zig: pub fn requestClose(d: *Desktop, win: *Window) void
 src/ui/desktop/lifecycle.zig: pub fn closeWindow(d: *Desktop, win: *Window) void
 src/ui/desktop/lifecycle.zig: pub fn focusTermId(d: *Desktop, id: u32) void
+src/ui/desktop/lifecycle.zig: pub fn closeBlobWindow(d: *Desktop, handle: u32) void
 src/ui/desktop/lifecycle.zig: pub fn closeVm(d: *Desktop, id: ivirt.Id) void
 src/ui/desktop/lifecycle.zig: pub fn closeTermId(d: *Desktop, id: u32) void
 src/ui/desktop/lifecycle.zig: pub fn runPendingCommands(d: *Desktop) bool

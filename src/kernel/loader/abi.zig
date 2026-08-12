@@ -24,10 +24,10 @@ const std = @import("std");
 pub const ABI_MAGIC: u32 = 0x534f_444b;
 
 /// The interface version. The kernel refuses a binary whose version differs; the
-/// factory refuses a request whose version differs from its checkout. Bump only
-/// on a breaking change to `Header`, `Api`, or `FeatureApi` — those structs grow
-/// append-only within a version.
-pub const ABI_VERSION: u32 = 1;
+/// factory refuses a request whose version differs from its checkout. Bump on a
+/// breaking change to `Header`, `Api`, `FeatureApi` or a published capability
+/// vtable; within a version those structs grow append-only.
+pub const ABI_VERSION: u32 = 2;
 
 /// What a `.kudos` binary is, and therefore which entry signature and capability
 /// struct it expects. Values are explicit and non-zero so a zeroed blob fails
@@ -118,52 +118,432 @@ pub const Api = extern struct {
     get_interface: *const fn (ctx: *anyopaque, id: u32, version: u32) callconv(.c) ?*const anyopaque,
 };
 
-/// Well-known capability interface ids requestable through `Api.get_interface`.
-/// The number is the stable identity; each interface carries its own version so
-/// a v1 binary keeps working against a kernel that also offers v2. Grows
-/// append-only.
+/// Well-known capability interface ids requestable through `Api.get_interface`
+/// (an app) or `FeatureApi.get_interface` (a feature). The number is the stable
+/// identity; each interface carries its own version so a v1 binary keeps working
+/// against a kernel that also offers v2. Grows append-only.
+///
+/// An id here is a NAME, not a promise. The kernel publishes a capability only
+/// once someone has judged its vtable fit for the kind of module asking, and that
+/// judgement lives in ONE place — `src/console/capabilities.zig`, which is also
+/// the only file that can widen it. So a module ALWAYS handles null: the same id
+/// can be published to a feature and refused to an app, published to a run with a
+/// terminal behind it and refused to one without, or refused on a machine that
+/// has no desktop to draw on. `caps` at the shell prints what a running kudos
+/// publishes right now.
+///
+/// Each id below names the kudos interface contract (`src/iface/`) it fronts.
+/// That mapping is not decoration: those contracts are Zig-typed — slices, error
+/// unions, tagged unions — so none of them can cross the C ABI a module binds
+/// through. What is published is a narrow C-ABI MIRROR of a contract, never the
+/// contract itself, and the mirror is where the bounds and the copies live.
 pub const Interface = enum(u32) {
-    /// A 2D drawing surface for an app that renders its own window.
-    draw = 1,
-    /// The virtual file system beyond the app's ramdisk sandbox.
+    /// The module's own windows: create, close, blit, size, focus (`WindowApi`).
+    window = 1,
+    /// The ramdisk as a namespace: dirs, listing, offset reads (`VfsApi`).
     vfs = 2,
-    /// The network stack (sockets / fetch).
+    /// HTTP GET, parked and polled (`NetApi`).
     net = 3,
+    /// 3D for a window: an ES 1.1 subset the module records and the desktop
+    /// replays on the GPU (`GlApi`).
+    gl = 4,
+    /// Pointer over the module's focused window (`InputApi`). Keys arrive
+    /// through `Api.poll_key`.
+    input = 5,
+    /// Read-only machine figures: frame timing, named counters (`MetricsApi`).
+    metrics = 6,
+    /// The desktop's windows — anyone's, not just the module's (`DeskApi`).
+    desk = 7,
+    /// Guest virtual machines (`GuestsApi`).
+    guests = 8,
+    /// What the machine is running, read-only (`TaskApi`).
+    task = 9,
+    /// Placing work on the machine and taking it off (`TaskCtlApi`).
+    taskctl = 10,
     _,
 };
 
-/// Ceiling on a `draw` window's dimensions — bounds the compositor-owned surface
-/// and its per-frame GPU upload. A larger request is clamped to this.
-pub const DRAW_MAX_W: u32 = 1024;
-pub const DRAW_MAX_H: u32 = 768;
+// ── conventions every vtable below keeps ─────────────────────────────────────
+//
+// - First fields are `version` then `_reserved`; calls are append-only, so a
+//   field's offset is ABI.
+// - Every call takes the opaque `ctx` the base `Api` carries, first.
+// - Strings in: `(ptr, len)`. Strings out: `(ptr, cap) -> isize` = bytes
+//   written, or -1 for "no such thing".
+// - Handles are `u32`; 0 means none, and a refused create returns it.
+// - `bool` answers "did it happen"; `isize` answers "how many", negative for a
+//   refusal that needs distinguishing from zero.
+// - A capability NEVER blocks on another core. Anything the system core must do
+//   is parked and polled (see `NetApi`).
 
-/// The `Interface.draw` capability vtable, version 1: the surface an app uses to
-/// render its OWN window. A binary reaches it via `get_interface(@intFromEnum(
-/// Interface.draw), 1)`, and the kernel hands it back ONLY for a windowed launch;
-/// a plain terminal app receives null and stays text-only. Windowing is therefore
-/// opt-in and gated separately from the base `Api` — a blob that never binds
-/// `draw` cannot open a window, and one that does still gets nothing else (no
-/// `vfs`, no `net`).
+/// Every capability this ABI DEFINES, paired with the vtable a binder gets back.
+/// Comptime-only, and the one place an id is tied to its struct — documentation
+/// generated from this list (the agent's system prompt, `src/agent/prompt.zig`)
+/// therefore cannot drift from what a module actually binds, and a capability
+/// added without a vtable fails to compile here rather than shipping undocumented.
 ///
-/// The app owns no pixels the kernel trusts. It calls `open` once for a window
-/// sized w×h (clamped to DRAW_MAX_W/H), then repeatedly fills its OWN BGRA buffer
-/// and calls `blit` to COPY it into the window surface the compositor owns; the
-/// compositor uploads that surface to the GPU at frame time. `ctx` is the same
-/// opaque loader context every `Api` call receives. Fields are append-only — a
-/// new call is added at the end, never inserted (the offsets are ABI).
-pub const DrawApi = extern struct {
+/// Defined is not published: an `Interface` id may be reserved with no row here
+/// yet (its adapter is unwritten), and a row here is still subject to the grant
+/// table in `src/console/capabilities.zig`.
+pub const CAPABILITIES = [_]struct { id: Interface, version: u32, vtable: type }{
+    .{ .id = .window, .version = 1, .vtable = WindowApi },
+    .{ .id = .vfs, .version = 1, .vtable = VfsApi },
+    .{ .id = .net, .version = 1, .vtable = NetApi },
+    .{ .id = .gl, .version = 1, .vtable = GlApi },
+    .{ .id = .input, .version = 1, .vtable = InputApi },
+    .{ .id = .metrics, .version = 1, .vtable = MetricsApi },
+    .{ .id = .desk, .version = 1, .vtable = DeskApi },
+    .{ .id = .guests, .version = 1, .vtable = GuestsApi },
+    .{ .id = .task, .version = 1, .vtable = TaskApi },
+    .{ .id = .taskctl, .version = 1, .vtable = TaskCtlApi },
+};
+
+/// Ceiling on a window's content size. A larger request is clamped.
+pub const WINDOW_MAX_W: u32 = 1024;
+pub const WINDOW_MAX_H: u32 = 768;
+/// Windows one module may own at once.
+pub const WINDOW_MAX_COUNT: u32 = 4;
+/// Longest window title kept.
+pub const WINDOW_TITLE_MAX: usize = 48;
+
+/// How a window's content arrives, fixed at create.
+pub const WINDOW_PIXELS: u32 = 0;
+pub const WINDOW_SCENE: u32 = 1;
+
+/// The `Interface.window` capability vtable, version 1: the module's OWN
+/// windows, up to WINDOW_MAX_COUNT of them, addressed by handle.
+///
+/// The module owns no pixels the kernel trusts: it fills its own BGRA buffer and
+/// `blit` COPIES into the compositor's surface, on the module's core. A SCENE
+/// window takes no blits — its content is recorded through `GlApi` instead.
+/// Closing is a handshake: the user's close box sets `closed`, the module
+/// returns, and the desktop tears the window down.
+pub const WindowApi = extern struct {
+    version: u32,
+    _reserved: u32 = 0,
+    /// Open a window `w`x`h` (clamped) titled `title`, taking pixels or a
+    /// recorded scene. Returns its handle, or 0 (no desktop, or this module
+    /// already owns WINDOW_MAX_COUNT).
+    create: *const fn (ctx: *anyopaque, title: [*]const u8, title_len: usize, w: u32, h: u32, mode: u32) callconv(.c) u32,
+    /// Close a window this module owns.
+    close: *const fn (ctx: *anyopaque, handle: u32) callconv(.c) void,
+    /// True once the window is gone or going — the render loop's cue to return.
+    closed: *const fn (ctx: *anyopaque, handle: u32) callconv(.c) bool,
+    /// Current content size, which changes when the user resizes.
+    size: *const fn (ctx: *anyopaque, handle: u32, out_w: *u32, out_h: *u32) callconv(.c) bool,
+    /// Whether keystrokes are currently going to this window.
+    focused: *const fn (ctx: *anyopaque, handle: u32) callconv(.c) bool,
+    /// Rename a window.
+    retitle: *const fn (ctx: *anyopaque, handle: u32, title: [*]const u8, title_len: usize) callconv(.c) bool,
+    /// Copy `w`x`h` tightly-packed BGRA pixels in and mark the window dirty.
+    /// Ignored for a scene window or a block bigger than the content.
+    blit: *const fn (ctx: *anyopaque, handle: u32, pixels: [*]const u32, w: u32, h: u32) callconv(.c) void,
+    /// How many windows this module owns.
+    count: *const fn (ctx: *anyopaque) callconv(.c) u32,
+    /// The i-th window's handle, or 0 past the end.
+    at: *const fn (ctx: *anyopaque, i: u32) callconv(.c) u32,
+};
+
+// The `gl` capability's enums, spelled as the OpenGL ES 1.1 spec spells them.
+// A module imports nothing, so the values it passes live here; `iface/iscene.zig`
+// restates them kernel-side and a test pins the two sets equal.
+pub const GL_MODELVIEW: u32 = 0x1700;
+pub const GL_PROJECTION: u32 = 0x1701;
+pub const GL_TRIANGLES: u32 = 0x0004;
+pub const GL_TRIANGLE_STRIP: u32 = 0x0005;
+pub const GL_TRIANGLE_FAN: u32 = 0x0006;
+pub const GL_LINES: u32 = 0x0001;
+pub const GL_DEPTH_TEST: u32 = 0x0B71;
+pub const GL_CULL_FACE: u32 = 0x0B44;
+pub const GL_LIGHTING: u32 = 0x0B50;
+pub const GL_CW: u32 = 0x0900;
+pub const GL_CCW: u32 = 0x0901;
+pub const GL_LESS: u32 = 0x0201;
+pub const GL_LEQUAL: u32 = 0x0203;
+
+/// The `Interface.gl` capability vtable, version 1: 3D for a SCENE window, as an
+/// ES 1.1 subset the module records and the desktop replays on the GPU. The
+/// module never holds a GL context (it runs on another core, and the context is
+/// only valid inside the desktop's frame), so every call copies into kernel
+/// staging and is validated before replay: a bad argument costs the frame,
+/// counted, never a wild GL call.
+///
+/// `frame(handle)` starts recording for a window; ops record; `end_frame`
+/// publishes and paces the module to the compositor. With GL_LIGHTING enabled
+/// the desktop supplies its lamp and `color` sets the material. There is no
+/// per-vertex colour — a lit per-vertex-colour draw wedges the 4090.
+pub const GlApi = extern struct {
+    version: u32,
+    _reserved: u32 = 0,
+    /// Begin a frame for a scene window; false if the handle is not one of this
+    /// module's scene windows.
+    frame: *const fn (ctx: *anyopaque, handle: u32) callconv(.c) bool,
+    /// GL_DEPTH_TEST, GL_CULL_FACE, GL_LIGHTING.
+    enable: *const fn (ctx: *anyopaque, cap: u32) callconv(.c) void,
+    disable: *const fn (ctx: *anyopaque, cap: u32) callconv(.c) void,
+    /// GL_MODELVIEW or GL_PROJECTION.
+    matrix_mode: *const fn (ctx: *anyopaque, mode: u32) callconv(.c) void,
+    load_identity: *const fn (ctx: *anyopaque) callconv(.c) void,
+    /// 16 floats, column-major, copied by the call.
+    load_matrix: *const fn (ctx: *anyopaque, m: *const [16]f32) callconv(.c) void,
+    mult_matrix: *const fn (ctx: *anyopaque, m: *const [16]f32) callconv(.c) void,
+    /// Degrees, like glRotatef.
+    rotate: *const fn (ctx: *anyopaque, angle_deg: f32, x: f32, y: f32, z: f32) callconv(.c) void,
+    translate: *const fn (ctx: *anyopaque, x: f32, y: f32, z: f32) callconv(.c) void,
+    scale: *const fn (ctx: *anyopaque, x: f32, y: f32, z: f32) callconv(.c) void,
+    /// The material colour subsequent draws use.
+    color: *const fn (ctx: *anyopaque, r: f32, g: f32, b: f32, a: f32) callconv(.c) void,
+    /// `n` positions (n*3 floats, copied); draws index these until replaced.
+    vertices: *const fn (ctx: *anyopaque, xyz: [*]const f32, n: u32) callconv(.c) void,
+    /// `n` per-vertex normals (n*3 floats, copied) for lit shading.
+    normals: *const fn (ctx: *anyopaque, xyz: [*]const f32, n: u32) callconv(.c) void,
+    /// GL_TRIANGLES / _STRIP / _FAN / GL_LINES.
+    draw_arrays: *const fn (ctx: *anyopaque, mode: u32, first: u32, count: u32) callconv(.c) void,
+    /// `n` u16 indices (copied) into the current vertex data.
+    draw_elements: *const fn (ctx: *anyopaque, mode: u32, idx: [*]const u16, n: u32) callconv(.c) void,
+    clear_color: *const fn (ctx: *anyopaque, r: f32, g: f32, b: f32, a: f32) callconv(.c) void,
+    depth_func: *const fn (ctx: *anyopaque, func: u32) callconv(.c) void,
+    front_face: *const fn (ctx: *anyopaque, mode: u32) callconv(.c) void,
+    /// Publish the frame and start the next. Blocks (yielding, bounded) while a
+    /// frame ahead of the compositor — this is the pacing.
+    end_frame: *const fn (ctx: *anyopaque) callconv(.c) void,
+};
+
+/// What `TaskApi.at` fills. Fixed-width fields; the label is its own call, so a
+/// name length is not baked into the ABI.
+pub const TaskInfo = extern struct {
+    /// A TASK_* value.
+    state: u32,
+    /// Core the task is on.
+    core: u32,
+    /// Cumulative on-CPU milliseconds.
+    cpu_ms: u64,
+    /// Whether this is the task currently running on that core.
+    current: u32,
+    _reserved: u32 = 0,
+};
+
+pub const TASK_UNKNOWN: u32 = 0;
+pub const TASK_RUNNING: u32 = 1;
+pub const TASK_READY: u32 = 2;
+pub const TASK_BLOCKED: u32 = 3;
+pub const TASK_DONE: u32 = 4;
+
+/// The `Interface.task` capability vtable, version 1: what the machine is
+/// running. Read-only, so it is published to every module.
+///
+/// Rows are addressed by INDEX into a snapshot `count` takes: kudos tasks have no
+/// kernel-visible identity, and inventing one here would promise a handle the
+/// scheduler does not keep. Call `count`, then `at`/`label` for i < count.
+pub const TaskApi = extern struct {
+    version: u32,
+    _reserved: u32 = 0,
+    /// Take a snapshot across the online cores; returns its row count.
+    count: *const fn (ctx: *anyopaque) callconv(.c) u32,
+    /// Fill `out` for row `i`; false past the end.
+    at: *const fn (ctx: *anyopaque, i: u32, out: *TaskInfo) callconv(.c) bool,
+    /// Copy row `i`'s name into `out`; -1 past the end.
+    label: *const fn (ctx: *anyopaque, i: u32, out: [*]u8, cap: usize) callconv(.c) isize,
+    /// The core this module is running on.
+    self_core: *const fn (ctx: *anyopaque) callconv(.c) u32,
+};
+
+/// The `Interface.taskctl` capability vtable, version 1: put a module on the
+/// machine, take it off. Its own id rather than calls on `TaskApi`, so the grant
+/// table alone decides who may control (a feature) versus observe (anyone).
+pub const TaskCtlApi = extern struct {
+    version: u32,
+    _reserved: u32 = 0,
+    /// Run compiled module `name` detached, with a window grant. Returns a spawn
+    /// id for `stop`, or 0 (no free slot, no such module, bad image).
+    spawn: *const fn (ctx: *anyopaque, name: [*]const u8, name_len: usize) callconv(.c) u32,
+    /// Ask a module this interface spawned to stop. Only those — never the
+    /// desktop or another session's work.
+    stop: *const fn (ctx: *anyopaque, id: u32) callconv(.c) bool,
+};
+
+/// Longest path `VfsApi` accepts, matching the kernel's own path bound.
+pub const VFS_PATH_MAX: usize = 64;
+
+/// The `Interface.vfs` capability vtable, version 1: the RAM file system as a
+/// NAMESPACE — directories, listing, sized and offset reads — beyond the base
+/// `Api`'s flat whole-file `file_read`/`file_write`. Paths are absolute
+/// (`/ramdisk/...`) or relative to `/ramdisk`. Deliberately RAMDISK-ONLY: the
+/// other mounted stores ride hardware transports owned by the system core, and
+/// a module runs on its own — a path outside `/ramdisk` is simply refused.
+/// Append-only within a version (the offsets are ABI).
+pub const VfsApi = extern struct {
     /// The interface version this vtable implements (`1`).
     version: u32,
     _reserved: u32 = 0,
-    /// Open the app's single window at `w`×`h` (clamped to DRAW_MAX_W/H). Returns
-    /// a non-zero window handle, or 0 on failure (already open, out of memory, or
-    /// no desktop). Idempotent: a second call returns the first window's handle.
-    open: *const fn (ctx: *anyopaque, w: u32, h: u32) callconv(.c) u32,
-    /// Copy a `w`×`h` block of tightly-packed BGRA pixels into window `handle`'s
-    /// surface and mark it dirty for the next composite. A handle that is not this
-    /// app's window, or a `w`/`h` beyond the window, is ignored. The pixels are
-    /// consumed by the call, so the app may reuse its buffer immediately.
-    blit: *const fn (ctx: *anyopaque, handle: u32, pixels: [*]const u32, w: u32, h: u32) callconv(.c) void,
+    /// The file's size in bytes, or -1 when it does not exist.
+    size: *const fn (ctx: *anyopaque, path: [*]const u8, path_len: usize) callconv(.c) i64,
+    /// Copy up to `cap` bytes of the file starting at byte `offset` into `out`.
+    /// Returns bytes copied (0 at or past the end), or -1 when no such file —
+    /// the offset is what lets a module walk a file larger than its buffer.
+    read: *const fn (ctx: *anyopaque, path: [*]const u8, path_len: usize, offset: u32, out: [*]u8, cap: usize) callconv(.c) isize,
+    /// Create or replace the file with exactly these bytes.
+    write: *const fn (ctx: *anyopaque, path: [*]const u8, path_len: usize, data: [*]const u8, len: usize) callconv(.c) bool,
+    /// Delete a file (never a directory — that is `rmdir`).
+    remove: *const fn (ctx: *anyopaque, path: [*]const u8, path_len: usize) callconv(.c) bool,
+    /// Create a directory (parents included, as `write_file` does for files).
+    mkdir: *const fn (ctx: *anyopaque, path: [*]const u8, path_len: usize) callconv(.c) bool,
+    /// Delete an EMPTY directory.
+    rmdir: *const fn (ctx: *anyopaque, path: [*]const u8, path_len: usize) callconv(.c) bool,
+    /// Write the directory's entries into `out`, one per line, directories
+    /// suffixed `/`. Returns the bytes used, or -1 when no such directory.
+    /// Truncated at `cap` on a boundary between lines, never mid-name.
+    list: *const fn (ctx: *anyopaque, path: [*]const u8, path_len: usize, out: [*]u8, cap: usize) callconv(.c) isize,
+};
+
+/// Longest URL `NetApi.fetch_begin` accepts.
+pub const NET_URL_MAX: usize = 256;
+
+/// `NetApi.fetch_poll` answers. Values are explicit — they are ABI.
+pub const NET_IDLE: u32 = 0;
+pub const NET_IN_FLIGHT: u32 = 1;
+pub const NET_DONE: u32 = 2;
+pub const NET_FAILED: u32 = 3;
+
+/// The `Interface.net` capability vtable, version 1: HTTP GET, asynchronous by
+/// construction. A module never touches the network stack — it PARKS a fetch
+/// (the system core performs it one bounded step per frame) and polls. The
+/// body lands as a ramdisk file the module then reads through the base `Api`
+/// or `VfsApi`, so a download of any size crosses no extra boundary. One
+/// fetch in flight at a time (the stack holds one connection).
+/// Append-only within a version (the offsets are ABI).
+pub const NetApi = extern struct {
+    /// The interface version this vtable implements (`1`).
+    version: u32,
+    _reserved: u32 = 0,
+    /// Whether the machine is on the network at all (a lease is held). A fetch
+    /// begun while offline fails rather than waiting for a cable.
+    online: *const fn (ctx: *anyopaque) callconv(.c) bool,
+    /// Start fetching `url` (plain http://) into `/ramdisk/<name>`. False when
+    /// a fetch is already in flight, the URL or name is over its bound, or the
+    /// name is not a plain file name.
+    fetch_begin: *const fn (ctx: *anyopaque, url: [*]const u8, url_len: usize, name: [*]const u8, name_len: usize) callconv(.c) bool,
+    /// The parked fetch's state: NET_IDLE (none), NET_IN_FLIGHT, NET_DONE (the
+    /// file is written), NET_FAILED.
+    fetch_poll: *const fn (ctx: *anyopaque) callconv(.c) u32,
+    /// Acknowledge a DONE/FAILED result, freeing the slot for the next fetch.
+    fetch_end: *const fn (ctx: *anyopaque) callconv(.c) void,
+};
+
+/// The `Interface.input` capability vtable, version 1: the pointer, for the
+/// module's OWN window while that window has focus. Keystrokes already arrive
+/// through the base `Api.poll_key`; this adds where the pointer sits in the
+/// window's content rectangle and which buttons are down — sampled state, not
+/// an event queue, because a pointer is a position (the newest sample is the
+/// truth and stale ones are worthless).
+/// Append-only within a version (the offsets are ABI).
+pub const InputApi = extern struct {
+    version: u32,
+    _reserved: u32 = 0,
+    /// The pointer's latest position in `handle`'s CONTENT coordinates (origin
+    /// its top-left) and button mask (bit 0 left, 1 right, 2 middle). False when
+    /// the pointer is elsewhere or that window is unfocused — input follows
+    /// focus, always.
+    pointer: *const fn (ctx: *anyopaque, handle: u32, out_x: *i32, out_y: *i32, out_buttons: *u8) callconv(.c) bool,
+};
+
+/// `DeskApi.window` actions. Values are ABI; they mirror the desktop's own
+/// action set (the five things a person does with a title bar and the dock).
+pub const DESK_FOCUS: u32 = 1;
+pub const DESK_MAXIMISE: u32 = 2;
+pub const DESK_MINIMISE: u32 = 3;
+pub const DESK_RESTORE: u32 = 4;
+pub const DESK_CLOSE: u32 = 5;
+
+/// The `Interface.desk` capability vtable, version 1 — FEATURE modules only:
+/// the desktop as the agent's tools see it. A feature extends the running
+/// machine (MOD-003) and its commands act for the person invoking them, so it
+/// may do what that person's own hands could; an app module is refused this
+/// whole interface (its reach ends at its own window).
+/// Append-only within a version (the offsets are ABI).
+pub const DeskApi = extern struct {
+    /// The interface version this vtable implements (`1`).
+    version: u32,
+    _reserved: u32 = 0,
+    /// Ask the desktop for one window action (a DESK_* value) on the window
+    /// whose title contains `needle` (empty = the focused window). False when
+    /// the action value is unknown or a request is already waiting — the
+    /// desktop applies one per input pass.
+    window: *const fn (ctx: *anyopaque, action: u32, needle: [*]const u8, needle_len: usize) callconv(.c) bool,
+    /// Copy the desktop's window list — one line per window, the same text the
+    /// agent's list_windows reads — into `out`. Returns the bytes used.
+    windows: *const fn (ctx: *anyopaque, out: [*]u8, cap: usize) callconv(.c) usize,
+};
+
+/// `GuestsApi.state` answers — ivirt's guest lifecycle, as ABI values.
+pub const GUEST_ABSENT: u32 = 0;
+pub const GUEST_FETCHING: u32 = 1;
+pub const GUEST_BOOTING: u32 = 2;
+pub const GUEST_RUNNING: u32 = 3;
+pub const GUEST_HALTED: u32 = 4;
+pub const GUEST_FAILED: u32 = 5;
+
+/// The `Interface.guests` capability vtable, version 1 — FEATURE modules only:
+/// observe the machine's guest virtual machines and stop one. Deliberately no
+/// boot call in v1 — booting needs an image choice, and the shell's `vm`
+/// command owns that conversation.
+/// Append-only within a version (the offsets are ABI).
+pub const GuestsApi = extern struct {
+    /// The interface version this vtable implements (`1`).
+    version: u32,
+    _reserved: u32 = 0,
+    /// How many guest slots the machine has (slots, not running guests).
+    count: *const fn (ctx: *anyopaque) callconv(.c) u32,
+    /// Slot `id`'s lifecycle state as a GUEST_* value; GUEST_ABSENT for a slot
+    /// out of range, which needs no extra error shape.
+    state: *const fn (ctx: *anyopaque, id: u32) callconv(.c) u32,
+    /// Ask the guest in slot `id` to stop (the `vm stop` path). A no-op for an
+    /// empty slot.
+    request_stop: *const fn (ctx: *anyopaque, id: u32) callconv(.c) void,
+};
+
+/// Longest counter name `MetricsApi.counter_name` will report, including the
+/// subsystem prefix. Bounds the buffer a module has to offer for one name.
+pub const METRICS_NAME_MAX: usize = 48;
+
+/// One frame-timing snapshot, filled by `MetricsApi.frame_stats`. Mirrors the
+/// block the present loop keeps (`iface/idisplay.zig`'s `FrameStats`) as fixed-
+/// width C-ABI fields, because the contract's own struct is a Zig type a module
+/// cannot bind. `seq` is 0 when the machine has never presented a frame — an
+/// absent answer, which is not the same as a machine running at 0 fps.
+pub const FrameStats = extern struct {
+    seq: u32,
+    fps: u32,
+    pump_avg_us: u32,
+    pump_max_us: u32,
+    inputs_per_s: u32,
+    _reserved: u32 = 0,
+};
+
+/// The `Interface.metrics` capability vtable, version 1: what the machine is
+/// doing, read-only. Every call is a pure read of state some other subsystem
+/// already keeps, so this is the one capability with nothing to bound but its
+/// output buffers — which is why it is published to every kind of module.
+/// Append-only; a new call goes at the end (the offsets are ABI).
+pub const MetricsApi = extern struct {
+    /// The interface version this vtable implements (`1`).
+    version: u32,
+    _reserved: u32 = 0,
+    /// Fill `out` with the current frame timing. False when the machine has no
+    /// frame statistics at all.
+    frame_stats: *const fn (ctx: *anyopaque, out: *FrameStats) callconv(.c) bool,
+    /// How many named counters exist right now. The count GROWS as subsystems
+    /// register theirs, so an index is only valid against the count that was just
+    /// read.
+    counter_count: *const fn (ctx: *anyopaque) callconv(.c) u32,
+    /// Copy counter `i`'s full `<subsystem>.<name>` key into `out` (up to `cap`,
+    /// at most `METRICS_NAME_MAX`) and return its length, or -1 when `i` is past
+    /// the end.
+    counter_name: *const fn (ctx: *anyopaque, i: u32, out: [*]u8, cap: usize) callconv(.c) isize,
+    /// Read the counter with this exact key into `out`. False when no counter has
+    /// that name — a missing counter and a counter reading zero are different
+    /// answers.
+    counter: *const fn (ctx: *anyopaque, name: [*]const u8, name_len: usize, out: *u64) callconv(.c) bool,
 };
 
 /// The capability surface passed to a `feature` binary, whose entry is
@@ -188,6 +568,12 @@ pub const FeatureApi = extern struct {
         name_len: usize,
         run: *const fn (ctx: *anyopaque, args: [*]const u8, args_len: usize) callconv(.c) void,
     ) callconv(.c) bool,
+    /// Bind a capability interface by id and minimum version — the SAME registry
+    /// and the same `{id, version}` question an app asks through
+    /// `Api.get_interface`, answered against a feature's wider grant. One
+    /// mechanism for both kinds of module: the difference in trust is a row in the
+    /// grant table, not a second way of reaching the system.
+    get_interface: *const fn (ctx: *anyopaque, id: u32, version: u32) callconv(.c) ?*const anyopaque,
 };
 
 /// Why a `.kudos` image was rejected. Every case is distinct so the loader and

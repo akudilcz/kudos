@@ -486,6 +486,16 @@ keystroke (APP-022, APP-025) cannot add any further text to the word.
 **APP-027.** The Kudos system shall match a Tab keystroke's word (APP-022,
 APP-025) without regard to letter case when no entry matches it exactly.
 
+**APP-028.** The Kudos system shall write a shell command's output (APP-002) to a
+named file in the virtual file system (STO-002) instead of the terminal when the
+command line names one.
+
+**APP-029.** The Kudos system shall add a shell command's output (APP-028) to the
+end of a named file, keeping what the file already holds.
+
+**APP-030.** The Kudos system shall leave a redirected file (APP-028) unchanged
+when the command's output exceeds the capture budget, reporting the budget.
+
 ## Loadable modules
 
 **MOD-001.** The Kudos system shall load and execute a compiled binary application
@@ -506,6 +516,43 @@ that produced it.
 
 **MOD-006.** The Kudos system shall run a loaded binary module (MOD-001) in the
 virtual address space of the terminal session that ran it (MEM-002).
+
+**MOD-007.** The Kudos system shall publish a set of system capabilities that a
+loaded binary module (MOD-005) binds at runtime by identifier and version.
+
+**MOD-008.** The Kudos system shall refuse a capability request (MOD-007) that
+names an identifier it does not publish to the requesting module.
+
+**MOD-009.** The Kudos system shall refuse a capability request (MOD-007) for a
+version of that capability it does not publish.
+
+**MOD-010.** The Kudos system shall grant a loaded feature module (MOD-003) every
+capability (MOD-007) it grants a loaded application module (MOD-001).
+
+**MOD-011.** The Kudos system shall report the capabilities it publishes (MOD-007),
+identifying which are available on the running machine.
+
+**MOD-012.** The Kudos system shall host desktop windows whose content a loaded
+application module (MOD-001) renders, several at once.
+
+**MOD-013.** The Kudos system shall route keyboard input to a loaded application
+module (MOD-012) while its window has focus, and to no module otherwise.
+
+**MOD-014.** The Kudos system shall end a loaded application module's run
+(MOD-012) when its window is closed.
+
+**MOD-015.** The Kudos system shall render three-dimensional content a loaded
+application module records (MOD-012) into that module's window on the graphics
+processor (ARCH-015).
+
+**MOD-016.** The Kudos system shall validate a recorded frame (MOD-015) before
+rendering it, refusing the whole frame on any invalid command.
+
+**MOD-017.** The Kudos system shall report to a loaded binary module (MOD-005)
+what the machine is running.
+
+**MOD-018.** The Kudos system shall let a loaded feature module (MOD-003) start
+another application module (MOD-001) and stop one it started.
 
 ## Virtualization
 
@@ -768,6 +815,15 @@ title on command over netdebug (DIAG-004).
 
 **DIAG-022.** The Kudos system shall report the focused window's title over
 netdebug (DIAG-004).
+
+**DIAG-023.** The Kudos system shall retain transmitted trace lines (DIAG-004)
+and serve them again on request, identified by sequence number.
+
+**DIAG-024.** The Kudos system shall keep a trace line (DIAG-004) queued until
+the network interface has accepted the datagram carrying it.
+
+**DIAG-025.** The Kudos system shall accept a file over netdebug (DIAG-004) in
+sequenced pieces, applying each piece exactly once.
 
 ## Testing
 

@@ -24,6 +24,8 @@ const ModelView = modelview.ModelView;
 const Clock = @import("../../apps/clock.zig").Clock;
 const Calculator = @import("../../apps/calculator.zig").Calculator;
 const VmApp = @import("../../apps/vm.zig").Vm;
+const BlobWindow = @import("../../apps/blobwin.zig").BlobWindow;
+const iwindow = @import("iwindow");
 const virt = @import("../../kernel/virt/virt.zig");
 const ivirt = @import("ivirt");
 const png = @import("modelcache").png;
@@ -216,6 +218,26 @@ pub fn spawnVmWindow(d: *Desktop, id: ivirt.Id) !void {
     const v = try VmApp.create(d.a, win, id, virt.guestCore(id));
     errdefer d.a.destroy(v);
     try appendApp(d, .{ .vm = v });
+}
+
+/// Open the window a module asked for (MOD-012). The CONTENT area is the
+/// requested size (the mailbox clamped it), so blits map one-to-one onto screen
+/// pixels; chrome is added around it. Publishing the handle is the last act —
+/// the module is waiting on it and must never see a half-built window.
+pub fn spawnBlobWindow(d: *Desktop, req: iwindow.CreateReq) !void {
+    const n = d.spawn_count;
+    d.spawn_count += 1;
+    const w = @as(usize, req.w) + 2 * window_mod.BORDER;
+    const h = @as(usize, req.h) + 2 * window_mod.BORDER + window_mod.TITLE_H;
+    const x, const y = cascadePos(n, w, h);
+    const title = try d.a.dupe(u8, if (req.title.len > 0) req.title else "kudos app");
+    errdefer d.a.free(title);
+    const win = try addWindowLocked(d, x, y, w, h, title);
+    errdefer destroyWindow(d, win);
+    const b = try BlobWindow.create(d.a, win, req.handle, req.mode);
+    errdefer d.a.destroy(b);
+    try appendApp(d, .{ .blob = b });
+    iwindow.provide(req.handle);
 }
 
 /// Open the dedicated AI agent window (spec AGT-002; F10). Structurally a
@@ -443,6 +465,15 @@ pub fn closeWindow(d: *Desktop, win: *Window) void {
             virt.windowClosed(v.id);
             d.a.destroy(v);
         },
+        .blob => |b| {
+            // Same GPU rule as the other textured windows; deinit resets the
+            // iwindow mailbox, which is how the module (on its own core) learns
+            // its window is gone and returns.
+            render.completeOpenFrame(d);
+            if (d.gles_comp) |*gc| b.deinitGl(&gc.gctx);
+            b.deinit();
+            d.a.destroy(b);
+        },
     }
 
     // 6) Free the window: heap-owned title + struct (a window owns no pixels).
@@ -460,6 +491,17 @@ pub fn focusTermId(d: *Desktop, id: u32) void {
     for (d.apps.items) |a| {
         if (a == .term and a.term.id == id) {
             d.wm.focus(a.window());
+            return;
+        }
+    }
+}
+
+/// Close the module window `handle` names (MOD-012) — the module asked, and the
+/// pump drained it here. Same path as a close-box click.
+pub fn closeBlobWindow(d: *Desktop, handle: u32) void {
+    for (d.apps.items) |a| {
+        if (a == .blob and a.blob.handle == handle) {
+            requestClose(d, a.window());
             return;
         }
     }

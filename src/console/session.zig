@@ -458,7 +458,14 @@ fn commitLine(sess: *Session) void {
         @atomicStore(bool, &sess.local_running, true, .release);
         defer @atomicStore(bool, &sess.local_running, false, .release);
         emit(sess, '\n');
-        c.run(sessionOut(&out_ctx, sess), parsed.args);
+        const out = sessionOut(&out_ctx, sess);
+        if (localcmd.refusesRedirect(parsed.args)) {
+            out.str("error: '");
+            out.str(parsed.cmd);
+            out.str("' runs on this core and cannot redirect to a file\n");
+        } else {
+            c.run(out, parsed.args);
+        }
         sess.ed.len = 0;
         emitPrompt(sess);
         return;

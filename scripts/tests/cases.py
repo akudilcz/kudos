@@ -72,6 +72,24 @@ CASES = [
     Case("echo integration-ok", ("integration-ok",), "both"),
     Case("echo a-b_c=1,2", ("a-b_c=1,2",), "both"),  # shifted/symbol typing path
 
+    # ── redirection (APP-028, APP-029): the shell writes a command's output to a
+    # file instead of the screen, which is how a person authors a program on a
+    # machine that carries no editor. A successful redirection prints NOTHING —
+    # the file is the output — so what is asserted is the file's content coming
+    # back through `cat`, and the append landing after the replace rather than
+    # over it.
+    Case("echo redirect-one > redir.txt", (), "both"),
+    Case("echo redirect-two >> redir.txt", (), "both"),
+    Case("cat redir.txt", ("redirect-one", "redirect-two"), "both"),
+    # A line whose own text carries a `>` token still redirects at the LAST one,
+    # which is what lets source code with a comparison in it be typed at all.
+    Case("echo if (a > b) { > guard.txt", (), "both"),
+    Case("cat guard.txt", ("if (a > b) {",), "both"),
+    # The refusals: no file named, and a local command that cannot redirect
+    # (it runs on the terminal's own core, with no cwd to resolve a path against).
+    Case("echo nowhere >", ("'>' needs a file to write to",), "both"),
+    Case("prime 2 > out.txt", ("cannot redirect to a file",), "both"),
+
     # ── memory ──────────────────────────────────────────────────────────
     Case("mem", ("free ", "MiB / ", "MiB total"), "both"),
 
@@ -156,6 +174,21 @@ CASES = [
     # matches nothing must say so rather than printing an empty success.
     Case("stats net.", ("net.", " = "), "both"),
     Case("stats zz.nothing", ("no matching counters",), "both"),
+
+    # ── caps (MOD-011): what a loaded .kudos module may bind on THIS machine.
+    # The declared set lives in abi.zig, which the factory serves to whoever is
+    # writing a module; this command is the only answer to what the running
+    # machine will actually hand back, and to which kind of run. Asserted: both
+    # published capabilities, the grant marks, and the deny-by-default statement —
+    # a module reading a short list needs to know it is a decision.
+    Case("caps", (
+        "published capabilities",
+        "window    id 1 v1",
+        "metrics   id 6 v1",
+        "taskctl   id 10 v1",
+        "anything not listed is refused",
+    ), "both"),
+    Case("caps extra-arg", ("usage: caps",), "both"),
 
     # DIAG-001: the system reports its own health and state — mem and ps
     # must answer with real numbers on every track.

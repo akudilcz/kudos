@@ -24,6 +24,7 @@ comptime {
         @compileError("dock.Icon and the baked icon atlas disagree — regenerate scripts/gen-icons.py");
 }
 const square = @import("../wm/square.zig");
+const BlobWindow = @import("../../apps/blobwin.zig").BlobWindow; // the module-drawn window (never_inline'd replay)
 const vfs = @import("vfs");
 const png = @import("modelcache").png;
 const iaccel = @import("iaccel"); // the GPU-acceleration seam (iface/iaccel.zig)
@@ -314,11 +315,23 @@ fn renderGles(d: *Desktop) void {
         // Flush around the scissor change: the painter batches, and a batch takes
         // the scissor state that is live when it flushes.
         if (d.appFor(win)) |a2| {
+            // A scene-mode module window is 3D, not 2D: it replays its recorded
+            // frame INLINE the way a model window does (MOD-015), in its own
+            // function so neither its locals nor the painter cycle around it
+            // ride this per-frame stack frame (already 49 KiB — stackdebt.txt).
+            if (a2 == .blob and a2.blob.mode == .scene) {
+                drawSceneWindow(gc, a2.blob, cx, cy, win.contentW(), win.contentH(), sw, sh, clip);
+                continue;
+            }
             gc.painter.end();
-            // The VM console owns GL resources (the guest-scanout texture)
-            // that must be uploaded inside the open frame, after the batch
-            // flush, before its draw samples them. Steady state: a no-op.
+            // The VM console and the blob window own GL resources (the guest
+            // scanout / the module's frame texture) that must be uploaded inside
+            // the open frame, after the batch flush, before their draws sample
+            // them. Steady state: a no-op.
             if (a2 == .vm) a2.vm.prepareGl(&gc.gctx);
+            // never_inline: same stack rule as drawInline above — the upload's
+            // staging must not ride every frame's stack.
+            if (a2 == .blob) @call(.never_inline, BlobWindow.prepareGl, .{ a2.blob, &gc.gctx });
             scissorWithin(gc, sh, cx, cy, win.contentW(), win.contentH(), clip);
             gc.painter.setOrigin(@floatFromInt(cx), @floatFromInt(cy));
             a2.drawGl(&gc.painter, gc.atlas_tex, gc.atlas, win.contentW(), win.contentH(), d.wm.focused == win, blink_on);
@@ -395,6 +408,32 @@ fn softTarget() ?framebuffer.LinearTarget {
 /// The frame's damage clip on the software rasteriser, screen coordinates
 /// (y down). Null when the whole frame is to be shaded.
 const Clip = struct { x: i32, y: i32, w: u32, h: u32 };
+
+/// One scene-mode module window, inside the open desktop frame: flush the 2D
+/// batch, hand the context to the replay (which confines itself with viewport +
+/// scissor), then re-open the 2D state for the windows after it. Its own
+/// function so its locals — and the replay's whole call tree — stay OUT of
+/// renderGles's per-frame stack frame (the caller pins that with never_inline).
+noinline fn drawSceneWindow(
+    gc: *GlesComp,
+    blob: *BlobWindow,
+    cx: i32,
+    cy: i32,
+    cw: usize,
+    ch: usize,
+    sw: usize,
+    sh: usize,
+    clip: ?Clip,
+) void {
+    gc.painter.end();
+    const drawn = blob.drawInline(&gc.gctx, cx, cy, @intCast(cw), @intCast(ch), @intCast(sh));
+    gc.painter.begin(&gc.gctx, @intCast(sw), @intCast(sh));
+    applyClip(gc, sh, clip); // begin() reset the scissor; restore the frame clip
+    if (!drawn) {
+        gc.painter.setOrigin(@floatFromInt(cx), @floatFromInt(cy));
+        gc.painter.text(gc.atlas_tex, gc.atlas, "waiting for the app's first frame ...", 12, 12, 0xFF8A9099);
+    }
+}
 
 /// Scissor the context to `clip` (whole-frame damage), or DISABLE the scissor
 /// when there is none — scissor state persists in the context across frames,

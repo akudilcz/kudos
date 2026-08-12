@@ -18,6 +18,8 @@
 const std = @import("std");
 const abi = @import("abi");
 const apprun = @import("apprun.zig");
+const capabilities = @import("capabilities.zig");
+const taskstat = @import("../kernel/sched/taskstat.zig");
 const counter = @import("../kernel/debug/counter.zig");
 const fileproto = @import("fileproto");
 const fileserv = @import("../drivers/net/debug/fileserv.zig");
@@ -291,7 +293,7 @@ fn toolLoadFeature(_: *anyopaque, args_json: []const u8, out: *std.array_list.Ma
     const base = std.mem.alignForward(usize, @intFromPtr(raw.ptr), 16);
     const image = @as([*]u8, @ptrFromInt(base))[0..mem_len];
 
-    const rc = hotload.registerBlob(blob, image, captureSink()) catch |e| {
+    const rc = hotload.registerBlob(blob, image, captureSink(), capabilities.feature) catch |e| {
         try tools.printTo(out, "load failed: {s}", .{@errorName(e)});
         return;
     };
@@ -540,6 +542,59 @@ fn toolListDir(_: *anyopaque, args_json: []const u8, out: *std.array_list.Manage
 /// The image runs in a session of its own (console/apprun.zig), so a module
 /// that faults kills that session's task and nothing else (AGT-009) — which is
 /// what makes running freshly generated code a reasonable thing to do at all.
+fn toolTasks(_: *anyopaque, _: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
+    const n = taskstat.snapshotAll();
+    try tools.printTo(out, "{d} tasks:\n", .{n});
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const t = taskstat.rowAt(i) orelse break;
+        try tools.printTo(out, "  core {d} {s:<16} {s}{s} cpu {d} ms\n", .{
+            t.core,
+            t.nameSlice(),
+            @tagName(t.state),
+            if (t.is_current) " (running now)" else "",
+            t.cpu_ms,
+        });
+    }
+}
+
+fn toolStopApp(_: *anyopaque, _: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
+    if (apprun.stopSpawned(apprun.SPAWN_ID)) {
+        try out.appendSlice("asked the detached app to stop; its window closes as it returns");
+    } else {
+        try out.appendSlice("no detached app is running");
+    }
+}
+
+fn toolRunWindow(_: *anyopaque, args_json: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
+    var arena = std.heap.ArenaAllocator.init(heap.allocator());
+    defer arena.deinit();
+    const v = (try parseToolArgs(arena.allocator(), args_json, out)) orelse return;
+    const name = jsonStr(v, "name") orelse return out.appendSlice("run_window needs name");
+
+    var pathbuf: [vfs.MAX_PATH]u8 = undefined;
+    const path = std.fmt.bufPrint(&pathbuf, "/ramdisk/{s}.kudos", .{name}) catch {
+        try out.appendSlice("name too long");
+        return;
+    };
+    const blob = vfs.read(path) orelse {
+        try tools.printTo(out, "no such compiled app: {s} (compile_app it first)", .{name});
+        return;
+    };
+
+    apprun.startWindowed(blob) catch |e| {
+        try tools.printTo(out, "cannot start {s}: {s}", .{ name, switch (e) {
+            error.NoSandbox => "this build has no session address spaces, so a module cannot be contained",
+            error.NoSession => "no free session to contain the run",
+            error.Busy => "a windowed app is already running (one window at a time; close it first)",
+            else => apprun.reason(e),
+        } });
+        return;
+    };
+    try tools.printTo(out, "{s} is running detached. It may open its own window (list_windows shows it); " ++
+        "it keeps running until that window closes. Its prints go nowhere — a windowed app talks by drawing.", .{name});
+}
+
 fn toolRunApp(_: *anyopaque, args_json: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
     var arena = std.heap.ArenaAllocator.init(heap.allocator());
     defer arena.deinit();
@@ -735,6 +790,9 @@ fn toolDashboard(_: *anyopaque, _: []const u8, out: *std.array_list.Managed(u8))
 const registry = tools.Registry{ .tools = &.{
     .{ .name = "compile_app", .description = "Compile a single Zig .kudos app source and save it so it can be run.", .params_schema = COMPILE_SCHEMA, .handler = toolCompile },
     .{ .name = "run_app", .description = "Run a compiled .kudos app and return everything it printed plus its exit code.", .params_schema = NAME_SCHEMA, .handler = toolRunApp },
+    .{ .name = "run_window", .description = "Run a compiled .kudos app DETACHED with permission to open its own window(s); it keeps running until they close. For apps whose answer is what they draw, not what they print.", .params_schema = NAME_SCHEMA, .handler = toolRunWindow },
+    .{ .name = "stop_app", .description = "Stop the detached app started by run_window.", .params_schema = NONE_SCHEMA, .handler = toolStopApp },
+    .{ .name = "tasks", .description = "List what the machine is running: every task, its core, state and CPU time.", .params_schema = NONE_SCHEMA, .handler = toolTasks },
     .{ .name = "read_file", .description = "Read a file. path is absolute (/ramdisk/motd.txt, /usbdisk/AI.CFG) or relative to /ramdisk.", .params_schema = PATH_SCHEMA, .handler = toolReadFile },
     .{ .name = "write_file", .description = "Create or replace a file under /ramdisk, making any directories its path names.", .params_schema = WRITE_SCHEMA, .handler = toolWriteFile },
     .{ .name = "delete_file", .description = "Delete a file under /ramdisk.", .params_schema = PATH_SCHEMA, .handler = toolDeleteFile },

@@ -142,3 +142,32 @@ pub fn snapshotTasks(core_index: u32, out: []TaskInfo) usize {
     }
     return n;
 }
+
+/// Rows one whole-machine snapshot holds. Tasks are few — a session each, plus
+/// the system and guest tasks; a machine with more reports the first MAX_ROWS.
+pub const MAX_ROWS = 64;
+
+var rows: [MAX_ROWS]TaskInfo = undefined;
+var nrows: usize = 0;
+
+/// Snapshot every online core into one indexable list, and return its length.
+/// `snapshotTasks` covers one core under that core's lock; a reader that wants
+/// "task i of the machine" needs them flattened, and flattening belongs where
+/// the task data does.
+pub fn snapshotAll() usize {
+    nrows = 0;
+    var core: u32 = 0;
+    while (core < percpu.MAX_CPUS) : (core += 1) {
+        if (!sched.coreOnline(core)) continue;
+        if (nrows == MAX_ROWS) break;
+        nrows += snapshotTasks(core, rows[nrows..]);
+    }
+    return nrows;
+}
+
+/// Row `i` of the last `snapshotAll`, or null past its end. Every field is a
+/// copy, so a task that exits between the two calls reads stale, never freed.
+pub fn rowAt(i: usize) ?TaskInfo {
+    if (i >= nrows) return null;
+    return rows[i];
+}

@@ -20,6 +20,7 @@ comptime {
     _ = @import("ipci");
     _ = @import("ipresent");
     _ = @import("iramdisk");
+    _ = @import("iscene");
     _ = @import("ivirt");
     _ = @import("iwindow");
 }
@@ -41,7 +42,7 @@ test "every interface contract compiles and declares a contract (ARCH-003)" {
         @import("ifilesys"),
         @import("ilog"),      @import("imouse"),    @import("inet"),
         @import("ipci"),      @import("ipresent"),  @import("iramdisk"),
-        @import("ivirt"),     @import("iwindow"),
+        @import("iscene"),    @import("ivirt"),     @import("iwindow"),
     }) |contract| {
         try std.testing.expect(@typeInfo(contract).@"struct".decls.len > 0);
     }

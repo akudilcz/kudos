@@ -10,6 +10,7 @@ const ModelView = @import("modelview.zig").ModelView;
 const Clock = @import("clock.zig").Clock;
 const Calculator = @import("calculator.zig").Calculator;
 const VmApp = @import("vm.zig").Vm;
+const BlobWindow = @import("blobwin.zig").BlobWindow;
 
 /// Kinds spawnApp can open directly. The model viewer is NOT here — it needs
 /// a model name, so it has its own spawner (desktop.spawnModel). The list
@@ -25,6 +26,9 @@ pub const App = union(enum) {
     clock: *Clock,
     calc: *Calculator,
     vm: *VmApp,
+    /// A window whose content a loaded .kudos module renders (MOD-012). No Kind
+    /// and no dock tile: it exists only while the module that opened it runs.
+    blob: *BlobWindow,
 
     /// The hosting window this app is drawn into — every app kind owns a `win`
     /// field, so this is the one field common to the whole union.
@@ -44,7 +48,7 @@ pub const App = union(enum) {
             .clock => .clock,
             .calc => .calc,
             .vm => .vm,
-            .model => null,
+            .model, .blob => null,
         };
     }
 
@@ -77,6 +81,7 @@ pub const App = union(enum) {
             .clock => |c| c.drawGl(p, atlas_tex, atlas, cw, ch, focused, blink_on),
             .calc => |c| c.drawGl(p, atlas_tex, atlas, cw, ch, focused, blink_on),
             .vm => |v| v.drawGl(p, atlas_tex, atlas, cw, ch, focused, blink_on),
+            .blob => |b| b.drawGl(p, atlas_tex, atlas, cw, ch, focused, blink_on),
             .model => {},
         }
     }
@@ -102,6 +107,7 @@ pub const App = union(enum) {
             .clock => |a| a.tick(),
             .calc => |a| a.tick(),
             .vm => |a| a.tick(),
+            .blob => |a| a.tick(),
             .term => false,
         };
     }

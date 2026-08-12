@@ -63,7 +63,12 @@ fn apiFileWrite(_: *anyopaque, _: [*]const u8, _: usize, _: [*]const u8, _: usiz
     return false;
 }
 fn apiGetInterface(_: *anyopaque, _: u32, _: u32) callconv(.c) ?*const anyopaque {
-    return null; // the host harness publishes no capability interfaces
+    // The host harness publishes no capability interfaces — there is no window, no
+    // desktop and no machine behind it. Handed to both an app's `Api` and a
+    // feature's `FeatureApi`, so a module that binds anything here takes the same
+    // refusal it would take from a kudos that does not publish it, which is the
+    // path worth exercising on a laptop.
+    return null;
 }
 
 // The host analogue of the kernel's terminal sink: feature output to stdout.
@@ -105,7 +110,7 @@ pub fn main(init: std.process.Init) !void {
     if (loadable.kind == .feature) {
         // The kernel path for a feature, on the host: register through the
         // shared core, then dispatch the named command if one was asked for.
-        const rc = try hotload.registerBlob(blob, image[0..mem_len], stdoutSink());
+        const rc = try hotload.registerBlob(blob, image[0..mem_len], stdoutSink(), apiGetInterface);
         if (args.len >= 3) {
             const cmd_args: []const u8 = if (args.len >= 4) std.mem.span(args[3]) else "";
             if (!hotload.dispatch(stdoutSink(), std.mem.span(args[2]), cmd_args)) {

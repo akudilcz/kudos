@@ -13,16 +13,27 @@
 //! broadcast frame no link-layer ack and no retry, and over wifi that silently ate
 //! 8% of the trace (see `collector` below).
 //!
-//! DESIGN: a line FIFO decouples producing log lines from sending them.
-//! `klog.putc` (via the sink) enqueues completed lines instantly and never
-//! blocks. A drain pump — called from the long-running loops — ships a BOUNDED
-//! BATCH per fixed-rate tick (DATAGRAMS_PER_TICK every DRAIN_INTERVAL_MS), so a burst
-//! of `dbg.set` calls or the whole-boot replay is metered onto the wire at a
-//! steady rate the tiny NIC TX ring (8 descriptors) and a receiver's socket
-//! buffer can absorb, instead of a back-to-back flood that overruns both and
-//! drops packets. Each datagram = one line, prefixed with a monotonic
-//! `[NNNNNN] ` sequence number so any drop that still happens is VISIBLE as a
-//! gap in the numbers rather than an invisibly incomplete capture.
+//! DESIGN: a line STORE (linestore.zig, pure, host-tested) decouples producing
+//! log lines from sending them. `klog.putc` (via the sink) pushes completed
+//! lines instantly and never blocks. A drain pump — called from the long-running
+//! loops — ships a BOUNDED BATCH per fixed-rate tick (DATAGRAMS_PER_TICK every
+//! DRAIN_INTERVAL_MS), so a burst of `dbg.set` calls or the whole-boot replay is
+//! metered onto the wire at a steady rate the tiny NIC TX ring (8 descriptors)
+//! and a receiver's socket buffer can absorb, instead of a back-to-back flood
+//! that overruns both and drops packets.
+//!
+//! RELIABLE, in three layers, each covering the loss mode above it:
+//!   - the drain is TWO-PHASE (DIAG-024): lines are packed without being
+//!     consumed and advance past only when the NIC accepted the datagram, so a
+//!     full TX ring defers lines instead of eating them;
+//!   - every line carries a monotonic `[NNNNNN] ` sequence stamp, so a WIRE loss
+//!     is visible to the receiver as a gap in the numbers;
+//!   - a sent line is RETAINED (DIAG-023), and the receiver fills its gaps by
+//!     asking for the missing numbers back over KMR1 (fileproto OP_RESEND) —
+//!     the request channel whose retransmit + dedup already make it reliable.
+//! What none of that can serve — a line the full store overwrote unsent, or one
+//! that expired from retention before it was asked for — is counted and permanent,
+//! never silent.
 
 const std = @import("std");
 const klog = @import("../../../kernel/debug/klog.zig");
@@ -43,8 +54,11 @@ const net = @import("../stack/net.zig");
 pub var collector: ?[4]u8 = null;
 
 /// Send one datagram of trace: unicast to the collector when we have one (reliable over
-/// wifi), else broadcast (reaches a listener we have never heard from).
-fn emit(datagram: []const u8) void {
+/// wifi), else broadcast (reaches a listener we have never heard from). Returns whether
+/// the NIC ACCEPTED the datagram — the drain keeps the lines and retries on false
+/// (DIAG-024); discarding them here is exactly how six consecutive records once
+/// vanished from a capture while every check stayed green.
+fn emit(datagram: []const u8) bool {
     // ONLY unicast to a peer already in the ARP cache. sendIp would otherwise RESOLVE it —
     // a blocking ARP wait (up to a second, pumping RX) inside the trace drain — and every
     // line emitted during that stall is lost. The trace must never stall the machine, and
@@ -52,14 +66,15 @@ fn emit(datagram: []const u8) void {
     // already resolved, and broadcasts until then.
     if (collector) |ip| {
         if (net.isUp() and net.arpKnown(ip)) {
-            if (net.sendUdpTo(ip, PORT, PORT, datagram)) return;
+            if (net.sendUdpTo(ip, PORT, PORT, datagram)) return true;
         }
     }
-    _ = net.sendBroadcastUdp(PORT, PORT, datagram);
+    return net.sendBroadcastUdp(PORT, PORT, datagram);
 }
 const nic = @import("../nic/nic.zig");
 const percpu = @import("../../../kernel/sched/percpu.zig");
 const lineasm = @import("lineasm.zig"); // pure line assembly, one instance per writer
+const linestore = @import("linestore.zig"); // seq-stamped retained line ring (the reliable drain)
 const timer = @import("../../../kernel/timer/timer.zig");
 const tsc = @import("../../../kernel/cpu/tsc.zig");
 const buildinfo = @import("buildinfo");
@@ -70,20 +85,23 @@ const buildinfo = @import("buildinfo");
 /// reason a live capture looks dead. Single owner of the value.
 pub const PORT: u16 = 9514;
 
-/// Max line length (bytes) held in a FIFO slot, incl. the `[NNNNNN] ` prefix and
+/// Max line length (bytes) held in a store slot, incl. the `[NNNNNN] ` prefix and
 /// trailing newline. Capped at 120 so ~11 lines pack into one DATAGRAM_CAP
 /// datagram (high-resolution per-frame tracing) and trace lines stay compact; a
-/// longer source line is TRUNCATED to this in enqueue() (the seq gap/short line is
+/// longer source line is TRUNCATED to this by the store (the short line is
 /// visible). Must stay < DATAGRAM_CAP so any single line fits one datagram.
 const LINE_CAP = 120;
-/// FIFO depth in lines. Holds a full boot's log (GPU bring-up + USB enum + soak) so
-/// nothing is lost between enqueue and the metered drain; on overflow the OLDEST unsent
-/// line is dropped, and the sequence gap makes that visible.
+/// Store depth in lines: the drain's queue AND the resend window share it
+/// (linestore.zig — a sent line is retained until the ring wraps over it,
+/// DIAG-023). Holds a full boot's log (GPU bring-up + USB enum + soak) so
+/// nothing is lost between enqueue and the metered drain; a pending line
+/// overwritten anyway is counted, and its sequence gap shows where.
 ///
-/// A -Dtest-hooks build gets a far deeper FIFO: a dropped line there reads as a failed
-/// assertion and sends you hunting a kernel bug that does not exist. The metering below
-/// exists to keep the GPU session loop from being perturbed by its own tracing, and a
-/// test build has no such duty. Static BSS — 16k lines is ~2 MB, nothing to a kernel.
+/// A -Dtest-hooks build gets a far deeper store: a dropped line there reads as a
+/// failed assertion and sends you hunting a kernel bug that does not exist. The
+/// metering below exists to keep the GPU session loop from being perturbed by its
+/// own tracing, and a test build has no such duty. Static BSS — 16k lines is
+/// ~2 MB, nothing to a kernel.
 const FIFO_LINES = if (buildinfo.test_hooks) 16384 else 4096;
 /// Coalesced drain: each datagram PACKS as many newline-delimited FIFO lines as
 /// fit in DATAGRAM_CAP, so high-rate tracing (per-frame timing at 60Hz+) streams
@@ -103,26 +121,27 @@ const DATAGRAM_CAP = 1400;
 /// decides how fast it drains.
 const DATAGRAMS_PER_TICK = if (buildinfo.test_hooks) 8 else 4;
 const DRAIN_INTERVAL_MS: u64 = 16; // ~one refresh — keep up with per-frame lines
-/// Sequence-prefix width: `[000001] `. 6 digits covers a full boot with room to
-/// spare; the counter wraps rather than widening past that.
-const SEQ_DIGITS = 6;
 
-/// `[NNNNNN] ` — the prefix every wire line carries.
-const SEQ_PREFIX_LEN = SEQ_DIGITS + 3;
-/// What is left of a wire line for the actual text.
-const BODY_CAP = LINE_CAP - SEQ_PREFIX_LEN;
+/// What is left of a wire line for the actual text once the store has stamped
+/// its `[NNNNNN] ` prefix and newline (linestore owns the format and the
+/// sequence numbering).
+const BODY_CAP = StoreT.BODY_CAP;
+const StoreT = linestore.Store(FIFO_LINES, LINE_CAP);
 
-const Line = struct {
-    bytes: [LINE_CAP]u8 = undefined,
-    len: usize = 0,
-};
-
-/// Lines the full FIFO discarded (oldest-first) — the sequence gap shows
-/// WHERE, this counter shows HOW MANY without replaying a capture (R59).
+/// Unsent lines the full store overwrote to make room — a REAL loss (the line
+/// never reached the wire); the sequence gap shows WHERE, this counter shows HOW
+/// MANY without replaying a capture (R59). Retention expiry — a SENT line wrapped
+/// over — is not counted: those lines shipped, and losing the ability to RE-send
+/// them is the ring working as sized.
 var cnt_fifo_drops = counter.Counter{ .mod = .net, .name = "netdebug.fifo_drops" };
-var fifo: [FIFO_LINES]Line = undefined;
-var head: usize = 0; // index of the oldest queued line
-var count: usize = 0; // queued lines (≤ FIFO_LINES)
+/// Datagrams the NIC refused (TX ring full): the lines were KEPT and retried next
+/// tick (DIAG-024), so this counts deferrals, not losses. Climbing steadily means
+/// the drain is producing faster than the NIC drains — lower DATAGRAMS_PER_TICK
+/// or grow the TX ring, but nothing was lost.
+var cnt_tx_defer = counter.Counter{ .mod = .net, .name = "netdebug.tx_defer" };
+/// The line store: the drain's queue and the resend window (DIAG-023). One
+/// kernel instance; the pure mechanics are host-tested (linestore.zig).
+var store: StoreT = .{};
 var enabled = false;
 
 // Line-assembly buffer: bytes from the trace bus accumulate here until a newline
@@ -136,7 +155,6 @@ var enabled = false;
 /// that impossible by construction, without a lock across the sink. The
 /// assembly rules themselves are pure and host-tested (lineasm.zig).
 var asm_per_core: [percpu.MAX_CPUS]lineasm.Assembler(BODY_CAP) = @splat(.{});
-var seq: u32 = 0; // monotonic line counter, prefixed to every line SENT
 
 /// Collapses a repeating line instead of letting it eat the whole trace budget.
 /// The drain is metered, so a subsystem stuck in a retry loop does not merely add
@@ -175,6 +193,7 @@ pub fn start() bool {
     // no matter how long the receiver listens.
     const backlog = klog.diagCount();
     counter.register(&cnt_fifo_drops);
+    counter.register(&cnt_tx_defer);
     enabled = true;
     start_ms = timer.millis(); // anchors PATH_FALLBACK_MS — see pathProven
     klog.addSink(&feed);
@@ -259,44 +278,23 @@ fn emitSummary(n: u32) void {
     emitLine(msg);
 }
 
-/// Stamp `[NNNNNN] ` onto a body and queue the wire line. The ONLY place seq is
-/// bumped — so the numbering counts lines that were SENT, and a gap in it means a
-/// dropped datagram, never a suppressed one.
+/// Queue one body line for the wire. The store stamps the `[NNNNNN] ` prefix as
+/// it pushes — so the numbering counts lines that will SHIP, and a gap in it
+/// means a dropped datagram, never a suppressed line. A push that had to
+/// overwrite an UNSENT line to make room is the one real loss on this side, and
+/// it is counted.
 fn emitLine(body: []const u8) void {
-    var wire: [LINE_CAP]u8 = undefined;
-    seq +%= 1;
-    wire[0] = '[';
-    var v = seq;
-    var d: usize = SEQ_DIGITS;
-    while (d > 0) {
-        d -= 1;
-        wire[1 + d] = '0' + @as(u8, @intCast(v % 10));
-        v /= 10;
-    }
-    wire[1 + SEQ_DIGITS] = ']';
-    wire[2 + SEQ_DIGITS] = ' ';
-    const n = @min(body.len, BODY_CAP);
-    @memcpy(wire[SEQ_PREFIX_LEN..][0..n], body[0..n]);
-    enqueue(wire[0 .. SEQ_PREFIX_LEN + n]);
+    if (store.push(body) == .dropped_pending) cnt_fifo_drops.inc();
 }
 
-/// Copy a completed line into the tail FIFO slot. When the FIFO is full, drop
-/// the OLDEST line (advance head) to make room — the newest bring-up state is
-/// what matters, and the dropped line's sequence number shows the gap.
-fn enqueue(line: []const u8) void {
-    const idx = if (count < FIFO_LINES) blk: {
-        const i = (head + count) % FIFO_LINES;
-        count += 1;
-        break :blk i;
-    } else blk: {
-        cnt_fifo_drops.inc();
-        const i = head;
-        head = (head + 1) % FIFO_LINES;
-        break :blk i;
-    };
-    const n = @min(line.len, LINE_CAP);
-    @memcpy(fifo[idx].bytes[0..n], line[0..n]);
-    fifo[idx].len = n;
+/// Serve a resend request (DIAG-023): copy retained lines with wire sequence
+/// numbers in `[from, from+count)` into `out`, returning the bytes used. Lines
+/// already expired from the retention ring are simply absent from the answer —
+/// which tells the collector the loss is permanent. Called by fileserv on the
+/// KMR1 path, whose own retransmit+dedup makes the request/reply reliable.
+pub fn resendInto(from: u32, n: u32, out: []u8) usize {
+    if (!enabled) return 0;
+    return store.resendInto(from, n, out);
 }
 
 // ── consumer side: metered drain onto the wire ──────────────────────────────
@@ -374,19 +372,15 @@ pub fn flushNow() void {
     // Sealed crash records first: on the terminal reboot path this call IS the
     // crash record's one chance to leave the box.
     shipCrashRecords();
-    while (count > 0) {
-        var used: usize = 0;
-        while (count > 0) {
-            const line = &fifo[head];
-            if (used > 0 and used + line.len > DATAGRAM_CAP) break;
-            const take = @min(line.len, DATAGRAM_CAP - used);
-            @memcpy(pkt[used .. used + take], line.bytes[0..take]);
-            used += take;
-            head = (head + 1) % FIFO_LINES;
-            count -= 1;
-        }
-        if (used == 0) break;
-        emit(pkt[0..used]);
+    while (store.pending() > 0) {
+        const f = store.fill(&pkt);
+        if (f.lines == 0) break;
+        // Advance REGARDLESS of the send result — the opposite of drain()'s rule,
+        // deliberately: the machine is halting, so "keep the line and retry next
+        // tick" is a tick that will never come, and looping on a refusing NIC
+        // here would hang the reset path. Best effort is the contract.
+        _ = emit(pkt[0..f.bytes]);
+        store.advance(f.lines);
     }
 }
 
@@ -419,7 +413,10 @@ fn shipCrashRecords() void {
         var off: usize = 0;
         while (off < rec.bytes.len) {
             const n = @min(DATAGRAM_CAP, rec.bytes.len - off);
-            emit(rec.bytes[off .. off + n]);
+            // Best-effort: the record's core is already dead, and a refusing NIC
+            // here has nowhere to defer to — the crash channel keeps no queue on
+            // purpose (no shared failure domain with the trace path).
+            _ = emit(rec.bytes[off .. off + n]);
             off += n;
         }
         crashlog.release(rec.core);
@@ -533,8 +530,8 @@ pub fn drain() void {
     // location is recorded only so the report can say where it last ran);
     // per-CORE liveness is fed by the scheduler itself.
     deadman.alivePump(percpu.indexOrZero());
-    heartbeat(); // BEFORE the count==0 early-out: an idle kernel must still prove it lives
-    if (count == 0 and !crashlog.pending()) return;
+    heartbeat(); // BEFORE the empty early-out: an idle kernel must still prove it lives
+    if (store.pending() == 0 and !crashlog.pending()) return;
     if (collector == null and pathProven() and timer.millis() -% path_proven_ms < COLLECTOR_WAIT_MS) return;
     if (!pathProven()) return;
     // Sealed crash records jump the drain meter: rare, small, and the most
@@ -545,7 +542,7 @@ pub fn drain() void {
         shipCrashRecords();
         tx_busy = false;
     }
-    if (count == 0) return;
+    if (store.pending() == 0) return;
     const now = timer.millis();
     if (now - last_drain_ms < DRAIN_INTERVAL_MS) return;
     last_drain_ms = now;
@@ -561,24 +558,18 @@ pub fn drain() void {
     // the heartbeat above are unaffected. Same yield GLSTAT/bootlog already make.
     const per_tick: usize = if (gentle) 1 else DATAGRAMS_PER_TICK;
     var datagrams: usize = 0;
-    while (datagrams < per_tick and count > 0) : (datagrams += 1) {
-        // Pack as many queued lines as fit into one datagram (newline-delimited;
-        // the receiver splits on '\n'). Each line already ends in '\n' and is
-        // ≤ LINE_CAP, so we stop before a line would exceed DATAGRAM_CAP.
-        var used: usize = 0;
-        while (count > 0) {
-            const line = &fifo[head];
-            if (used > 0 and used + line.len > DATAGRAM_CAP) break; // full — send what we have
-            // Truncate defensively: a line is ≤ LINE_CAP (120) < DATAGRAM_CAP so
-            // this never fires today, but if a line ever exceeds the datagram we
-            // send a truncated copy rather than stalling the drain forever.
-            const take = @min(line.len, DATAGRAM_CAP - used);
-            @memcpy(pkt[used .. used + take], line.bytes[0..take]);
-            used += take;
-            head = (head + 1) % FIFO_LINES;
-            count -= 1;
+    while (datagrams < per_tick and store.pending() > 0) : (datagrams += 1) {
+        // TWO-PHASE (DIAG-024): fill packs pending lines into the datagram
+        // without consuming them; only a send the NIC accepted advances the
+        // store. A refused send keeps every line for the next tick — the old
+        // dequeue-first drain silently lost whole datagrams to a full TX ring,
+        // and the capture showed a sequence gap with every counter green.
+        const f = store.fill(&pkt);
+        if (f.lines == 0) break;
+        if (!emit(pkt[0..f.bytes])) {
+            cnt_tx_defer.inc();
+            break; // ring full — the same lines pack again next tick
         }
-        if (used == 0) break;
-        emit(pkt[0..used]);
+        store.advance(f.lines);
     }
 }

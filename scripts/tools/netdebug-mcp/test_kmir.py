@@ -40,6 +40,11 @@ class FakeGuest:
         self.room = 1 << 30
         self.title = "terminal"
         self.focus_asks = 0
+        # The trace retention window, seq -> the stamped wire line: what
+        # OP_RESEND serves. Seqs 40..49 retained; anything else has expired.
+        self.retained = {
+            40 + i: f"[{40 + i:06d}] retained line {40 + i}\n".encode() for i in range(10)
+        }
 
     def _dedup(self, rid):
         """The recorded result for `rid` if already dispatched, else None."""
@@ -103,6 +108,36 @@ class FakeGuest:
             if body:
                 self.title = body.decode()
             return kmir.HDR.pack(kmir.MAGIC, kmir.OP_FOCUS_R, 0, rid) + self.title.encode()
+        if op == kmir.OP_WRITE_AT:
+            # Append-only chunked write, the guest's rules exactly: offset 0
+            # truncates, offset == len appends, offset+len == len re-ACKs a
+            # retransmit, anything else is a desync error.
+            (nlen,) = struct.unpack_from("<H", body, 0)
+            name = body[2:2 + nlen].decode()
+            (off,) = struct.unpack_from("<I", body, 2 + nlen)
+            data = body[2 + nlen + 4:]
+            cur = self.files.get(name, [b"", 0])[0]
+            if off == 0:
+                self.files[name] = [data, self.files.get(name, [b"", 0])[1] + 1]
+                total = len(data)
+            elif off == len(cur):
+                self.files[name][0] = cur + data
+                total = len(cur) + len(data)
+            elif off + len(data) == len(cur):
+                total = len(cur)  # the lost-reply retransmit
+            else:
+                return kmir.HDR.pack(kmir.MAGIC, kmir.OP_ERR, 0, rid) + bytes([kmir.ERR_GENERATION])
+            return kmir.HDR.pack(kmir.MAGIC, kmir.OP_WRITE_AT_R, 0, rid) + struct.pack("<I", total)
+        if op == kmir.OP_RESEND:
+            # Not deduped: a pure read of the retained trace, capped guest-side
+            # exactly as fileproto.RESEND_MAX_LINES caps the real one.
+            from_seq, count = struct.unpack_from("<IB", body, 0)
+            out = b""
+            for i in range(min(count, kmir.RESEND_MAX_LINES)):
+                seq = (from_seq + i) % 1_000_000
+                if seq in self.retained:
+                    out += self.retained[seq]
+            return kmir.HDR.pack(kmir.MAGIC, kmir.OP_RESEND_R, 0, rid) + out
         if op in (kmir.OP_KEY, kmir.OP_TEXT, kmir.OP_MOUSE, kmir.OP_SHOT):
             result = self._dedup(rid)
             if result is None:
@@ -227,10 +262,30 @@ def main():
         with open(path, "rb") as f:
             assert f.read() == guest.files["screenshot.png"][0], "screenshot corrupted"
 
+        # ── WRITE_AT: a multi-chunk push lands byte-exact, exactly once, through
+        # the same 20%-drop channel — the offset check is what makes a
+        # retransmitted chunk safe (DIAG-025) ────────────────────────────────
+        big = os.urandom(5 * kmir.CHUNK + 137)
+        c.write_file("cube.kudos", big)
+        assert guest.files["cube.kudos"][0] == big, "chunked write corrupted the file"
+
+        # ── RESEND: gap recovery through the same chaotic channel (DIAG-023) ─
+        # The retained window serves lines back verbatim; a request straddling
+        # the retention edge yields exactly the lines that still exist, so a
+        # permanent loss is countable rather than retried forever.
+        text = c.resend(41, 3)
+        assert text == ("[000041] retained line 41\n[000042] retained line 42\n"
+                        "[000043] retained line 43\n"), repr(text)
+        edge = c.resend(38, 4)  # 38,39 expired; 40,41 retained
+        assert "[000040]" in edge and "[000041]" in edge and "[000038]" not in edge, repr(edge)
+        # Greedy asks are capped at the datagram-shaped maximum, never an error.
+        capped = c.resend(40, 200)
+        assert capped.count("\n") == kmir.RESEND_MAX_LINES, repr(capped)
+
     stop.set()
     t.join(timeout=2)
     print("netdebug lossy-loopback test PASSED (20% drop, 10% dup, 10% reorder; "
-          "exactly-once inject + flow-controlled TEXT + FOCUS + WRITE + SHOT flow)")
+          "exactly-once inject + flow-controlled TEXT + FOCUS + WRITE + SHOT + RESEND)")
 
 
 if __name__ == "__main__":

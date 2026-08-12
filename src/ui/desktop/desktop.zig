@@ -407,10 +407,14 @@ pub const Desktop = struct {
                 // emulator's keyboard queue holds ~a quarter second of typing. The
                 // hardware device animates at the panel rate; software gets a bounded
                 // cadence, which is what a screensaver-grade nicety deserves there.
-                const throttled = a == .model and !gles.hasGpuDevice() and
+                // A module's replayed scene (the blob window) is 3D on the same
+                // rasteriser, so it rides the same throttle — its recorder simply
+                // waits in end_frame until the next consumed frame.
+                const anim3d = a == .model or (a == .blob and a.blob.mode == .scene);
+                const throttled = anim3d and !gles.hasGpuDevice() and
                     (timer.now() / MODEL_SOFT_PERIOD_TICKS) == self.model_anim_phase;
                 if (!throttled) {
-                    if (a == .model and !gles.hasGpuDevice())
+                    if (anim3d and !gles.hasGpuDevice())
                         self.model_anim_phase = timer.now() / MODEL_SOFT_PERIOD_TICKS;
                     changed = true;
                     self.wm.markWindow(a.window()); // (diag scroll, system refresh)

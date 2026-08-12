@@ -1,12 +1,17 @@
 //! Running a `.kudos` app: the `Api` an app image is called through, and the
 //! two ways kudos runs one.
 //!
-//! ONE implementation of the capability surface (spec AGT-008), because there
-//! are two callers and they must not drift: `run <name>` typed in a terminal,
-//! which executes the image on that session's own task, and the agent's
-//! run_app tool, which has no terminal behind it — it starts a session of its
-//! own for the image and captures what the image printed as the tool result it
-//! then reads.
+//! ONE implementation of the base `Api` (spec AGT-008), because there are two
+//! callers and they must not drift: `run <name>` typed in a terminal, which
+//! executes the image on that session's own task, and the agent's run_app tool,
+//! which has no terminal behind it — it starts a session of its own for the image
+//! and captures what the image printed as the tool result it then reads.
+//!
+//! Everything BEYOND the base `Api` — the capabilities a module binds with
+//! `get_interface` — belongs to `capabilities.zig`, which this file only chooses a
+//! grant from. The split is deliberate: this file is about running an image, and a
+//! decision about what untrusted code may reach should not be reachable by editing
+//! the code that happens to start it.
 //!
 //! Both run the image in a SESSION ADDRESS SPACE (MOD-006): the image and the
 //! app's arena are carved from that session's private region, so a stray
@@ -17,20 +22,17 @@
 
 const std = @import("std");
 const Out = @import("out.zig").Out;
+const capabilities = @import("capabilities.zig");
+const counter = @import("../kernel/debug/counter.zig");
 const iramdisk = @import("iramdisk");
-const iwindow = @import("../iface/iwindow.zig");
-const interfaces = @import("../kernel/loader/interfaces.zig");
+const vfs = @import("vfs");
+const iwindow = @import("iwindow");
 const runner = @import("../kernel/loader/runner.zig");
 const sched = @import("../kernel/sched/sched.zig");
 const sessionspace = @import("../kernel/memory/sessionspace.zig");
 const timer = @import("../kernel/timer/timer.zig");
 
 pub const abi = runner.abi;
-
-/// How long `DrawApi.open` waits for the desktop to create the window before it
-/// gives up and reports failure (handle 0) — a window request while one is
-/// already live is refused, and the app must not spin forever on it.
-const DRAW_OPEN_TIMEOUT_MS: u64 = 1000;
 
 /// Why an image could not be run. `runner.LoadError` covers the image itself;
 /// the extra case is about the room it was offered.
@@ -74,7 +76,17 @@ fn apiPrint(p: *anyopaque, s: [*]const u8, len: usize) callconv(.c) void {
     st(p).out.str(s[0..len]);
 }
 fn apiPollKey(_: *anyopaque) callconv(.c) i32 {
-    return -1; // input delivery to a running app is wired with the session key ring later
+    // Keys come from whichever of the module's windows has focus (MOD-013) —
+    // never the terminal's own stream, which belongs to the shell behind it. A
+    // module with no window has nothing addressed to it.
+    var i: u32 = 0;
+    const n = iwindow.count();
+    while (i < n) : (i += 1) {
+        const h = iwindow.at(i);
+        if (!iwindow.focused(h)) continue;
+        if (iwindow.popKey(h)) |k| return @as(i32, k);
+    }
+    return -1;
 }
 fn apiMillis(_: *anyopaque) callconv(.c) u64 {
     return timer.millis();
@@ -125,45 +137,12 @@ fn apiFileWrite(_: *anyopaque, path: [*]const u8, path_len: usize, data: [*]cons
     return true;
 }
 
-// The `draw` capability (Interface.draw): an app that binds it gets ONE bounded
-// window and nothing else — vfs/net stay denied by `interfaces.get` below.
-// open() parks the request on the cross-core mailbox and waits (yielding) for
-// the desktop on core 0 to create the window and publish its handle; blit()
-// hands the app's BGRA pixels across.
-fn apiDrawOpen(p: *anyopaque, w: u32, h: u32) callconv(.c) u32 {
-    iwindow.requestOpen(w, h);
-    // Bounded wait: the desktop fulfils within a frame or two, but a second
-    // window while one is live is refused (handle stays 0) — give up rather than
-    // spin forever, so the app sees the failure and can exit.
-    const deadline = timer.millis() + DRAW_OPEN_TIMEOUT_MS;
-    while (iwindow.handle() == 0) {
-        if (apiCancelled(p) or timer.millis() >= deadline) return 0;
-        sched.yieldPeriodic();
-    }
-    return iwindow.handle();
-}
-fn apiDrawBlit(_: *anyopaque, handle: u32, pixels: [*]const u32, w: u32, h: u32) callconv(.c) void {
-    iwindow.blit(handle, pixels, w, h);
-}
-const draw_vtable = abi.DrawApi{
-    .version = 1,
-    .open = apiDrawOpen,
-    .blit = apiDrawBlit,
-};
-fn apiGetInterface(_: *anyopaque, id: u32, version: u32) callconv(.c) ?*const anyopaque {
-    if (id == @intFromEnum(abi.Interface.draw) and version == 1) return &draw_vtable;
-    return interfaces.get(id, version); // vfs/net/everything else: deny
-}
-fn apiGetInterfaceHeadless(_: *anyopaque, id: u32, version: u32) callconv(.c) ?*const anyopaque {
-    return interfaces.get(id, version); // no terminal, so not even `draw`
-}
-
-/// What a run is allowed to reach beyond the base `Api`.
+/// Which grant a run is started under. What each grant may bind is decided in
+/// `console/capabilities.zig`, not here.
 pub const Options = struct {
-    /// Whether the image may bind `Interface.draw` and open its own window.
-    /// A run with no terminal behind it (the agent's) has no window of its own
-    /// to close and no user watching it, so windowing is refused there rather
-    /// than leaving an orphan window on the desktop.
+    /// Whether a terminal is watching this run. The agent's contained run has
+    /// none; a detached run has none either but is reaped by the pump, so both
+    /// may own windows — the difference is who is there to see the output.
     windowed: bool,
 };
 
@@ -197,13 +176,17 @@ pub fn execute(out: Out, blob: []const u8, region: []u8, opts: Options) Error!i3
         .alloc = apiAlloc,
         .file_read = apiFileRead,
         .file_write = apiFileWrite,
-        .get_interface = if (opts.windowed) apiGetInterface else apiGetInterfaceHeadless,
+        .get_interface = if (opts.windowed) capabilities.appTerminal else capabilities.appHeadless,
     };
 
     const rc = entry(&api);
-    // If the app opened a window, tell the desktop to close it now that the app
-    // has returned — its arena (and any buffer the desktop owns for it) is gone.
-    if (opts.windowed) iwindow.requestClose();
+    // Every window the module still owns goes now: its arena is gone, so nothing
+    // can fill them again.
+    var i = iwindow.count();
+    while (i > 0) {
+        i -= 1;
+        iwindow.requestClose(iwindow.at(i));
+    }
     return rc;
 }
 
@@ -363,4 +346,118 @@ pub fn runContained(blob: []const u8, budget_ms: u64) RunError!Result {
         .truncated = @atomicLoad(bool, &run.truncated, .acquire),
         .timed_out = timed_out,
     };
+}
+
+// ── a detached windowed run: an image that outlives its caller ───────────────
+//
+// The agent's contained run is synchronous and budgeted (RUN_BUDGET_MS), which
+// is right for a program whose OUTPUT is the answer — and wrong for one whose
+// WINDOW is the answer: a visualisation is not "done" in ten seconds, it runs
+// until the person watching closes it. A detached run starts the image on a
+// session task of its own and returns; the window is then the app's lifeline —
+// closing it cancels the run (the mailbox handle dies, `Api.cancelled` and
+// `DrawApi.closed` both go true), and the pump reaps the session once the image
+// returns. One at a time, like the one blob window it exists to open.
+
+/// Bytes the detached run's image may occupy. Its own copy — the caller's blob
+/// is a ramdisk file a later `compile` may replace under a still-running app.
+const DETACHED_BLOB_MAX: usize = 512 * 1024;
+
+const Detached = struct {
+    buf: [DETACHED_BLOB_MAX]u8 = undefined,
+    len: usize = 0,
+    session: u32 = 0,
+    /// Set by the run task as its last act; the pump reaps on seeing it.
+    done: bool = false,
+    /// Bytes the image printed with nobody to read them — counted, not silent.
+    dropped: u64 = 0,
+    /// The run once had a window; a zero handle after this means it was closed.
+    had_window: bool = false,
+};
+var detached: Detached = .{};
+var detached_active: bool = false;
+
+var cnt_detached_dropped = counter.Counter{ .mod = .ui, .name = "blobwin.out_dropped" };
+
+fn detachedAlive(_: *anyopaque) bool {
+    // Windows ARE the liveness signal: once the module has opened one, its
+    // windows all closing is the person saying stop. Before the first one the
+    // run is simply alive (it may be computing its first frame).
+    if (iwindow.count() != 0) {
+        detached.had_window = true;
+        return true;
+    }
+    return !detached.had_window;
+}
+
+fn detachedPut(_: *anyopaque, ch: u8) void {
+    _ = ch;
+    // Nothing reads a detached run's prints — there is no terminal behind it and
+    // no tool result waiting. Dropped LOUDLY: the counter is the evidence.
+    detached.dropped += 1;
+    cnt_detached_dropped.inc();
+}
+
+var detached_out_ctx: u8 = 0;
+
+fn detachedTask() void {
+    const id = sessionspace.currentSessionId() orelse {
+        @atomicStore(bool, &detached.done, true, .release);
+        return;
+    };
+    const out = Out{ .ctx = &detached_out_ctx, .putFn = detachedPut, .aliveFn = detachedAlive };
+    _ = execute(out, detached.buf[0..detached.len], sessionspace.moduleRegion(id), .{ .windowed = true }) catch {};
+    @atomicStore(bool, &detached.done, true, .release);
+}
+
+/// Start `blob` detached, with the window grant. Returns once the task is
+/// started — the window arrives when the image asks for one.
+pub fn startWindowed(blob: []const u8) RunError!void {
+    const sb = sandbox orelse return RunError.NoSandbox;
+    if (detached_active) return RunError.Busy;
+    if (blob.len > DETACHED_BLOB_MAX) return RunError.RegionTooSmall;
+    // Verify EAGERLY, so the caller hears "bad image" now rather than a window
+    // that never appears.
+    _ = try runner.imageSize(blob);
+    counter.register(&cnt_detached_dropped); // idempotent
+    @memcpy(detached.buf[0..blob.len], blob);
+    detached.len = blob.len;
+    detached.done = false;
+    detached.dropped = 0;
+    detached.had_window = false;
+    detached.session = sb.start(sb.ctx, "kudoswin", detachedTask) orelse return RunError.NoSession;
+    detached_active = true;
+}
+
+/// Reap a finished detached run (the pump calls this on the steady loop): give
+/// the session back once the image has returned. Nothing to reap is a no-op.
+pub fn reapWindowed() void {
+    if (!detached_active) return;
+    if (!@atomicLoad(bool, &detached.done, .acquire)) return;
+    const sb = sandbox orelse return;
+    _ = sb.finish(sb.ctx, detached.session);
+    detached_active = false;
+}
+
+/// The spawn id `TaskApi` hands out. There is one detached slot, so there is one
+/// id; it is non-zero because 0 means "refused".
+pub const SPAWN_ID: u32 = 1;
+
+/// Run compiled module `name` (a `/ramdisk/<name>.kudos`) detached — what
+/// `TaskApi.spawn` calls. Returns SPAWN_ID, or 0 on any refusal.
+pub fn spawnModule(name: []const u8) u32 {
+    var pathbuf: [vfs.MAX_PATH]u8 = undefined;
+    const path = std.fmt.bufPrint(&pathbuf, "/ramdisk/{s}.kudos", .{name}) catch return 0;
+    const blob = vfs.read(path) orelse return 0;
+    startWindowed(blob) catch return 0;
+    return SPAWN_ID;
+}
+
+/// Ask the spawned module to stop — what `TaskApi.stop` calls. The run observes
+/// it through `Api.cancelled`; the pump reaps the session when it returns.
+pub fn stopSpawned(id: u32) bool {
+    if (id != SPAWN_ID or !detached_active) return false;
+    detached.had_window = true; // makes detachedAlive false once no window is live
+    iwindow.reset();
+    return true;
 }

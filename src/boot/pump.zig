@@ -23,6 +23,9 @@ const smp = @import("../kernel/smp/smp.zig");
 const virt = @import("../kernel/virt/virt.zig");
 const ivirt = @import("ivirt");
 const idesk = @import("idesk"); // the desktop-control seam: window requests in, the window list out
+const iwindow = @import("iwindow"); // module windows: create/close requests, focus
+const apprun = @import("../console/apprun.zig"); // detached windowed runs, reaped on this loop
+const capabilities = @import("../console/capabilities.zig"); // what modules parked for the system core
 const power = @import("../kernel/power/reboot.zig");
 const framebuffer = @import("../ui/screen/framebuffer.zig");
 const hud = @import("../ui/desktop/hud.zig");
@@ -111,6 +114,7 @@ fn publishWindowList(d: *Desktop) void {
     idesk.publishWindows(buf[0..used]);
 }
 
+
 fn spawnByName(d: *Desktop, name: []const u8) !void {
     const eql = std.mem.eql;
     if (eql(u8, name, "ai")) return d.spawnAgent();
@@ -161,12 +165,37 @@ fn dispatchInput(d: *Desktop) bool {
         applyWindowAction(d, req);
         changed = true;
     }
+    // A loaded module asked for its window (MOD-012), or is done with it. Both
+    // are drained here — the desktop's core — because the window list is the
+    // desktop's; the module is meanwhile spinning in DrawApi.open (bounded) or
+    // already returning. A spawn failure is traced, and the module's wait times
+    // out into a refused open rather than hanging on silence.
+    if (iwindow.takeCreateRequest()) |req| {
+        lifecycle.spawnBlobWindow(d, req) catch |e|
+            klog.puts(std.fmt.bufPrint(&msg, "module window open failed: {s}\n", .{@errorName(e)}) catch "module window open failed\n");
+        changed = true;
+    }
+    if (iwindow.takeClose()) |handle| {
+        lifecycle.closeBlobWindow(d, handle);
+        changed = true;
+    }
+    // Give a finished detached run its session back (the run task set `done` as
+    // its last act; the reap is cheap and idempotent).
+    apprun.reapWindowed();
+    // Perform whatever a module parked for the system core: an HTTP fetch so far
+    // (Interface.net). Pumped here, serviced in console beside the capability
+    // that parks it — the same split fileserv uses.
+    capabilities.service();
     // Publish where a keystroke would land, for the remote injector that has to
-    // know before it types.
+    // know before it types — and tell a module window whether it is the one
+    // holding focus (its `WindowApi.focused`).
     if (d.wm.focused != last_published_focus) {
         last_published_focus = d.wm.focused;
         fileserv.publishFocus(d.wm.focusedTitle());
         publishWindowList(d);
+        for (d.apps.items) |a| {
+            if (a == .blob) iwindow.setFocused(a.blob.handle, d.wm.focused == a.window());
+        }
     }
     while (keyboard.poll()) |ev| {
         // PERF-008: this event's visible effect (echo, spawned window) rides the

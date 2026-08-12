@@ -72,6 +72,7 @@ all_tracks() {
     echo "stackframes"
     echo "agent-pipeline"
     echo "compile-run"
+    echo "cube-run"
     echo "gltf-validate"
     echo "coverage"
     echo "qemu-boot-1"
@@ -93,12 +94,21 @@ paths_for() {
         stackframes)
             echo "src build.zig linker.ld scripts/tests/stackframes.sh scripts/tests/stackframes.py scripts/tests/stackdebt.txt" ;;
         agent-pipeline)
-            echo "scripts/agent" ;;
+            # The netdebug host tooling rides this track: kmir.py is the host half
+            # of the KMR1 wire contract (fileproto.zig is the kernel half), and a
+            # protocol change that breaks one side must stale the track that runs
+            # the lossy-loopback proof of the other.
+            echo "scripts/agent scripts/tools/netdebug-mcp" ;;
         compile-run)
             # The write-compile-run loop, end to end inside a booted kudos: the
             # shell command, the factory client, the loader and the contained
             # run, plus the factory itself and the sample it compiles.
             echo "src/console src/kernel/loader src/drivers/net scripts/agent/factory.py scripts/agent/samples scripts/tests/compile_run.py" ;;
+        cube-run)
+            # A module drawing 3D in its own window, end to end: the capability
+            # registry and gl recorder, the window/scene mailboxes, the desktop
+            # side that hosts and replays, and the reference cube it runs.
+            echo "src/console src/kernel/loader src/iface src/apps/blobwin.zig src/ui/desktop scripts/agent/samples/cube.zig scripts/tests/cube_run.py" ;;
         gltf-validate)
             echo "assets/models src/ui/assets scripts/tests/gltf-validate.sh" ;;
         coverage)
@@ -167,10 +177,15 @@ track_cmd() { # track -> runs it (exit status is the verdict)
         stackframes)    scripts/tests/stackframes.sh ;;
         agent-pipeline) python3 scripts/agent/test_factory.py \
                             && python3 scripts/agent/test_agent.py \
-                            && python3 scripts/agent/test_mcp_stdio.py ;;
+                            && python3 scripts/agent/test_mcp_stdio.py \
+                            && python3 scripts/tools/netdebug-mcp/test_kmir.py ;;
         gltf-validate)  scripts/tests/gltf-validate.sh ;;
         compile-run)    zig build iso-smp -Dtest-hooks -p build --cache-dir build/.zig-cache &&
                         python3 scripts/tests/compile_run.py ;;
+        cube-run)       # -Dsoft-display: the animation is judged from VGA screendumps,
+                        # so the desktop must actually rasterise (no GPU in this QEMU).
+                        zig build iso-smp -Dtest-hooks -Dsoft-display -p build --cache-dir build/.zig-cache &&
+                        python3 scripts/tests/cube_run.py ;;
         coverage)       scripts/tests/coverage.sh run && scripts/tests/coverage.sh check 90 ;;
         qemu-boot-1)    scripts/tests/run_emulated.sh ;;
         boot-1-native)  scripts/tests/run_native.sh ;;         # stamps itself on pass

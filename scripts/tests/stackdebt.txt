@@ -25,10 +25,11 @@ drivers.net.stack.tlsclient.init 51688
 # with it. Was 54272 under the previous vendored client.
 drivers.net.stack.tlsclient.KeyShare.init 53176
 drivers.gpu.base.pngenc.initCompressInto 99328
-# The desktop's whole-scene GL frame. Listed under `render.renderGles` until the
-# compiler began inlining it into its only caller — the frame did not shrink or
-# move, it was renamed, so this entry replaces that one rather than joining it.
-ui.desktop.desktop.Desktop.render 49512
+# The desktop's whole-scene GL frame (renderGles, inlined into its only caller).
+# No single allocation is large: the frame is spill slots for the per-window
+# content paths inlined into the loop. Shrinking it means lifting that dispatch
+# out of the loop.
+ui.desktop.desktop.Desktop.render 57704
 ui.desktop.render.GlesComp.init 49152
 crypto.ml_kem.Kyber(...).SecretKey.decaps 45056
 main_root.run 41984

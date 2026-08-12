@@ -71,6 +71,34 @@ pub const OP_TEXT_R: u8 = 0x90;
 /// window does not.
 pub const OP_FOCUS: u8 = 0x11;
 pub const OP_FOCUS_R: u8 = 0x91;
+/// Write one CHUNK of a file at a byte offset: u16 name len, name, u32 offset,
+/// data. Offset 0 creates (or truncates) the file; a non-zero offset must equal
+/// the file's current length — the op is append-only, so chunks land exactly
+/// once and in order, and a lost reply's retransmit (this op rides the dedup
+/// group) can never double-append. The reply carries the file's u32 total
+/// length, which is also the next chunk's offset. This is how a file BIGGER
+/// than one datagram gets onto the machine remotely; OP_WRITE remains the
+/// one-datagram fast path.
+pub const OP_WRITE_AT: u8 = 0x13;
+pub const OP_WRITE_AT_R: u8 = 0x93;
+/// Largest file OP_WRITE_AT will assemble. The append rebuilds the file through
+/// a static staging buffer (the ramdisk stores whole values, not extents), so
+/// the ceiling is stated rather than discovered at whatever size the heap fails.
+pub const WRITE_AT_MAX_BYTES: u32 = 512 * 1024;
+
+/// Serve trace lines again, by sequence number: u32 first wire seq, u8 count.
+/// The reply body is the retained lines verbatim — `[NNNNNN] ` stamps included,
+/// byte-identical to the stream — so the collector splices them straight into
+/// its capture (DIAG-023). A line no longer retained is simply absent from the
+/// reply, which is the machine saying that loss is permanent. Idempotent by
+/// nature (a pure read), so it does NOT ride the dedup group: a retransmitted
+/// request re-serves, which is exactly what the asker wants.
+pub const OP_RESEND: u8 = 0x12;
+pub const OP_RESEND_R: u8 = 0x92;
+/// Most lines one OP_RESEND may ask for. A reply must fit one datagram
+/// (MAX_CHUNK), so with trace lines up to ~120 bytes about nine fit; the cap is
+/// the contract, and a wider gap is filled by asking again from further along.
+pub const RESEND_MAX_LINES: u8 = 9;
 /// The ramdisk file the OP_MCP handler writes its JSON-RPC response into. One
 /// well-known name, shared by the kernel handler and the remote client.
 pub const MCP_RESPONSE_FILE = "mcp-response.json";
@@ -222,6 +250,29 @@ pub fn writeFocusReq(buf: []u8, request_id: u16, needle: []const u8) usize {
     return n + take;
 }
 
+pub fn writeResendReq(buf: []u8, request_id: u16, from_seq: u32, count: u8) usize {
+    const n = writeHeader(buf, OP_RESEND, request_id);
+    std.mem.writeInt(u32, buf[n..][0..4], from_seq, .little);
+    buf[n + 4] = count;
+    return n + 5;
+}
+
+/// OP_WRITE_AT's append staging (see the arm below): static so the ceiling is a
+/// constant, not a heap mood. One buffer suffices — the server is single-flight
+/// per request, and the ring in front of it serialises.
+var write_at_staging: [WRITE_AT_MAX_BYTES]u8 = undefined;
+
+pub const ResendReq = struct { from_seq: u32, count: u8 };
+
+/// Body of a RESEND request (after the header). Null on malformed input.
+pub fn parseResendReq(body: []const u8) ?ResendReq {
+    if (body.len < 5) return null;
+    return .{
+        .from_seq = std.mem.readInt(u32, body[0..4], .little),
+        .count = body[4],
+    };
+}
+
 pub fn writeMouseReq(buf: []u8, request_id: u16, dx: i16, dy: i16, buttons: u8) usize {
     const n = writeHeader(buf, OP_MOUSE, request_id);
     std.mem.writeInt(i16, buf[n..][0..2], dx, .little);
@@ -369,6 +420,11 @@ pub const Inject = struct {
         /// rides the deduped group. No reply bytes here — buildReply answers
         /// with the response file's generation and the client READs it.
         mcp: *const fn (ctx: *anyopaque, body: []const u8) void,
+        /// Copy retained trace lines with wire seqs in `[from, from+count)` into
+        /// `out`, returning the bytes used (DIAG-023). Real sink: the netdebug
+        /// line store (fileserv.zig); a line already expired is simply absent
+        /// from the answer.
+        resend: *const fn (ctx: *anyopaque, from: u32, count: u32, out: []u8) usize,
     };
 
     pub fn key(self: Inject, ascii: u8, named: u8) bool {
@@ -409,6 +465,9 @@ pub const Inject = struct {
     }
     pub fn mcp(self: Inject, body: []const u8) void {
         self.vtable.mcp(self.ctx, body);
+    }
+    pub fn resend(self: Inject, from: u32, count: u32, out: []u8) usize {
+        return self.vtable.resend(self.ctx, from, count, out);
     }
 };
 
@@ -502,6 +561,15 @@ pub fn buildReply(fs: iramdisk.IRamdisk, dedup: *Dedup, sink: Inject, req: []con
             @memcpy(out[n..][0..take], title[0..take]);
             return n + take;
         },
+        // NOT deduped: a resend is a pure read of the retained trace, so a
+        // retransmitted request re-serves the same lines — which is exactly what
+        // an asker who lost the first reply wants (DIAG-023).
+        OP_RESEND => {
+            const rr = parseResendReq(body) orelse return writeErr(out, hdr.request_id, ERR_BAD_REQUEST);
+            const n = writeHeader(out, OP_RESEND_R, hdr.request_id);
+            const cap = @min(@as(u32, rr.count), RESEND_MAX_LINES);
+            return n + sink.resend(rr.from_seq, cap, out[n..@min(out.len, n + MAX_CHUNK)]);
+        },
         // NOT deduped: PING and VERSION are read-only, so answering a retransmit is
         // correct and answering it AGAIN is the point — every probe must get a
         // reply, or the host cannot tell a lost packet from a dead machine.
@@ -558,6 +626,50 @@ pub fn buildReply(fs: iramdisk.IRamdisk, dedup: *Dedup, sink: Inject, req: []con
             }
             var n = writeHeader(out, OP_WRITE_R, hdr.request_id);
             std.mem.writeInt(u32, out[n..][0..4], gen, .little);
+            n += 4;
+            return n;
+        },
+        OP_WRITE_AT => {
+            // Body: u16 name_len, name, u32 offset, data (one chunk of a file
+            // too big for OP_WRITE's single datagram).
+            if (body.len < 2) return writeErr(out, hdr.request_id, ERR_BAD_REQUEST);
+            const nlen = std.mem.readInt(u16, body[0..2], .little);
+            if (body.len < 2 + @as(usize, nlen) + 4 or nlen == 0)
+                return writeErr(out, hdr.request_id, ERR_BAD_REQUEST);
+            const name = body[2 .. 2 + nlen];
+            const rest = body[2 + nlen ..];
+            const offset = std.mem.readInt(u32, rest[0..4], .little);
+            const data = rest[4..];
+            const cur: []const u8 = fs.get(name) orelse "";
+            var total: u32 = undefined;
+            if (offset == 0) {
+                // Create or truncate: the first chunk of a fresh push.
+                fs.put(name, data) catch return writeErr(out, hdr.request_id, ERR_BAD_REQUEST);
+                total = @intCast(data.len);
+            } else if (offset == cur.len) {
+                // Append-only, through the static staging buffer (the ramdisk
+                // stores whole values). The ceiling is stated, never discovered.
+                if (offset + data.len > WRITE_AT_MAX_BYTES)
+                    return writeErr(out, hdr.request_id, ERR_BAD_REQUEST);
+                @memcpy(write_at_staging[0..cur.len], cur);
+                @memcpy(write_at_staging[cur.len..][0..data.len], data);
+                fs.put(name, write_at_staging[0 .. cur.len + data.len]) catch
+                    return writeErr(out, hdr.request_id, ERR_BAD_REQUEST);
+                total = @intCast(cur.len + data.len);
+            } else if (offset + data.len == cur.len) {
+                // The RETRANSMIT of a chunk that already landed (its reply was
+                // lost): acknowledge with the same answer instead of an error
+                // the client would read as a failed push. What makes this safe
+                // is the client being sequential — the only request that can
+                // name this offset is the one whose append already happened.
+                total = @intCast(cur.len);
+            } else {
+                // A hole or an overlap: the client and the file disagree about
+                // where the push is up to. Refusing is the only honest answer.
+                return writeErr(out, hdr.request_id, ERR_GENERATION);
+            }
+            var n = writeHeader(out, OP_WRITE_AT_R, hdr.request_id);
+            std.mem.writeInt(u32, out[n..][0..4], total, .little);
             n += 4;
             return n;
         },

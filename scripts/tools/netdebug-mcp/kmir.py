@@ -40,6 +40,11 @@ OP_RINGTAIL, OP_RINGTAIL_R = 0x0E, 0x8E
 OP_MCP, OP_MCP_R = 0x0F, 0x8F
 OP_TEXT, OP_TEXT_R = 0x10, 0x90
 OP_FOCUS, OP_FOCUS_R = 0x11, 0x91
+OP_RESEND, OP_RESEND_R = 0x12, 0x92
+OP_WRITE_AT, OP_WRITE_AT_R = 0x13, 0x93
+# Most lines one OP_RESEND may ask for (fileproto.RESEND_MAX_LINES) — the reply
+# must fit one datagram. A wider gap is filled by asking again from further along.
+RESEND_MAX_LINES = 9
 MCP_RESPONSE_FILE = "mcp-response.json"
 # Named (non-character) keys OP_KEY can carry — must match fileproto.KEY_*.
 KEY_NONE, KEY_F11, KEY_F12, KEY_F10, KEY_F1 = 0, 1, 2, 3, 4
@@ -320,6 +325,20 @@ class Client:
             deadline = time.time() + BUSY_RETRY_S
         return sent
 
+    def resend(self, from_seq, count):
+        """Ask for trace lines back by sequence number (DIAG-023).
+
+        Returns the reply body as text: retained lines verbatim (`[NNNNNN] `
+        stamps included, newline-terminated), byte-identical to the stream they
+        fell out of. A line kudos no longer retains is simply absent — that loss
+        is permanent, and the caller reports it instead of asking forever.
+        `count` is capped by the machine at RESEND_MAX_LINES per request; a wider
+        gap is filled by calling again from further along. Idempotent (a pure
+        read), so it rides the ordinary retry loop with nothing to dedup.
+        """
+        body = struct.pack("<IB", from_seq % 1_000_000, min(count, RESEND_MAX_LINES))
+        return self._rpc(body, OP_RESEND).decode("utf-8", "replace")
+
     def focus_window(self, needle, timeout_s=2.0):
         """Focus the front-most visible window whose title contains `needle`, and
         return the title that ended up focused (DIAG-021).
@@ -416,14 +435,28 @@ class Client:
         return self._rpc(b"", OP_VERSION).decode("utf-8", "replace")
 
     def write_file(self, name, data):
-        """Create/overwrite one small ramdisk file (whole file ≤ CHUNK bytes
-        in a single datagram). Returns the file's new generation."""
+        """Create/overwrite one ramdisk file of any size up to the machine's
+        stated ceiling. A file that fits one datagram goes as a single WRITE
+        (returns the new generation); a bigger one goes as append-only WRITE_AT
+        chunks, exactly once each — a retransmitted chunk whose reply was lost
+        is recognised by its offset and re-ACKed, never re-appended."""
         nb = name.encode()
-        if len(data) > CHUNK:
-            raise KmirError(f"WRITE is single-datagram, <= {CHUNK} B; got {len(data)}")
-        r = self._rpc(struct.pack("<H", len(nb)) + nb + data, OP_WRITE)
-        (gen,) = struct.unpack_from("<I", r, 0)
-        return gen
+        if len(data) <= CHUNK:
+            r = self._rpc(struct.pack("<H", len(nb)) + nb + data, OP_WRITE)
+            (gen,) = struct.unpack_from("<I", r, 0)
+            return gen
+        off = 0
+        while off < len(data):
+            piece = data[off:off + CHUNK]
+            r = self._rpc(struct.pack("<H", len(nb)) + nb + struct.pack("<I", off) + piece,
+                          OP_WRITE_AT)
+            (total,) = struct.unpack_from("<I", r, 0)
+            if total != off + len(piece):
+                raise KmirError(
+                    f"WRITE_AT desync: machine has {total} bytes of {name}, "
+                    f"expected {off + len(piece)}")
+            off = total
+        return 0  # chunked path: content placed; generation semantics are LIST's
 
     def _pull_verified(self, meta, out_dir):
         """Download one listed file, CRC-verify, and atomically place it in

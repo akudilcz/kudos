@@ -177,17 +177,99 @@ check "no _impl/_utils/_helper/_manager files" \
 # Runtime abstractions live only at REAL seams — hardware, IO, time, network,
 # randomness (spec ARCH-004). The interface layer is therefore a CLOSED set: a new
 # contract is an architecture decision, declared here or refused at review.
-IFACE_ALLOWED="iaccel iblockdev idesk idevices idisplay idraw ifilesys ilog imouse inet ipci ipresent iramdisk ivirt iwindow"
-undeclared_ifaces() {
-    local f stem
+#
+# And every contract carries a DISPOSITION: whether a loaded .kudos module may bind
+# it (MOD-007) or whether it stays kernel-only, with the reason recorded. The
+# question "can untrusted code reach this?" then has an answer for all of them, and
+# a new contract fails this gate until someone gives it one — "nobody decided" is
+# not a security posture, and it is the state a growing interface layer drifts into
+# on its own.
+#
+# A contract is never published RAW: every one of them is Zig-typed (slices, error
+# unions, tagged unions), which cannot cross the C ABI a module binds through. What
+# a published row names is the capability in abi.zig whose vtable MIRRORS that
+# contract, and the mirror is where the bounds and the copies live.
+#
+#   <contract>:<app|feature|kernel>:<capability or ->:<reason>
+#     app      may be bound by a sandboxed application module (and so by a feature)
+#     feature  may be bound only by a hot-loaded feature module, at full kernel trust
+#     kernel   not published to any module
+#
+# A row states the DECISION and the capability that carries it. Whether kudos
+# publishes it TODAY is a different question with its own answer: the grant table
+# (src/console/grants.zig) is what is published, and `caps` on a running machine is
+# what is live. So an `app` row whose capability has no grant row yet is an adapter
+# still to be written, not a contradiction.
+IFACE_DISPOSITION="
+iaccel:kernel:-:raw scanout VA and the compositor entry — code holding this needs no kernel
+iblockdev:kernel:-:raw sectors; the bounded view is the vfs capability
+idesk:feature:desk:the window list and acting on a window — machine-level control
+idevices:kernel:-:a pull seam over live driver state; no module-facing mirror of it exists
+idisplay:app:metrics:frame timing, read-only
+idraw:kernel:-:the rasteriser command sink, valid only inside core 0's open frame
+ifilesys:app:vfs:the file system beyond the module's ramdisk sandbox
+ilog:kernel:-:the kernel trace; a feature reaches it through FeatureApi.log and an app through Api.print, so nothing is bound
+imouse:app:input:pointer events for the module's own focused window
+inet:app:net:the network stack
+ipci:kernel:-:raw hardware enumeration
+ipresent:kernel:-:GPU submit and flip; K1, and core-0 only
+iramdisk:kernel:-:the base Api already carries file_read/file_write over it
+iscene:app:gl:recorded 3D replayed into the module's window; validated before any GL call
+ivirt:feature:guests:guest virtual machines — machine-level control
+iwindow:app:window:the module's own windows, pixels copied on the module's own core
+"
+
+# Every contract has exactly one row, and only the declared dispositions exist.
+iface_disposition_rows() {
+    local f stem row
     for f in src/iface/*.zig; do
         stem="$(basename "$f" .zig)"
-        case " $IFACE_ALLOWED " in *" $stem "*) ;; *) echo "$f" ;; esac
+        row="$(printf '%s\n' "$IFACE_DISPOSITION" | grep -c "^$stem:")"
+        [ "$row" = 1 ] || echo "$f has $row disposition rows (want exactly 1)"
+    done
+    printf '%s\n' "$IFACE_DISPOSITION" | grep -v '^[[:space:]]*$' | while IFS=: read -r stem disp cap reason; do
+        [ -f "src/iface/$stem.zig" ] || echo "$stem is declared but src/iface/$stem.zig does not exist"
+        case "$disp" in
+            app|feature|kernel) ;;
+            *) echo "$stem has disposition '$disp' (want app, feature or kernel)" ;;
+        esac
+        [ -n "$reason" ] || echo "$stem states no reason for its disposition"
+        # kernel-only rows name no capability; published rows must name one.
+        case "$disp" in
+            kernel) [ "$cap" = "-" ] || echo "$stem is kernel-only but names capability '$cap'" ;;
+            *) [ "$cap" != "-" ] || echo "$stem is published but names no capability" ;;
+        esac
     done
 }
-check "the interface layer is a closed, declared seam set (ARCH-004)" \
-    "a new runtime abstraction is an architecture decision — declare it in IFACE_ALLOWED, or pass a value instead of a dependency" \
-    undeclared_ifaces
+check "every interface contract is a closed, declared seam with a disposition (ARCH-004, MOD-007)" \
+    "declare the contract in IFACE_DISPOSITION — publish it to modules with its capability, or record why it stays kernel-only" \
+    iface_disposition_rows
+
+# A published row is a claim with two halves, and both are checkable: the ABI must
+# DEFINE that capability (an id in abi.zig's Interface), and the registry must
+# publish it (a row in the grant table). A claim here that neither file backs is a
+# capability that exists only in this comment.
+iface_published_backing() {
+    printf '%s\n' "$IFACE_DISPOSITION" | grep -v '^[[:space:]]*$' | while IFS=: read -r stem disp cap _; do
+        [ "$disp" = kernel ] && continue
+        grep -qE "^    $cap = [0-9]+,$" src/kernel/loader/abi.zig \
+            || echo "$stem names capability '$cap', which abi.zig's Interface does not define"
+    done
+}
+check "a published contract's capability exists in the ABI (MOD-007)" \
+    "add the id to abi.Interface, or correct the disposition row" \
+    iface_published_backing
+
+# A contract is reached BY NAME (`@import("iwindow")`), never by relative path.
+# The name is what makes it a contract wired in one place (build.zig's iface_mods)
+# rather than a file two groups happen to reach into — and a relative import from
+# two groups is how a shared mailbox quietly becomes two instances.
+iface_relative_imports() {
+    grep -rEn '@import\("(\.\./)+iface/' src/ || true
+}
+check "an interface contract is imported by name, not by path (ARCH-002)" \
+    "wire it into build.zig's iface_mods and @import(\"<name>\")" \
+    iface_relative_imports
 
 # A contract must not reach into an implementation (spec ARCH-002). The point of
 # the interface layer is that the subsystems either side of it stay MUTUALLY

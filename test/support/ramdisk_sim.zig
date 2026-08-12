@@ -6,23 +6,34 @@ const iramdisk = @import("iramdisk");
 
 pub const RamdiskSim = struct {
     const MAX = 8;
+    /// Bytes one stored file may hold. The REAL ramdisk copies to the heap;
+    /// this fake copies to fixed storage, because storing the CALLER'S slice —
+    /// as an earlier version did — let a caller that reuses its request buffer
+    /// silently corrupt the "stored" file, which the hardware store can never
+    /// do. A fake must fail the same ways the real thing fails, not new ones.
+    const DATA_MAX = 4096;
     names: [MAX][]const u8 = undefined,
-    datas: [MAX][]const u8 = undefined,
+    datas: [MAX][DATA_MAX]u8 = undefined,
+    lens: [MAX]usize = undefined,
     gens: [MAX]u32 = undefined,
     n: usize = 0,
 
     pub fn add(self: *RamdiskSim, name: []const u8, data: []const u8, generation: u32) void {
+        std.debug.assert(data.len <= DATA_MAX);
         self.names[self.n] = name;
-        self.datas[self.n] = data;
+        @memcpy(self.datas[self.n][0..data.len], data);
+        self.lens[self.n] = data.len;
         self.gens[self.n] = generation;
         self.n += 1;
     }
 
     fn vtPut(ctx: *anyopaque, name: []const u8, data: []const u8) iramdisk.PutError!void {
         const self: *RamdiskSim = @ptrCast(@alignCast(ctx));
+        if (data.len > DATA_MAX) return error.OutOfMemory;
         for (0..self.n) |i| {
             if (std.mem.eql(u8, self.names[i], name)) {
-                self.datas[i] = data;
+                @memcpy(self.datas[i][0..data.len], data);
+                self.lens[i] = data.len;
                 self.gens[i] += 1;
                 return;
             }
@@ -32,7 +43,7 @@ pub const RamdiskSim = struct {
     }
     fn vtGet(ctx: *anyopaque, name: []const u8) ?[]const u8 {
         const self: *RamdiskSim = @ptrCast(@alignCast(ctx));
-        for (0..self.n) |i| if (std.mem.eql(u8, self.names[i], name)) return self.datas[i];
+        for (0..self.n) |i| if (std.mem.eql(u8, self.names[i], name)) return self.datas[i][0..self.lens[i]];
         return null;
     }
     fn vtCount(ctx: *anyopaque) usize {
@@ -43,9 +54,9 @@ pub const RamdiskSim = struct {
         const self: *RamdiskSim = @ptrCast(@alignCast(ctx));
         return .{
             .name = self.names[i],
-            .data = self.datas[i],
+            .data = self.datas[i][0..self.lens[i]],
             .generation = self.gens[i],
-            .crc32 = crc32(self.datas[i]),
+            .crc32 = crc32(self.datas[i][0..self.lens[i]]),
         };
     }
 

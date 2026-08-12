@@ -33,6 +33,9 @@ const SinkSim = struct {
     stats_calls: usize = 0,
     ringtail_calls: usize = 0,
     last_ringtail_kib: u16 = 0,
+    resend_calls: usize = 0,
+    last_resend_from: u32 = 0,
+    last_resend_count: u32 = 0,
     mcp_calls: usize = 0,
     mcp_body_buf: [256]u8 = undefined,
     mcp_body_len: usize = 0,
@@ -142,6 +145,25 @@ const SinkSim = struct {
         if (self.mcp_fs) |f| f.fs().put(fileproto.MCP_RESPONSE_FILE, self.mcp_response) catch {};
     }
 
+    fn resend(ctx: *anyopaque, from: u32, count: u32, out: []u8) usize {
+        const self: *SinkSim = @ptrCast(@alignCast(ctx));
+        self.resend_calls += 1;
+        self.last_resend_from = from;
+        self.last_resend_count = count;
+        // Serve one synthetic retained line per requested seq, in the stream's
+        // exact format, so the reply-shape tests read like the real thing.
+        var used: usize = 0;
+        var i: u32 = 0;
+        while (i < count) : (i += 1) {
+            var buf: [32]u8 = undefined;
+            const line = std.fmt.bufPrint(&buf, "[{d:0>6}] retained\n", .{from + i}) catch break;
+            if (used + line.len > out.len) break;
+            @memcpy(out[used..][0..line.len], line);
+            used += line.len;
+        }
+        return used;
+    }
+
     const vtable = fileproto.Inject.VTable{
         .key = key,
         .text = text,
@@ -156,6 +178,7 @@ const SinkSim = struct {
         .stats = stats,
         .ringtail = ringtail,
         .mcp = mcp,
+        .resend = resend,
     };
 
     fn inject(self: *SinkSim) fileproto.Inject {
@@ -469,6 +492,94 @@ test "RINGTAIL carries its KiB argument and defaults to 64 without one" {
     const bn = fileproto.writeHeader(&bare, fileproto.OP_RINGTAIL, 92);
     _ = srv.reply(bare[0..bn], &out);
     try std.testing.expectEqual(@as(u16, 64), srv.sink.last_ringtail_kib);
+}
+
+test "RESEND serves retained lines verbatim in the stream's own format (DIAG-023)" {
+    var srv = Server{ .s = newSim() };
+    var req: [16]u8 = undefined;
+    var out: [1400]u8 = undefined;
+
+    const rn = fileproto.writeResendReq(&req, 93, 41, 2);
+    const n = srv.reply(req[0..rn], &out);
+    const hdr = fileproto.parseHeader(out[0..n]).?;
+    try std.testing.expectEqual(fileproto.OP_RESEND_R, hdr.op);
+    try std.testing.expectEqual(@as(u16, 93), hdr.request_id);
+    // The body IS trace-stream bytes: seq-stamped, newline-terminated lines the
+    // collector splices into its capture without translation.
+    try std.testing.expectEqualStrings(
+        "[000041] retained\n[000042] retained\n",
+        out[fileproto.HDR_LEN..n],
+    );
+    try std.testing.expectEqual(@as(u32, 41), srv.sink.last_resend_from);
+}
+
+test "RESEND is capped, not deduped: a retransmit re-serves (DIAG-023)" {
+    var srv = Server{ .s = newSim() };
+    var req: [16]u8 = undefined;
+    var out: [1400]u8 = undefined;
+
+    // A greedy count is clamped to the datagram-shaped maximum, so the reply can
+    // never outgrow MAX_CHUNK however wide the receiver's gap was.
+    const rn = fileproto.writeResendReq(&req, 94, 1, 255);
+    _ = srv.reply(req[0..rn], &out);
+    try std.testing.expectEqual(@as(u32, fileproto.RESEND_MAX_LINES), srv.sink.last_resend_count);
+
+    // The identical request again: served again — a lost reply's retransmit
+    // must fetch the same lines, so this op deliberately skips the dedup group.
+    _ = srv.reply(req[0..rn], &out);
+    try std.testing.expectEqual(@as(usize, 2), srv.sink.resend_calls);
+}
+
+fn writeAtReq(buf: []u8, rid: u16, name: []const u8, offset: u32, data: []const u8) usize {
+    var n = fileproto.writeHeader(buf, fileproto.OP_WRITE_AT, rid);
+    std.mem.writeInt(u16, buf[n..][0..2], @intCast(name.len), .little);
+    n += 2;
+    @memcpy(buf[n..][0..name.len], name);
+    n += name.len;
+    std.mem.writeInt(u32, buf[n..][0..4], offset, .little);
+    n += 4;
+    @memcpy(buf[n..][0..data.len], data);
+    return n + data.len;
+}
+
+test "WRITE_AT assembles a file in exactly-once pieces (DIAG-025)" {
+    var srv = Server{ .s = newSim() };
+    var req: [256]u8 = undefined;
+    var out: [64]u8 = undefined;
+
+    // Chunk 1 creates; chunk 2 appends; the reply's total is the next offset.
+    var n = srv.reply(req[0..writeAtReq(&req, 70, "big.bin", 0, "hello ")], &out);
+    try std.testing.expectEqual(fileproto.OP_WRITE_AT_R, fileproto.parseHeader(out[0..n]).?.op);
+    try std.testing.expectEqual(@as(u32, 6), std.mem.readInt(u32, out[fileproto.HDR_LEN..][0..4], .little));
+    n = srv.reply(req[0..writeAtReq(&req, 71, "big.bin", 6, "kudos")], &out);
+    try std.testing.expectEqual(@as(u32, 11), std.mem.readInt(u32, out[fileproto.HDR_LEN..][0..4], .little));
+    try std.testing.expectEqualStrings("hello kudos", srv.s.fs().get("big.bin").?);
+
+    // The lost-reply retransmit of chunk 2: recognised by its offset, re-ACKed,
+    // NOT re-appended — that is what "exactly once" means on this channel.
+    n = srv.reply(req[0..writeAtReq(&req, 72, "big.bin", 6, "kudos")], &out);
+    try std.testing.expectEqual(fileproto.OP_WRITE_AT_R, fileproto.parseHeader(out[0..n]).?.op);
+    try std.testing.expectEqual(@as(u32, 11), std.mem.readInt(u32, out[fileproto.HDR_LEN..][0..4], .little));
+    try std.testing.expectEqualStrings("hello kudos", srv.s.fs().get("big.bin").?);
+
+    // A hole (offset past the end) is a desync, refused loudly.
+    n = srv.reply(req[0..writeAtReq(&req, 73, "big.bin", 99, "xx")], &out);
+    try std.testing.expectEqual(fileproto.OP_ERR, fileproto.parseHeader(out[0..n]).?.op);
+
+    // Offset 0 again truncates: a fresh push starts clean.
+    _ = srv.reply(req[0..writeAtReq(&req, 74, "big.bin", 0, "new")], &out);
+    try std.testing.expectEqualStrings("new", srv.s.fs().get("big.bin").?);
+}
+
+test "a truncated RESEND request is a BAD_REQUEST, not a guess" {
+    var srv = Server{ .s = newSim() };
+    var req: [16]u8 = undefined;
+    var out: [64]u8 = undefined;
+    const rn = fileproto.writeResendReq(&req, 95, 7, 1);
+    const n = srv.reply(req[0 .. rn - 2], &out); // body cut mid-field
+    const hdr = fileproto.parseHeader(out[0..n]).?;
+    try std.testing.expectEqual(fileproto.OP_ERR, hdr.op);
+    try std.testing.expectEqual(@as(usize, 0), srv.sink.resend_calls);
 }
 
 test "VERSION reports the running kernel's identity, and is not deduped either" {

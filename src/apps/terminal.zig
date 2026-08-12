@@ -502,7 +502,14 @@ pub const Terminal = struct {
         if (self.ai_mode) return self.execLine(self.ed.text());
         const parsed = shell.splitCommand(self.ed.text());
         if (localcmd.lookup(parsed.cmd)) |c| {
-            c.run(self.localOut(), parsed.args);
+            const out = self.localOut();
+            if (localcmd.refusesRedirect(parsed.args)) {
+                out.str("error: '");
+                out.str(parsed.cmd);
+                out.str("' runs on this core and cannot redirect to a file\n");
+                return;
+            }
+            c.run(out, parsed.args);
             return;
         }
         shell.execute(self.console(), self.ed.text());

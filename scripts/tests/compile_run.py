@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Compile a program inside kudos and run it — the whole loop, on this laptop.
 
-kudos carries no compiler (spec ARCH-012). This track proves the path that gets
-around that WITHOUT a person driving it: a `compile` command in a kudos terminal
-sends a .zig file from the ramdisk to a factory over HTTP, the factory answers
-with a position-independent `.kudos` image, kudos saves it, and `run` loads and
-executes it inside a session address space (MOD-006) — and the program's own
-output comes back on the terminal.
+kudos carries no compiler (ARCH-012). This track proves the path around that with
+nobody driving it: a source file is TYPED onto the ramdisk with shell redirection
+(APP-028), `compile` sends it to a factory over HTTP, the factory answers with a
+position-independent `.kudos`, and `run` executes it in a session address space
+(MOD-006) — with the program's own output coming back on the terminal.
+
+The typing is the point, not scaffolding: the image seeds no sample, so the whole
+chain begins with keystrokes and nothing reaches in from outside to place a file.
 
 It runs on a DEVELOPER LAPTOP and nothing else: no GPU, no USB stick, no lemon.
 The factory is started here, on the host, and reached at 10.0.2.2 — QEMU slirp's
@@ -21,7 +23,8 @@ the emulated USB keyboard.
 Fails LOUD (non-zero) with the captured trace on any miss.
 
 Two drivers, one loop:
-  (default)  a PERSON at the shell — `compile hello.zig hello` then `run hello`.
+  (default)  a PERSON at the shell — types the source with `echo ... > hello.zig`,
+             then `compile hello.zig hello` and `run hello`.
   --agent    THE AGENT — the F10 window is asked in English to write the program,
              compile it and run it, and the same three things are asserted. This
              is the whole point of the machine (AGT-001): it needs a service
@@ -33,6 +36,7 @@ factory shells out to it). --factory points kudos at a factory that is ALREADY
 running — the zig-server guest, say — instead of starting one on the host.
 """
 import os
+import re
 import subprocess
 import sys
 import time
@@ -44,6 +48,11 @@ import qmp  # noqa: E402
 from guest_boot import Netdebug, wait_for  # noqa: E402  (the same trace decoder)
 
 OUT = os.path.join(ROOT, "build/logs")
+# Made here, at import, not where the first log happens to be opened: `build/` is a
+# generated tree that `make clean` takes away, and every path below writes into this
+# directory — the factory's log first, before any QEMU setup runs. Creating it late
+# means a clean checkout fails on the log file rather than on anything it tests.
+os.makedirs(OUT, exist_ok=True)
 PCAP = os.path.join(OUT, "compile-run.pcap")
 QMP_SOCK = "/tmp/kudos-compile-run-qmp.sock"
 LOG = os.path.join(OUT, "compile-run.log")
@@ -69,13 +78,35 @@ AGENT_BUDGET_S = 300
 # default). A build sealed with another one is told so by the /login refusal.
 AGENT_PASSPHRASE = os.environ.get("KUDOS_AGENT_PASSPHRASE", "welcome")
 
-# The module built from the seeded sample (main_root.seedRamdisk).
+# The module this test types in, compiles and runs. NOTHING is pre-seeded: the
+# image deliberately ships no sample, because a program that was already there
+# made the demo lie about who wrote it. So the source arrives the way a person
+# with no editor puts one on the machine — `echo ... > file` (APP-028) — and the
+# lines come from scripts/agent/samples/hello.zig, the same file the host factory
+# tests compile.
 SOURCE = "hello.zig"
 MODULE = "hello"
-# What the sample prints. It lives in scripts/agent/samples/hello.zig, which is
-# the file the image seeds, so this is one string in two places by necessity —
-# the assertion has to state what "it ran" means.
+# What the sample prints — the assertion has to state what "it ran" means.
 EXPECTED_OUTPUT = "hello from a .kudos app"
+# ...and this is how that assertion is made. `wait_for` searches the CUMULATIVE
+# trace, and this test types the program's own source — including the string it
+# prints — so a bare search for EXPECTED_OUTPUT would be satisfied by the ECHO of
+# the line that wrote it, before anything had run. The trace mirrors each terminal
+# line as `dbg: term.0 = <line>`; anchoring there separates the two, because the
+# echoed line carries the shell prompt and `echo ` in front of the string.
+RAN_OUTPUT = r"term\.0 = " + re.escape(EXPECTED_OUTPUT)
+# How much of a typed line's echo is looked for. The terminal grid is 80 columns
+# and mirrors a WRAPPED line to the trace as two records (`term.0+ = <head>` then
+# the remainder), so a long line's echo is not contiguous text to search for. A
+# prefix that cannot wrap — shell prompt included — is enough to recognise which
+# line came back.
+ECHO_PREFIX_CHARS = 40
+# How long one typed line's echo is waited for before moving on. This wait is
+# PACING AND PROGRESS, not an assertion: the trace is a lossy capture — records are
+# dropped in flight, which shows up as gaps in the record numbering — and one
+# missing echo among a dozen must not fail a loop that worked. What proves all the
+# lines landed intact is the COMPILE, which fails loudly on a mangled source.
+LINE_ECHO_S = 10
 
 # Budgets. A compile is a network round trip plus a real zig invocation on the
 # host: a warm cache does it in under a second, a cold one takes tens.
@@ -110,7 +141,6 @@ def start_factory():
 
 
 def start_qemu(display):
-    os.makedirs(OUT, exist_ok=True)
     for f in (PCAP, QMP_SOCK):
         try:
             os.unlink(f)
@@ -160,6 +190,78 @@ def send(q, nd, line, echo, budget, label):
     if not wait_for(nd, echo, 15, f"typed: {label}"):
         return False
     return True
+
+
+def source_lines():
+    """The sample's code, as lines to type at the shell.
+
+    Read from the sample rather than restated here, so the program the gate types
+    is the program the host factory tests compile — one file, two uses. Prose is
+    dropped: every character costs a paced keystroke (qmp.INTER_KEY_S), and a doc
+    comment does not change what the compiler produces.
+    """
+    path = os.path.join(ROOT, "scripts/agent/samples", SOURCE)
+    lines = []
+    for raw in open(path).read().splitlines():
+        line = raw.strip()
+        if line and not line.startswith("//"):
+            lines.append(line)
+    # A line whose own text contains a redirection token would be split by the
+    # shell at the wrong place, and the file would come out mangled in a way that
+    # reads as a compiler error. Refuse here, naming the rule, rather than
+    # debugging it from the other end.
+    for line in lines:
+        if any(tok in (">", ">>") for tok in line.split()):
+            raise SystemExit(
+                f"compile_run: {SOURCE} has a line the shell would read as a "
+                f"redirection: {line!r} (see src/console/redirect.zig)")
+    return lines
+
+
+def wait_for_nth(nd, pattern, n, timeout, label):
+    """Wait until `pattern` has appeared at least `n` times in the trace.
+
+    The cumulative single-match search (`wait_for`) cannot confirm a line the file
+    REPEATS: hello.zig closes two functions with a bare `}`, so the second echo is
+    indistinguishable from the first unless occurrences are counted. Counting keeps
+    each typed line proving its own arrival.
+    """
+    rx = re.compile(pattern)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        nd.poll()
+        if len(rx.findall(nd.text)) >= n:
+            print(f"  ok   {label}")
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def type_source(q, nd):
+    """Write the program onto the ramdisk, one echo per line (APP-028, APP-029).
+
+    kudos carries no editor, so this is how a person authors a file on it: the first
+    line replaces, the rest append. Each line's echo is WATCHED FOR but not
+    required — see LINE_ECHO_S. The compile that follows is what proves the file
+    arrived intact, and it proves more than an echo can: every character of every
+    line, as judged by a compiler.
+    """
+    lines = source_lines()
+    # The first line replaces, the rest append — so a re-run overwrites the file
+    # rather than doubling it.
+    cmds = [f"echo {line} {'>' if i == 0 else '>>'} {SOURCE}"
+            for i, line in enumerate(lines)]
+    print(f"compile_run: typing {SOURCE} in, {len(cmds)} lines ...")
+    seen = {}
+    for i, cmd in enumerate(cmds):
+        head = cmd[:ECHO_PREFIX_CHARS]
+        seen[head] = seen.get(head, 0) + 1
+        q.type_str(cmd)
+        q.key("ret")
+        if not wait_for_nth(nd, re.escape(head), seen[head], LINE_ECHO_S,
+                            f"{SOURCE} line {i + 1}: {cmd}"):
+            print(f"  ..   {SOURCE} line {i + 1}: echo not seen (dropped record) — "
+                  f"the compile below is the real check")
 
 
 def drive_agent(q, nd):
@@ -259,19 +361,28 @@ def main():
         if agent:
             return drive_agent(q, nd)
 
-        # 3. Compile the seeded sample. ARCH-012: the compile happens off-target.
-        if not send(q, nd, f"compile {SOURCE} {MODULE}", r"compile hello\.zig",
-                    COMPILE_BUDGET_S, "compile hello.zig"):
-            return fail(nd, "the `compile` line never reached the terminal")
+        # 3. Write the program. Nothing was seeded, so these keystrokes are the
+        #    only reason a source file exists at all.
+        type_source(q, nd)
+
+        # 4. Compile it. ARCH-012: the compile happens off-target. No echo check
+        #    here — this command's OWN output is the stronger and immediate proof,
+        #    and asking for both only adds a record the capture can lose.
+        q.type_str(f"compile {SOURCE} {MODULE}")
+        q.key("ret")
         if not wait_for(nd, rf"compiled {MODULE}\.kudos \(\d+ bytes\)",
                         COMPILE_BUDGET_S, "compiled"):
-            return fail(nd, "the factory never returned a .kudos image")
+            return fail(nd, "the factory never returned a .kudos image — the typed "
+                            "source did not compile (the compiler's errors are in "
+                            "the trace above), or the factory is unreachable")
 
-        # 4. Run it: the loader verifies the image and executes it in a session
-        #    address space, and what the program printed comes back here.
-        if not send(q, nd, f"run {MODULE}", r"run hello", RUN_BUDGET_S, "run hello"):
-            return fail(nd, "the `run` line never reached the terminal")
-        if not wait_for(nd, EXPECTED_OUTPUT, RUN_BUDGET_S, "program output"):
+        # 5. Run it: the loader verifies the image and executes it in a session
+        #    address space, and what the program printed comes back here. Again no
+        #    echo check: "run hello" appears in the compile's own advice line, so an
+        #    echo search for it would pass without a program having run at all.
+        q.type_str(f"run {MODULE}")
+        q.key("ret")
+        if not wait_for(nd, RAN_OUTPUT, RUN_BUDGET_S, "program output"):
             return fail(nd, "the compiled program never printed its line")
         if not wait_for(nd, r"\[exit 0\]", RUN_BUDGET_S, "exit status"):
             return fail(nd, "the program did not exit 0")

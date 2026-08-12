@@ -1,0 +1,98 @@
+//! Host tests of src/console/redirect.zig — the redirection grammar (APP-028,
+//! APP-029) and the capture budget (APP-030).
+
+const std = @import("std");
+const redirect = @import("redirect");
+
+test "a line with no redirection is not one (APP-028)" {
+    try std.testing.expect(redirect.parse("echo hello") == null);
+    try std.testing.expect(redirect.parse("") == null);
+    // Not space-delimited, so it is text: this is what lets source code carrying
+    // comparisons be typed at the shell at all.
+    try std.testing.expect(redirect.parse("echo a>b") == null);
+    try std.testing.expect(redirect.parse("echo if (a>b) {") == null);
+}
+
+test "`>` splits the command from its file (APP-028)" {
+    const r = redirect.parse("echo hello > out.txt").?;
+    try std.testing.expectEqualStrings("echo hello", r.command);
+    try std.testing.expectEqualStrings("out.txt", r.path);
+    try std.testing.expectEqual(redirect.Mode.replace, r.mode);
+}
+
+test "`>>` appends instead of replacing (APP-029)" {
+    const r = redirect.parse("echo more >> out.txt").?;
+    try std.testing.expectEqualStrings("echo more", r.command);
+    try std.testing.expectEqualStrings("out.txt", r.path);
+    try std.testing.expectEqual(redirect.Mode.append, r.mode);
+}
+
+test "the LAST redirection wins, so a comparison in the text survives (APP-028)" {
+    // The reason the rule is "last": this is a line of Zig source being typed
+    // into a file, and its own text contains a `>` token.
+    const r = redirect.parse("echo if (a > b) { >> guard.zig").?;
+    try std.testing.expectEqualStrings("echo if (a > b) {", r.command);
+    try std.testing.expectEqualStrings("guard.zig", r.path);
+    try std.testing.expectEqual(redirect.Mode.append, r.mode);
+}
+
+test "a redirection with no path, and one with several, are reported as shapes" {
+    // parse stays total: it reports what it found and the shell owns the wording.
+    const none = redirect.parse("echo hi >").?;
+    try std.testing.expectEqualStrings("echo hi", none.command);
+    try std.testing.expectEqualStrings("", none.path);
+
+    const many = redirect.parse("echo hi > a.txt b.txt").?;
+    try std.testing.expectEqualStrings("a.txt b.txt", many.path);
+    try std.testing.expect(std.mem.indexOfScalar(u8, many.path, ' ') != null);
+
+    const nocmd = redirect.parse("> a.txt").?;
+    try std.testing.expectEqualStrings("", nocmd.command);
+    try std.testing.expectEqualStrings("a.txt", nocmd.path);
+}
+
+test "a sink takes output up to its budget and counts what it lost (APP-030)" {
+    var buf: [4]u8 = undefined;
+    var sink = redirect.Sink{ .buf = &buf };
+    for ("abcdef") |ch| sink.put(ch);
+    try std.testing.expectEqualStrings("abcd", sink.bytes());
+    try std.testing.expectEqual(@as(usize, 2), sink.lost);
+    try std.testing.expect(sink.overflowed());
+}
+
+test "a sink under budget reports no loss (APP-030)" {
+    var buf: [8]u8 = undefined;
+    var sink = redirect.Sink{ .buf = &buf };
+    sink.put('h');
+    sink.put('i');
+    try std.testing.expectEqualStrings("hi", sink.bytes());
+    try std.testing.expect(!sink.overflowed());
+}
+
+test "prefill puts the existing file in front of new output (APP-029)" {
+    var buf: [16]u8 = undefined;
+    var sink = redirect.Sink{ .buf = &buf };
+    try std.testing.expect(sink.prefill("old\n"));
+    for ("new\n") |ch| sink.put(ch);
+    try std.testing.expectEqualStrings("old\nnew\n", sink.bytes());
+    try std.testing.expect(!sink.overflowed());
+}
+
+test "prefill refuses a file that already exceeds the budget (APP-030)" {
+    var buf: [4]u8 = undefined;
+    var sink = redirect.Sink{ .buf = &buf };
+    // Refused, not truncated: the caller writes nothing rather than shortening
+    // the file it was asked to append to.
+    try std.testing.expect(!sink.prefill("too long for four"));
+    try std.testing.expectEqual(@as(usize, 0), sink.len);
+    // And only ever the first act on a sink — a second prefill cannot splice
+    // content into the middle of captured output.
+    try std.testing.expect(sink.prefill("ab"));
+    try std.testing.expect(!sink.prefill("cd"));
+}
+
+test "the budget is a stated size, not an accident (APP-030)" {
+    // A source file typed a line at a time must fit with room to spare; the
+    // constant is the contract the shell reports when a redirection overflows.
+    try std.testing.expect(redirect.MAX_BYTES >= 4 << 10);
+}

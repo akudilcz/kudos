@@ -15,6 +15,12 @@ pub const API_METHODS: []const u8 = methodsOf(abi.Api, "api");
 /// The `FeatureApi` capabilities — what a hot-loaded feature reaches through.
 pub const FEATURE_API_METHODS: []const u8 = methodsOf(abi.FeatureApi, "api");
 
+/// The bindable capability interfaces, built from `abi.CAPABILITIES`: one block
+/// per interface with its id, version and the calls on its vtable. Generated for
+/// the same reason API_METHODS is — a capability documented by hand is a
+/// capability that will be documented wrongly one release from now.
+pub const CAPABILITIES_DOC: []const u8 = capabilitiesDoc();
+
 /// One "  - <recv>.<field>\n" line per callable field of `T`, skipping the
 /// non-callable bookkeeping fields (version, ctx, padding).
 fn methodsOf(comptime T: type, comptime recv: []const u8) []const u8 {
@@ -25,6 +31,35 @@ fn methodsOf(comptime T: type, comptime recv: []const u8) []const u8 {
         s = s ++ "  - " ++ recv ++ "." ++ f.name ++ "\n";
     }
     return s;
+}
+
+/// "  <name> (id N, version V): call, call, ..." for every capability the ABI
+/// defines. The vtable's field names ARE the documentation: a module reads
+/// abi.zig for the signatures (the read_abi tool serves it), and this list is what
+/// tells the model the interface exists at all.
+fn capabilitiesDoc() []const u8 {
+    var s: []const u8 = "";
+    for (abi.CAPABILITIES) |cap| {
+        s = s ++ "  " ++ @tagName(cap.id) ++ " (id " ++ digits(@intFromEnum(cap.id)) ++
+            ", version " ++ digits(cap.version) ++ "): ";
+        var first = true;
+        for (@typeInfo(cap.vtable).@"struct".fields) |f| {
+            if (f.name[0] == '_') continue;
+            if (std_eql(f.name, "version") or std_eql(f.name, "ctx")) continue;
+            s = s ++ (if (first) "" else ", ") ++ f.name;
+            first = false;
+        }
+        s = s ++ "\n";
+    }
+    return s;
+}
+
+/// A small unsigned value as decimal text at comptime. std.fmt is not reachable
+/// here: this module is compiled into the freestanding kernel AND read by the host
+/// prompt test, and the string has to exist at comptime either way.
+fn digits(comptime v: u32) []const u8 {
+    if (v < 10) return &[_]u8{'0' + @as(u8, @intCast(v))};
+    return digits(v / 10) ++ &[_]u8{'0' + @as(u8, @intCast(v % 10))};
 }
 
 fn std_eql(a: []const u8, b: []const u8) bool {
@@ -45,6 +80,10 @@ pub const SYSTEM: []const u8 =
     \\run_app with the same name: it executes the module and returns everything
     \\the module printed plus its exit code, so a question with an answer in it
     \\is answered by running the program, not by working the answer out yourself.
+    \\A program whose answer is what it DRAWS — a visualisation, an animation, a
+    \\game — is started with run_window instead: it runs detached, binds the
+    \\window interface, creates its own window(s), and renders until
+    \\WindowApi.closed(handle) goes true. Its prints go nowhere.
     \\For a kernel feature, use compile_feature instead, then load_feature and
     \\invoke_command to run it.
     \\
@@ -67,6 +106,25 @@ pub const SYSTEM: []const u8 =
     \\and it reaches the system ONLY through the passed `api`, whose methods are:
     \\
 ++ API_METHODS ++
+    \\
+    \\Beyond those, richer capabilities are BOUND at runtime rather than always
+    \\present. `api.get_interface(api.ctx, id, version)` returns a pointer to that
+    \\interface's vtable, or null when this kudos does not publish it to your kind
+    \\of program — so always check for null and carry on without it. Cast the
+    \\result, e.g.:
+    \\    const w: *const abi.WindowApi = @ptrCast(@alignCast(
+    \\        api.get_interface(api.ctx, @intFromEnum(abi.Interface.window), 1)
+    \\        orelse return 1));
+    \\    const h = w.create(api.ctx, "plot", 4, 640, 480, abi.WINDOW_PIXELS);
+    \\Handles: a window is a u32 you pass back to every call about it; 0 means
+    \\refused. A module may own several windows at once.
+    \\The interfaces this ABI defines, with the calls each vtable carries:
+    \\
+++ CAPABILITIES_DOC ++
+    \\
+    \\read_abi shows the exact signatures and what each call promises. A capability
+    \\may be refused for a good reason: a program the agent runs has no terminal
+    \\behind it, so it is given no window.
     \\
     \\Rules the compiler enforces — follow them or compilation fails:
     \\  - `@import("abi.zig")` is the only kudos import; reach the system only
@@ -105,6 +163,13 @@ pub const IMPROVE_SYSTEM: []const u8 =
     \\     and it reaches the system ONLY through the passed FeatureApi:
     \\
 ++ FEATURE_API_METHODS ++
+    \\
+    \\     A feature binds richer capabilities the same way an app does, through
+    \\     `api.get_interface(api.ctx, id, version)` — null when this kudos does not
+    \\     publish that one to a feature. A feature runs at full kernel trust, so it
+    \\     is granted more than an app is. The interfaces this ABI defines:
+    \\
+++ CAPABILITIES_DOC ++
     \\
     \\  4. compile_feature it. If compilation fails you are shown the errors; fix
     \\     and retry.

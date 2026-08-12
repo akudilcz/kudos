@@ -6,7 +6,9 @@
 """netdebug-mcp — an MCP server for the kudos debug channels.
 
 Two channels, one server:
-- netdebug CAPTURE (UDP 9514 broadcast, lossy): boot/trace lines, buffered here.
+- netdebug CAPTURE (UDP 9514): boot/trace lines, buffered here. A wire loss shows
+  as a sequence gap AND is recoverable — kudos retains sent lines, and
+  netdebug_recover fetches the missing ones back over the RPC channel (DIAG-023).
 - netdebug RPC (UDP 9515, reliable, kmir.py client): input injection and
   screenshot download.
 
@@ -59,6 +61,10 @@ class Record:
     text: str  # the line WITHOUT the [NNNNNN] prefix, trailing newline stripped
     raw: str  # the full line as received (prefix included), newline stripped
     t: float  # monotonic arrival time
+    # True for a line that was LOST on the wire and fetched back over the RPC
+    # channel (netdebug_recover, DIAG-023). It arrives late, so it sits at the
+    # ring's tail out of stream order; the flag says why.
+    recovered: bool = False
 
 
 @dataclass
@@ -76,8 +82,11 @@ class Capture:
     last_seq: int | None = None  # most recent parsed seq (for gap detection)
     gaps: list[tuple[int, int]] = field(default_factory=list)  # (after_seq, missing_count)
     dropped_total: int = 0  # sum of missing datagrams inferred from seq gaps
+    recovered_total: int = 0  # lines fetched back over RPC (netdebug_recover)
+    unrecoverable_total: int = 0  # lines kudos no longer retained when asked
     bind_error: str | None = None  # non-None if the socket failed to bind
     recent: deque[float] = field(default_factory=lambda: deque(maxlen=RING_CAP))  # arrival times for rate
+    source_ip: str | None = None  # where the trace comes FROM — kudos itself, learned per datagram
 
     def add(self, raw_bytes: bytes) -> None:
         # A datagram now PACKS multiple newline-delimited lines (netdebug coalesces up
@@ -136,10 +145,14 @@ def _listener() -> None:
         return
     while True:
         try:
-            data, _addr = sock.recvfrom(2048)
+            data, addr = sock.recvfrom(2048)
         except OSError:
             continue
         if data:
+            # The datagram's source IS kudos — remember it, so gap recovery (and
+            # any RPC tool called without an ip) has a target with no discovery.
+            with CAP.lock:
+                CAP.source_ip = addr[0]
             CAP.add(data)
 
 
@@ -362,11 +375,84 @@ def netdebug_gaps() -> dict:
     with CAP.lock:
         gaps = list(CAP.gaps)
         dropped = CAP.dropped_total
+        recovered = CAP.recovered_total
+        unrecoverable = CAP.unrecoverable_total
     return {
         "gap_count": len(gaps),
         "datagrams_dropped_est": dropped,
+        "recovered_total": recovered,
+        "unrecoverable_total": unrecoverable,
         "gaps": [{"after_seq": a, "missing": m} for a, m in gaps],
+        "hint": "netdebug_recover fetches the missing lines back over RPC" if gaps else "",
     }
+
+
+# Most lines one recovery call will pull back, so a huge gap cannot hold a tool
+# call hostage: what remains is reported and the next call continues.
+RECOVER_BUDGET_LINES = 500
+
+
+@mcp.tool()
+def netdebug_recover(guest_ip: str = "") -> dict:
+    """Fill the capture's sequence gaps by asking kudos for the missing lines
+    back (DIAG-023).
+
+    Wire loss is recoverable now: kudos RETAINS every trace line it sent, and the
+    RPC channel (retransmitted, deduplicated) serves them again by sequence
+    number. Recovered lines are appended to the ring flagged `recovered` — they
+    arrive late, so they sit out of stream order, but grep/tail/frames see them.
+    A line kudos no longer retained is permanently lost; it is counted, reported
+    here, and the gap is retired rather than re-asked forever.
+    """
+    with CAP.lock:
+        pending = list(CAP.gaps)
+    if not pending:
+        return {"recovered": 0, "permanent": 0, "gaps_remaining": 0}
+    client = _client(guest_ip)
+    recovered = 0
+    permanent = 0
+    budget = RECOVER_BUDGET_LINES
+    retired: list[tuple[int, int]] = []
+    for after_seq, missing in pending:
+        if budget <= 0:
+            break
+        want = min(missing, budget)
+        got_lines: list[bytes] = []
+        offset = 0
+        while offset < want:
+            first = (after_seq + 1 + offset) % 1_000_000
+            n = min(want - offset, 9)  # kmir.RESEND_MAX_LINES
+            try:
+                text = client.resend(first, n)
+            except Exception as e:  # noqa: BLE001 — a dead machine ends recovery, with the reason
+                return {"recovered": recovered, "permanent": permanent,
+                        "gaps_remaining": len(pending) - len(retired),
+                        "error": f"rpc failed at seq {first}: {e}"}
+            got_lines.extend(l.encode() for l in text.split("\n") if l)
+            offset += n
+        now = time.monotonic()
+        with CAP.lock:
+            for line in got_lines:
+                m = _SEQ_RE.match(line)
+                if not m:
+                    continue
+                CAP.ring.append(Record(
+                    seq=int(m.group(1)),
+                    text=m.group(2).decode("utf-8", "replace").rstrip("\n"),
+                    raw=line.decode("utf-8", "replace").rstrip("\n"),
+                    t=now,
+                    recovered=True,
+                ))
+            CAP.recovered_total += len(got_lines)
+            CAP.unrecoverable_total += want - len(got_lines)
+        recovered += len(got_lines)
+        permanent += want - len(got_lines)
+        budget -= want
+        retired.append((after_seq, missing))
+    with CAP.lock:
+        CAP.gaps = [g for g in CAP.gaps if g not in retired]
+        remaining = len(CAP.gaps)
+    return {"recovered": recovered, "permanent": permanent, "gaps_remaining": remaining}
 
 
 def _client(guest_ip: str):
@@ -376,6 +462,11 @@ def _client(guest_ip: str):
     import kmir
 
     ip = guest_ip or None
+    if ip is None:
+        # The strongest hint costs nothing: the capture's datagrams NAME their
+        # sender, and the sender is kudos.
+        with CAP.lock:
+            ip = CAP.source_ip
     if ip is None:
         with CAP.lock:
             for rec in reversed(CAP.ring):

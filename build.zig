@@ -447,6 +447,17 @@ pub fn build(b: *std.Build) void {
     // loader, the host compile factory, and every generated binary. Named (not a
     // relative import) so the kernel and the host tests share one definition.
     const abi_mod = b.createModule(.{ .root_source_file = b.path("src/kernel/loader/abi.zig") });
+    // The module-fetch mailbox's bounds are the ABI's (NET_URL_MAX): one home.
+    inet_mod.addImport("abi", abi_mod);
+
+    // The module-window slot table and the per-window scene mailboxes. Named
+    // contracts, not files: console publishes them as capabilities, ui composites
+    // them, and neither may import the other.
+    const iwindow_mod = b.createModule(.{ .root_source_file = b.path("src/iface/iwindow.zig") });
+    iwindow_mod.addImport("abi", abi_mod);
+    iwindow_mod.addImport("ring", ring_mod);
+    const iscene_mod = b.createModule(.{ .root_source_file = b.path("src/iface/iscene.zig") });
+    iscene_mod.addImport("abi", abi_mod);
 
     const IfaceMod = struct { name: []const u8, mod: *std.Build.Module };
     // The cooperative long-task runner (job.zig): named so jobs.zig and
@@ -465,6 +476,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "imouse", .mod = imouse_mod },
         .{ .name = "ivirt", .mod = ivirt_mod },
         .{ .name = "idesk", .mod = idesk_mod },
+        .{ .name = "iwindow", .mod = iwindow_mod },
+        .{ .name = "iscene", .mod = iscene_mod },
         .{ .name = "ring", .mod = ring_mod },
         .{ .name = "algn", .mod = algn_mod },
         .{ .name = "overlay_plane", .mod = overlay_plane_shared },
@@ -803,6 +816,8 @@ pub fn build(b: *std.Build) void {
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/drivers/storage/ramdisk_test.zig" }, // in-RAM name→bytes store (shim: ramdisk @embedFiles ui assets)
         .{ .n = "vfs", .s = "src/drivers/storage/vfs.zig" }, // `/` namespace routing + pure path normalization
         .{ .n = "complete", .s = "src/console/complete.zig" }, // Tab filename completion over an injected directory enumeration
+        .{ .n = "redirect", .s = "src/console/redirect.zig" }, // `>`/`>>` grammar + the bounded capture a redirected command writes into
+        .{ .n = "grants", .s = "src/console/grants.zig" }, // the capability grant table: which .kudos module may bind what, at which version
         .{ .n = "editline", .s = "src/console/editline.zig" }, // console line editor core: keystroke → line edits, recall, Tab → completion (shared by both terminal editors)
         .{ .n = "cmdtoken", .s = "src/console/cmdtoken.zig" }, // single-flight command token: consume-on-claim (the double-dispatch GP incident)
         .{ .n = "methods", .s = "src/drivers/gl/ada/methods.zig" }, // ADA_A 3D method-stream goldens (ctxInit/RT/viewport/clear)
@@ -817,13 +832,16 @@ pub fn build(b: *std.Build) void {
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/memory/heap_test.zig" }, // free-list heap core (FreeListHeap; kernel wrappers never analyzed on host)
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/kernel/memory/pmm_test.zig" }, // frame-bitmap core (FrameBitmap; kernel wrappers never analyzed on host)
         .{ .n = "imouse", .s = "src/iface/imouse.zig" }, // pointer-event coalescing (ilog's sink defaults to null → silent, correct on the host)
-        .{ .n = "iwindow", .s = "src/iface/iwindow.zig" }, // blob-window cross-core mailbox: open handshake, clamp, one-at-a-time, blit→dirty
+        .{ .n = "iwindow", .s = "src/iface/iwindow.zig" }, // blob-window cross-core mailbox: open handshake, clamp, one-at-a-time, blit→dirty, focused keys
+        .{ .n = "iscene", .s = "src/iface/iscene.zig" }, // scene mailbox: slot double-buffer + the validator every replayed frame passes
+        .{ .n = "inet", .s = "src/iface/inet.zig" }, // module-fetch mailbox: parked-request handshake, one at a time, no module-side cancel
         .{ .n = "idesk", .s = "src/iface/idesk.zig" }, // desktop-control mailbox: one request at a time, published readback
         .{ .n = "armpolicy", .s = "src/kernel/sched/armpolicy.zig" }, // tickless arming policy: idle disarms (KRN-007), due sleepers never stranded
         .{ .n = "tracering", .s = "src/kernel/debug/tracering.zig" }, // lock-free trace-ring reservation algebra: a dead writer cannot wedge the bus
         .{ .n = "hudcontrol", .s = "src/widgets/hudcontrol.zig" }, // HUD control state + counter rates: latch, freeze, sampling period
         .{ .n = "hudsnapshot", .s = "src/widgets/hudsnapshot.zig" }, // HUD model: snapshot values, capacities, fault marks
         .{ .n = "lineasm", .s = "src/drivers/net/debug/lineasm.zig" }, // trace line assembly: one assembler per writer, no shared buffer to splice
+        .{ .n = "linestore", .s = "src/drivers/net/debug/linestore.zig" }, // seq-stamped retained line ring: two-phase drain + resend-by-seq (the reliable trace)
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/drivers/gl/softdisplay_test.zig" }, // ARCH-015 runtime guard: the publish decision
         // gles: OpenGL ES 1.1 (Common profile) — every module under src/drivers/gl/es/
         // is pure over the `idraw` seam, so the state machine host-tests with no GPU.
@@ -1059,7 +1077,9 @@ pub fn build(b: *std.Build) void {
         t.root_module.addImport("ivirt", ivirt_mod);
         const iwindow_sweep = b.createModule(.{ .root_source_file = b.path("src/iface/iwindow.zig") });
         iwindow_sweep.addImport("abi", abi_mod);
+        iwindow_sweep.addImport("ring", ring_mod); // the focused-window key ring (MOD-013)
         t.root_module.addImport("iwindow", iwindow_sweep);
+        t.root_module.addImport("iscene", b.createModule(.{ .root_source_file = b.path("src/iface/iscene.zig") }));
         if (testWired(test_only, t)) test_step.dependOn(&b.addRunArtifact(t).step);
         cov_bins.append(b.allocator, t) catch @panic("OOM");
     }
@@ -1211,6 +1231,20 @@ pub fn build(b: *std.Build) void {
         t.root_module.addImport("gles", gles_mod);
         t.root_module.addImport("idraw", idraw_mod);
         t.root_module.addImport("soft", soft_mod);
+        if (testWired(test_only, t)) test_step.dependOn(&b.addRunArtifact(t).step);
+        cov_bins.append(b.allocator, t) catch @panic("OOM");
+    }
+
+    // The blob-window scene replay against real pixels: the reference cube's
+    // recorded frame, drawn by the same call sequence blobwin.drawInline
+    // issues, judged for solidity and shading (MOD-015).
+    {
+        const t = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("test/drivers/gl/cube_replay_test.zig"), .target = b.graph.host, .optimize = optimize }) });
+        t.root_module.addImport("gles", gles_mod);
+        t.root_module.addImport("idraw", idraw_mod);
+        t.root_module.addImport("soft", soft_mod);
+        // The lamp the replay lights lit scenes with — spin.zig owns those facts.
+        t.root_module.addImport("spin", b.createModule(.{ .root_source_file = b.path("src/apps/spin.zig") }));
         if (testWired(test_only, t)) test_step.dependOn(&b.addRunArtifact(t).step);
         cov_bins.append(b.allocator, t) catch @panic("OOM");
     }

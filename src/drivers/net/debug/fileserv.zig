@@ -48,9 +48,10 @@ const counter = @import("../../../kernel/debug/counter.zig");
 const netdebug = @import("netdebug.zig");
 const buildinfo = @import("buildinfo");
 
-/// The largest request is a WRITE: header + name (u16 len, ≤ 64 used) +
-/// MAX_CHUNK of data. Anything bigger is a protocol violation and dropped.
-const REQ_CAP: usize = fileproto.HDR_LEN + 2 + 64 + fileproto.MAX_CHUNK;
+/// The largest request is a WRITE_AT: header + name (u16 len, ≤ 64 used) +
+/// u32 offset + MAX_CHUNK of data. Anything bigger is a protocol violation and
+/// dropped.
+const REQ_CAP: usize = fileproto.HDR_LEN + 2 + 64 + 4 + fileproto.MAX_CHUNK;
 
 var fs: ?iramdisk.IRamdisk = null;
 /// One parked request. The intake is a RING, not a 1-deep slot: the host's
@@ -365,6 +366,15 @@ fn sinkRingtail(_: *anyopaque, kib: u16) void {
     netdebug.replayRing(@as(usize, kib) * 1024);
 }
 
+/// Gap recovery (DIAG-023): serve retained trace lines again by sequence
+/// number, straight into the KMR1 reply — unlike stats/ringtail this does NOT
+/// re-enqueue onto the trace stream, because these bytes already spent their
+/// place there once and the asker wants them on the channel whose delivery is
+/// acknowledged.
+fn sinkResend(_: *anyopaque, from: u32, count: u32, out: []u8) usize {
+    return netdebug.resendInto(from, count, out);
+}
+
 const sink_vtable = fileproto.Inject.VTable{
     .key = sinkKey,
     .text = sinkText,
@@ -379,6 +389,7 @@ const sink_vtable = fileproto.Inject.VTable{
     .stats = sinkStats,
     .ringtail = sinkRingtail,
     .mcp = sinkMcp,
+    .resend = sinkResend,
 };
 var sink_ctx: u8 = 0; // the sink is stateless; the vtable needs an address
 const sink = fileproto.Inject{ .ctx = &sink_ctx, .vtable = &sink_vtable };
