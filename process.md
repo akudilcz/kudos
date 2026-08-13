@@ -27,7 +27,7 @@ none restates another.
 
 | artifact | role |
 | --- | --- |
-| `spec.md` | requirements: atomic, testable, what-not-how |
+| `specs/*.md` | requirements: atomic, testable, what-not-how; `spec.md` is the index |
 | `CLAUDE.md` | development standards: architecture and coding rails |
 | `process.md` | this file: objectives, blast radius, traceability, verification, the review rubric |
 | `build.zig` module table + `scripts/tests/` | the enforced structure and the gate inventory |
@@ -103,15 +103,16 @@ enforced boundaries. That partitioning argument carries three obligations:
 ## Requirements
 
 `spec.md` owns the format rules: stable `PREFIX-NNN` identifiers, one testable
-assertion per "shall", function and performance only — never mechanism. This
-section owns the lifecycle around them:
+assertion per "shall", function and performance only — never mechanism. The
+requirements themselves live one file per package in `specs/`; `spec.md` is
+the index over them. This section owns the lifecycle around them:
 
 - **A behavior change lands with its requirement.** New behavior either
   implements an existing requirement (name the ID in the commit) or arrives
   with the spec change that states it.
 - **Derived behavior is a finding.** Code the spec does not call for —
   discovered in review, in a coverage gap, or by reading — is either promoted
-  into `spec.md` (and then re-examined: what new failure modes does it bring?)
+  into `specs/` (and then re-examined: what new failure modes does it bring?)
   or deleted. There is no third state.
 - **Requirements move only forward.** A withdrawn or moved requirement retires
   its identifier; an identifier is never reused (spec.md owns this rule; it is
@@ -127,12 +128,12 @@ not closed today — `reqtrace_uncited.txt` is the measure of how far off it is.
 The trace is regenerated, never maintained by hand:
 
 ```
-grep -ohE '\b[A-Z]{2,4}-[0-9]{3}\b' spec.md            | sort -u   # required
+grep -ohE '\b[A-Z]{2,4}-[0-9]{3}\b' specs/*.md         | sort -u   # required
 grep -rhoE '\b[A-Z]{2,4}-[0-9]{3}\b' test/ scripts/tests/ | sort -u   # tested
 ```
 
 The difference between those two sets is the finding list: a requirement no
-test cites is unverified; an ID cited nowhere in `spec.md` is a citation of a
+test cites is unverified; an ID cited nowhere in `specs/` is a citation of a
 retired or misspelled requirement. `scripts/tests/reqtrace.sh` enforces both
 directions in `make check`; `scripts/tests/reqtrace_uncited.txt` is the
 ratchet of requirements still awaiting citation — rows only leave, in the
