@@ -102,7 +102,7 @@ enforced boundaries. That partitioning argument carries three obligations:
 
 ## Requirements
 
-`spec.md` owns the format rules: stable `PREFIX-NNN` identifiers, one testable
+`specs/README.md` owns the format rules: stable `PREFIX-NNN` identifiers, one testable
 assertion per "shall", function and performance only — never mechanism. The
 requirements themselves live one file per package in `specs/`; `spec.md` is
 the index over them. This section owns the lifecycle around them:
@@ -115,7 +115,7 @@ the index over them. This section owns the lifecycle around them:
   into `specs/` (and then re-examined: what new failure modes does it bring?)
   or deleted. There is no third state.
 - **Requirements move only forward.** A withdrawn or moved requirement retires
-  its identifier; an identifier is never reused (spec.md owns this rule; it is
+  its identifier; an identifier is never reused (specs/README.md owns this rule; it is
   what makes the trace durable).
 
 ## Traceability

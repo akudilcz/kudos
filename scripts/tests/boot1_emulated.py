@@ -514,7 +514,7 @@ def phase3(q):
     base_focus = base["focus"]
 
     # `term`: a new terminal window opens and takes focus (single-core: core 0).
-    type_cmd(q, "term")
+    type_cmd(q, "kudos term")
     st = wm_wait(lambda s2: s2["nwins"] == base_n + 1)
     if st["nwins"] != base_n + 1:
         fail(f"`term` did not open a window (nwins {base_n} -> {st['nwins']})")
@@ -604,7 +604,7 @@ def phase3(q):
     # remaining window; the system window has no shell, so every later phase-3
     # typed test would silently type into the void. It opens here, is asserted,
     # and PHASE 4 (the mouse phase) uses it as its guinea pig and closes it.
-    sys_core = type_cmd(q, "system")  # typed at the terminal that had focus
+    sys_core = type_cmd(q, "kudos system")  # typed at the terminal that had focus
     st = wm_wait(lambda s2: cases.win_by_title(s2, "system") is not None)
     if cases.win_by_title(st, "system") is None:
         fail(f"`system` did not open (nwins={st['nwins']}, wins={st['wins']})")
@@ -632,7 +632,7 @@ def phase_smp(q):
     _record("boot1: PHASE SMP — cross-core terminal on an Application Processor")
     base_n = wm()["nwins"]
 
-    type_cmd(q, "term")  # typed at terminal #0 (core 0) — type_cmd's core-0 echo holds
+    type_cmd(q, "kudos term")  # typed at terminal #0 (core 0) — type_cmd's core-0 echo holds
     st = wm_wait(lambda s2: s2["nwins"] == base_n + 1)
     if st["nwins"] != base_n + 1:
         fail(f"`term` did not open a window on SMP (nwins {base_n} -> {st['nwins']})")
