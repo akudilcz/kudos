@@ -47,6 +47,10 @@ const FAKE_DIRS = editline.complete.Dirs{ .ctx = null, .listFn = fakeList };
 /// passes the shell's own tables; a suite passes what it wants to assert.
 const FAKE_CMDS = [_][]const u8{ "show", "shutdown", "cat" };
 
+/// The group word a second word may complete under — empty here: the grammar
+/// is complete_test's subject, and this suite only routes the keystroke.
+const FAKE_GROUP = editline.complete.Group{ .word = "kudos", .names = &.{} };
+
 /// Feed `keys` one at a time and serve the editor's host actions the way both
 /// terminal editors do: .complete runs completion against the fake tree and
 /// /ramdisk as the cwd; .commit clears the line (as the host does after
@@ -57,7 +61,7 @@ fn play(ed: *editline.Editor, scr: *FakeScreen, keys: []const u8) editline.Actio
     for (keys) |k| {
         last = ed.key(k, scr.screen());
         switch (last) {
-            .complete => _ = ed.completeLine("/ramdisk", FAKE_DIRS, &FAKE_CMDS, scr.screen()),
+            .complete => _ = ed.completeLine("/ramdisk", FAKE_DIRS, &FAKE_CMDS, FAKE_GROUP, scr.screen()),
             .commit => ed.len = 0,
             else => {},
         }

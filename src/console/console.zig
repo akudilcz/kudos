@@ -88,6 +88,12 @@ pub const Console = struct {
     /// makes `ai` turn THIS terminal into the chat rather than opening another
     /// window beside it, and `/quit` hand it back to the shell.
     setAiModeFn: *const fn (ctx: *anyopaque, on: bool) void,
+    /// OPTIONAL: color the characters this command writes next (0xAARRGGBB),
+    /// with 0 restoring the default. Color is how a grid PRESENTS text, never
+    /// part of the bytes a command produces — a console without per-cell color
+    /// (or one capturing output for a file or pipe) leaves the writes uncolored,
+    /// and the command's output means the same thing.
+    setColorFn: ?*const fn (ctx: *anyopaque, argb: u32) void = null,
 
     /// Write one character to the grid.
     pub fn put(self: Console, ch: u8) void {
@@ -120,6 +126,14 @@ pub const Console = struct {
     /// Mask (or unmask) the line editor's echo; unmasking forgets the recall.
     pub fn setInputMask(self: Console, on: bool) void {
         self.setInputMaskFn(self.ctx, on);
+    }
+    /// Color subsequent writes (see setColorFn); a colorless console ignores it.
+    pub fn setColor(self: Console, argb: u32) void {
+        if (self.setColorFn) |f| f(self.ctx, argb);
+    }
+    /// Restore the default color — setColorFn's 0 convention.
+    pub fn resetColor(self: Console) void {
+        self.setColor(0);
     }
     /// Open a new app window of `kind` (see Desktop.spawnAppFn).
     pub fn spawnApp(self: Console, kind: AppKind) anyerror!void {

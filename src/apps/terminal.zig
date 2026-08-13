@@ -20,6 +20,7 @@ const sched = @import("../kernel/sched/sched.zig");
 const smp = @import("../kernel/smp/smp.zig");
 const buildinfo = @import("buildinfo");
 const localcmd = @import("../console/localcmd.zig");
+const kudoscmd = @import("../console/cmd/kudos.zig");
 const vfs = @import("vfs");
 const debug = @import("../kernel/debug/debug.zig");
 const counter = @import("../kernel/debug/counter.zig");
@@ -613,6 +614,14 @@ pub const Terminal = struct {
         }
     }
 
+    /// Console setColorFn: color what the command writes next, 0 restoring the
+    /// default — writeColored's set/write/restore shape stretched across the
+    /// seam, with the command's resetColor as the restore.
+    fn conSetColor(ctx: *anyopaque, argb: u32) void {
+        const t: *Terminal = @ptrCast(@alignCast(ctx));
+        t.fg = if (argb == 0) FG else argb;
+    }
+
     /// The console surface over this terminal — what shell.execute hands each
     /// command: the grid half bound to this terminal, plus the desktop half
     /// and window handle this terminal was given at spawn.
@@ -632,6 +641,7 @@ pub const Terminal = struct {
             .setAiModeFn = conSetAiMode,
             .holdPromptFn = conHoldPrompt,
             .setInputMaskFn = conSetInputMask,
+            .setColorFn = conSetColor,
         };
     }
 
@@ -661,6 +671,15 @@ pub const Terminal = struct {
     /// the per-core local commands, each table still its own source of truth.
     const CMD_NAMES: []const []const u8 = &(shell.NAMES ++ localcmd.NAMES);
 
+    /// The words the SECOND word of a `kudos` line can complete to: the
+    /// shell-side subcommand table (cmd/kudos.zig) plus the local trio, each
+    /// table still its own source of truth; the group word rides along so the
+    /// pure core restates none of them.
+    const KUDOS_GROUP = editline.complete.Group{
+        .word = localcmd.GROUP,
+        .names = &(kudoscmd.NAMES ++ localcmd.GROUP_NAMES),
+    };
+
     /// The live enumeration seam handed to every completion on this terminal.
     fn dirs() editline.complete.Dirs {
         return .{ .ctx = null, .listFn = dirsList };
@@ -674,10 +693,10 @@ pub const Terminal = struct {
         // The AI window takes no filename arguments, so its Tab completes
         // nothing.
         if (self.ai_mode) return;
-        if (ed.completeLine(self.cwd(), dirs(), CMD_NAMES, self.screen()) != .ambiguous) return;
+        if (ed.completeLine(self.cwd(), dirs(), CMD_NAMES, KUDOS_GROUP, self.screen()) != .ambiguous) return;
         self.putChar('\n');
         var listing = Listing{ .t = self };
-        editline.complete.eachMatch(ed.text(), self.cwd(), dirs(), CMD_NAMES, .{
+        editline.complete.eachMatch(ed.text(), self.cwd(), dirs(), CMD_NAMES, KUDOS_GROUP, .{
             .ctx = &listing,
             .entryFn = candidateOut,
         });

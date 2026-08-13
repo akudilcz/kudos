@@ -39,6 +39,12 @@ const DIRS = complete.Dirs{ .ctx = null, .listFn = FakeTree.list };
 /// passes the shell's own tables (shell.NAMES ++ localcmd.NAMES).
 const CMDS = [_][]const u8{ "cat", "cd", "clear", "show", "shutdown" };
 
+/// The group word whose SECOND word completes against subcommand names — the
+/// terminal passes `kudos` with its own tables (cmd/kudos.zig NAMES ++
+/// localcmd.GROUP_NAMES); this suite passes the same shape in miniature.
+const KUDOS_SUBS = [_][]const u8{ "compile", "caps", "calc", "vm", "rt", "run" };
+const GROUP = complete.Group{ .word = "kudos", .names = &KUDOS_SUBS };
+
 /// One Tab press over the fake tree: complete `text` (cursor at end) against
 /// `cwd` and return the resulting line (a view of a static scratch buffer).
 fn tab(text: []const u8, cwd: []const u8) []const u8 {
@@ -52,7 +58,7 @@ fn tabResult(text: []const u8, cwd: []const u8) struct { line: []const u8, r: co
         var buf: [96]u8 = undefined;
     };
     @memcpy(S.buf[0..text.len], text);
-    const r = complete.line(&S.buf, text.len, cwd, DIRS, &CMDS);
+    const r = complete.line(&S.buf, text.len, cwd, DIRS, &CMDS, GROUP);
     return .{ .line = S.buf[0..r.len], .r = r };
 }
 
@@ -74,7 +80,7 @@ fn candidates(text: []const u8, cwd: []const u8) []const u8 {
         }
     };
     S.len = 0;
-    complete.eachMatch(text, cwd, DIRS, &CMDS, .{ .ctx = null, .entryFn = S.emit });
+    complete.eachMatch(text, cwd, DIRS, &CMDS, GROUP, .{ .ctx = null, .entryFn = S.emit });
     return S.buf[0..S.len];
 }
 
@@ -90,7 +96,7 @@ const Line = struct {
         self.len += keys.len;
     }
     fn press(self: *Line) void {
-        self.len = complete.line(&self.buf, self.len, "/ramdisk", DIRS, &CMDS).len;
+        self.len = complete.line(&self.buf, self.len, "/ramdisk", DIRS, &CMDS, GROUP).len;
     }
     fn text(self: *const Line) []const u8 {
         return self.buf[0..self.len];
@@ -160,6 +166,36 @@ test "APP-025: the first word completes against the command names" {
     try std.testing.expectEqualStrings("  Bun", tab("  Bun", "/ramdisk"));
 }
 
+test "the second word of a kudos line completes against its subcommands" {
+    // A unique subcommand gains the space that starts ITS arguments.
+    try std.testing.expectEqualStrings("kudos compile ", tab("kudos co", "/ramdisk"));
+    try std.testing.expectEqualStrings("kudos vm ", tab("kudos v", "/ramdisk"));
+    // Extra whitespace before the second word changes nothing.
+    try std.testing.expectEqualStrings("  kudos  compile ", tab("  kudos  co", "/ramdisk"));
+}
+
+test "an ambiguous kudos subcommand counts and lists exactly its candidates" {
+    // compile/caps/calc share only the typed `c`: the line stays, the count
+    // and the listing are the answer.
+    const r = tabResult("kudos c", "/ramdisk");
+    try std.testing.expectEqualStrings("kudos c", r.line);
+    try std.testing.expectEqual(@as(usize, 3), r.r.matches);
+    try std.testing.expectEqualStrings("compile caps calc ", candidates("kudos c", "/ramdisk"));
+    // An empty second word offers the whole subcommand table, never the cwd.
+    try std.testing.expectEqualStrings("compile caps calc vm rt run ", candidates("kudos ", "/ramdisk"));
+}
+
+test "only the second word of a kudos line completes subcommands" {
+    // Another command's second word stays on the file system: `co` names no
+    // file anywhere in the fake tree, and `compile` must not be offered.
+    try std.testing.expectEqualStrings("cat co", tab("cat co", "/ramdisk"));
+    try std.testing.expectEqual(@as(usize, 0), tabResult("cat co", "/ramdisk").r.matches);
+    // Past its second word a kudos line completes paths again.
+    try std.testing.expectEqualStrings("kudos compile duck.glb", tab("kudos compile du", "/ramdisk"));
+    // The first word still completes against the command names, not the subs.
+    try std.testing.expectEqualStrings("cat ", tab("ca", "/ramdisk"));
+}
+
 test "APP-026: a press that cannot finish the word says how many entries matched" {
     // Ambiguous: the line already holds every shared character, so the host
     // has nothing to echo — this count is what makes it show the candidates
@@ -219,7 +255,7 @@ test "a completion that cannot fit the line changes nothing" {
     // reach 5 + 9 = 14 — one more character of prefix and it would not.
     var small: [13]u8 = undefined;
     @memcpy(small[0..text.len], text);
-    const r = complete.line(&small, text.len, "/ramdisk", DIRS, &CMDS);
+    const r = complete.line(&small, text.len, "/ramdisk", DIRS, &CMDS, GROUP);
     try std.testing.expectEqual(@as(usize, text.len), r.len);
     try std.testing.expectEqualStrings("show Bun", small[0..r.len]);
     // The match still stands, so the host can still show what it found.

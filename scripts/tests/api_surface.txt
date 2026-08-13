@@ -189,6 +189,7 @@ src/console/cmd/head.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/help.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/host.zig: pub fn run(c: console.Console, name: []const u8) void
 src/console/cmd/ip.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/kudos.zig: pub const NAMES: [SUBS.len][]const u8 = blk:
 src/console/cmd/kudos.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/lspci.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/ls.zig: pub fn run(c: console.Console, args: []const u8) void
@@ -223,10 +224,11 @@ src/console/cmd/wc.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/complete.zig: pub const ifilesys = @import("ifilesys");
 src/console/complete.zig: pub const BARE_ROOTS = [_][]const u8{ "/ramdisk", "/usbdisk" };
 src/console/complete.zig: pub const Dirs = struct
+src/console/complete.zig: pub const Group = struct
 src/console/complete.zig: pub const Each = struct
 src/console/complete.zig: pub const Result = struct
-src/console/complete.zig: pub fn line(buf: []u8, len: usize, cwd: []const u8, dirs: Dirs, cmds: []const []const u8) Result
-src/console/complete.zig: pub fn eachMatch(text: []const u8, cwd: []const u8, dirs: Dirs, cmds: []const []const u8, each: Each) void
+src/console/complete.zig: pub fn line(buf: []u8, len: usize, cwd: []const u8, dirs: Dirs, cmds: []const []const u8, group: Group) Result
+src/console/complete.zig: pub fn eachMatch(text: []const u8, cwd: []const u8, dirs: Dirs, cmds: []const []const u8, group: Group, each: Each) void
 src/console/console.zig: pub const AppKind = idesk.AppKind;
 src/console/console.zig: pub const Desktop = struct
 src/console/console.zig: pub const Console = struct
@@ -246,6 +248,7 @@ src/console/grants.zig: pub fn find(id: u32, version: u32) ?Row
 src/console/localcmd.zig: pub const Out = @import("out.zig").Out;
 src/console/localcmd.zig: pub const Command = struct
 src/console/localcmd.zig: pub const GROUP = "kudos";
+src/console/localcmd.zig: pub const GROUP_NAMES: [GROUP_COMMANDS.len][]const u8 = blk:
 src/console/localcmd.zig: pub const COMMANDS = if (buildinfo.test_hooks)
 src/console/localcmd.zig: pub const NAMES: [COMMANDS.len][]const u8 = blk:
 src/console/localcmd.zig: pub fn lookup(cmd: []const u8) ?Command
