@@ -14,6 +14,7 @@ const HELP =
     \\  head [-n N] [F] first N lines (default 10) of a file or the pipe
     \\  grep PAT [F...] lines containing PAT, from files or the pipe (fixed string)
     \\  wc [FILE...]    line, word and byte counts
+    \\  history         the committed commands Up-arrow can recall, oldest first
     \\  touch FILE...   create empty files
     \\  cp SRC... DEST  copy files
     \\  mv SRC... DEST  move files

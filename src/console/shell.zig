@@ -50,6 +50,7 @@ const COMMANDS = [_]Command{
     .{ .name = "grep", .run = @import("cmd/grep.zig").run, .globs = true },
     .{ .name = "wc", .run = @import("cmd/wc.zig").run, .globs = true },
     .{ .name = "head", .run = @import("cmd/head.zig").run, .globs = true },
+    .{ .name = "history", .run = @import("cmd/history.zig").run },
     .{ .name = "lspci", .run = @import("cmd/lspci.zig").run },
     .{ .name = "ip", .run = @import("cmd/ip.zig").run },
     .{ .name = "ping", .run = @import("cmd/ping.zig").run },
@@ -338,6 +339,9 @@ const Capture = struct {
         _ = ctx;
         _ = argb;
     }
+    fn readHistory(ctx: *anyopaque, i: usize) ?[]const u8 {
+        return of(ctx).inner.history(i);
+    }
 
     /// The console to run the redirected command against: this capture's output,
     /// the original console's everything else (window, desktop, allocator, cwd).
@@ -353,6 +357,7 @@ const Capture = struct {
         out.holdPromptFn = holdPrompt;
         out.setInputMaskFn = setInputMask;
         out.setColorFn = setColor;
+        out.readHistoryFn = readHistory;
         return out;
     }
 };

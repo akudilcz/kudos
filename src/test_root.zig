@@ -78,4 +78,5 @@ pub const terminal = struct {
     pub const terminal = @import("apps/terminal.zig");
     pub const window = @import("ui/wm/window.zig");
     pub const font = @import("ui/screen/font.zig");
+    pub const keymap = @import("keymap");
 };

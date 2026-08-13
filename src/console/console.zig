@@ -64,6 +64,12 @@ pub const Console = struct {
     /// turned off. Turning it OFF also forgets the editor's recall of the
     /// masked line, so Up-arrow cannot replay a passphrase.
     setInputMaskFn: *const fn (ctx: *anyopaque, on: bool) void,
+    /// The i-th line of this terminal's committed-command history, oldest
+    /// first, or null past the end — what the `history` command walks. The
+    /// history lives in the line EDITOR, which no command can see; this is the
+    /// one sanctioned window into it. The slice stays valid for the command's
+    /// life (the editor is parked while its command runs).
+    readHistoryFn: *const fn (ctx: *anyopaque, i: usize) ?[]const u8,
     /// The hosting desktop's services and this console's window within it.
     desktop: Desktop,
     win: *anyopaque,
@@ -142,6 +148,11 @@ pub const Console = struct {
     /// Restore the default color — setColorFn's 0 convention.
     pub fn resetColor(self: Console) void {
         self.setColor(0);
+    }
+    /// The i-th committed-command history line, oldest first, or null past
+    /// the end.
+    pub fn history(self: Console, i: usize) ?[]const u8 {
+        return self.readHistoryFn(self.ctx, i);
     }
     /// Open a new app window of `kind` (see Desktop.spawnAppFn).
     pub fn spawnApp(self: Console, kind: AppKind) anyerror!void {

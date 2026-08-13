@@ -83,3 +83,6 @@ src/apps/terminal.zig | s/self.putChar\(if \(self.input_mask and ch != '\\n'\) '
 src/apps/terminal.zig | s/if \(self.hold_prompt\) \{/if (false) {/ | terminal | the automatic prompt ignores a command's hold — it prints into the question the command just asked
 src/console/glob.zig | s/while \(p < pat.len and pat\[p\] == '\*'\) p \+= 1;// | glob | a trailing star stops matching the empty run — `*` matches nothing and every `x*` pattern misses
 src/console/redirect.zig | s/if \(count == MAX_STAGES\) return 0;// | redirect | an over-long pipeline overruns the stage array instead of refusing
+src/console/editline.zig | s/self\.loadLine\(self\.stash\[0\.\.self\.stash_len\], scr\);/self.loadLine(self.stash[0..0], scr);/ | editline | Down past the newest entry loses the stashed in-progress line (bash restore broken)
+src/apps/terminal.zig | s/self\.view_off = @min\(self\.view_off \+ self\.rows, self\.scrollLimit\(\)\);/self.view_off = self.view_off + self.rows;/ | terminal | scrollback offset unclamped — the view pages off the retained grid
+src/console/editline.zig | s/std\.mem\.copyBackwards\(u8, self\.line\[self\.cursor \+ 1 \.\. self\.len \+ 1\], self\.line\[self\.cursor\.\.self\.len\]\);// | editline | mid-line insert overwrites the tail instead of shifting it

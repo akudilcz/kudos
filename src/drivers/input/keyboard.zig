@@ -49,6 +49,10 @@ pub const KeyEvent = struct {
 /// (src/drivers/usb/xhci.zig) shares.
 pub const hidToAscii = keymap.hidToAscii;
 
+/// Translate under the full modifier bitmap (Shift picks shifted keys, Ctrl
+/// folds letters to control bytes — Ctrl-C → 0x03). Same owner as hidToAscii.
+pub const hidToAsciiMods = keymap.hidToAsciiMods;
+
 /// Translate a USB HID keyboard usage code to its Linux key code. Owned by the
 /// same pure keymap, for the guest input path.
 pub const hidToEvdev = keymap.hidToEvdev;
