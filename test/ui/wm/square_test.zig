@@ -80,3 +80,61 @@ test "tick steps only on a NEW cadence phase" {
     try expect(!m.tick(1, 400, 400)); // same phase again: no step
     try expectEqual(x1, m.x);
 }
+
+test "spin angle: wrapped to [0,360), uniform steps, exact at large uptimes" {
+    // One cadence step advances by exactly the rate constant.
+    try std.testing.expectApproxEqAbs(
+        @as(f32, @floatCast(square.SPIN_DEG_PER_STEP)),
+        square.angleDeg(1) - square.angleDeg(0),
+        1e-6,
+    );
+    // Always inside one revolution, wherever the phase lands.
+    var p: u64 = 0;
+    while (p < 1000) : (p += 97) {
+        const a = square.angleDeg(p);
+        try expect(a >= 0 and a < 360);
+    }
+    // Decades of 100 Hz uptime: the f64 wrap keeps the per-step increment
+    // accurate — an unwrapped f32 would have lost it within hours.
+    const late: u64 = 10_000_000_000;
+    const d = @mod(square.angleDeg(late + 1) - square.angleDeg(late) + 360.0, 360.0);
+    try std.testing.expectApproxEqAbs(@as(f32, @floatCast(square.SPIN_DEG_PER_STEP)), d, 1e-3);
+}
+
+test "cube mesh: on the unit cube, wound outward, normals match the geometry" {
+    try expectEqual(@as(usize, square.CUBE_VERTS * 3), square.VERTS.len);
+    try expectEqual(square.VERTS.len, square.NORMS.len);
+    // Every coordinate sits on the [-1,1] cube surface (corner vertices).
+    for (square.VERTS) |c| try expect(c == 1 or c == -1);
+    // Each triangle's geometric normal (edge cross product, CCW) equals its
+    // stored per-face normal — this is both the outward-facing and the
+    // winding check: culling with the default front face never eats a face.
+    var t: usize = 0;
+    while (t < square.CUBE_VERTS / 3) : (t += 1) {
+        const a = square.VERTS[t * 9 + 0 .. t * 9 + 3];
+        const b = square.VERTS[t * 9 + 3 .. t * 9 + 6];
+        const c = square.VERTS[t * 9 + 6 .. t * 9 + 9];
+        const e1 = [3]f32{ b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+        const e2 = [3]f32{ c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+        var n = [3]f32{
+            e1[1] * e2[2] - e1[2] * e2[1],
+            e1[2] * e2[0] - e1[0] * e2[2],
+            e1[0] * e2[1] - e1[1] * e2[0],
+        };
+        const len = @sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        for (&n) |*v| v.* /= len;
+        for (0..3) |k| try std.testing.expectApproxEqAbs(square.NORMS[t * 9 + k], n[k], 1e-6);
+    }
+}
+
+test "no rotation projects outside the orthographic bound" {
+    // PROJ_HALF_EXTENT is the circumsphere radius: every vertex lies within
+    // it, and rotation preserves length — so the SIZE-box viewport contains
+    // the whole body at every spin angle (the scissor guarantees it anyway).
+    var i: usize = 0;
+    while (i < square.CUBE_VERTS) : (i += 1) {
+        const v = square.VERTS[i * 3 .. i * 3 + 3];
+        const len = @sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        try expect(len <= square.PROJ_HALF_EXTENT + 1e-6);
+    }
+}

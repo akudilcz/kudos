@@ -1,5 +1,6 @@
-//! kgl — kudos GL, the 2D rendering library. A formal layer above OpenGL ES: the window
-//! manager draws through kgl, and kgl is the only thing above `gles` that names `gles`.
+//! kgl — kudos GL, the desktop's rendering library. A formal layer above OpenGL ES: the
+//! window manager draws through kgl, never raw `gles` calls. Almost all of it is the 2D
+//! vocabulary below; `litMesh` is the one 3D item (the screensaver cube).
 //!
 //! The stack is `window manager → kgl → gles → the 4090`, each layer speaking only to the
 //! API of the one below. Chrome, the dock and 2D apps hold a `Painter` and call
@@ -412,6 +413,80 @@ pub fn uploadImage(g: *gles.Context, w: u32, h: u32, rgba: []const u8) u32 {
     gles.texParameteri(g, gles.GL_TEXTURE_2D, gles.GL_TEXTURE_WRAP_S, gles.GL_CLAMP_TO_EDGE);
     gles.texParameteri(g, gles.GL_TEXTURE_2D, gles.GL_TEXTURE_WRAP_T, gles.GL_CLAMP_TO_EDGE);
     return tex;
+}
+
+/// A small lit triangle mesh drawn inline in a 2D frame — the desktop's one 3D
+/// vocabulary item (the screensaver cube draws with it). The caller owns
+/// placement: it sets the viewport (which maps the projection into a pixel box)
+/// and the scissor, then hands geometry, pose and lamp in as values.
+pub const LitMesh = struct {
+    verts: []const f32, // x y z per vertex, triangles
+    norms: []const f32, // per-vertex normals, index for index
+    /// Ambient+diffuse reflectance (RGBA 0..1). Material path only: a lit draw
+    /// with a leftover per-vertex COLOR_ARRAY hangs the 4090.
+    material: [4]f32,
+    /// Modelview pose: pitch about x, then spin about y, degrees.
+    tilt_deg: f32,
+    spin_deg: f32,
+    /// Half-extent of the orthographic box the viewport maps. Choose it to
+    /// circumscribe the mesh (its bounding-sphere radius) and no rotation can
+    /// project a pixel outside the viewport.
+    half_extent: f32,
+    lamp_dir: [4]f32, // GL_POSITION, w = 0: directional
+    lamp_color: [4]f32, // diffuse and specular
+    lamp_ambient: [4]f32,
+    shininess: f32,
+};
+
+/// Draw `m` depth-tested and lit into the current viewport/scissor, then hand
+/// the context back 2D-clean — the state contract `Painter.begin` expects after
+/// a window's inline 3D. Depth-only clear: pixels the mesh does not cover keep
+/// whatever the 2D pass drew beneath (the wallpaper shows around the body).
+pub fn litMesh(g: *gles.Context, m: LitMesh) void {
+    gles.clearDepthf(g, 1.0);
+    gles.clear(g, gles.GL_DEPTH_BUFFER_BIT);
+    gles.matrixMode(g, gles.GL_PROJECTION);
+    gles.loadIdentity(g);
+    const r = m.half_extent;
+    gles.orthof(g, -r, r, -r, r, -r, r);
+    gles.matrixMode(g, gles.GL_MODELVIEW);
+    gles.loadIdentity(g);
+    gles.rotatef(g, m.tilt_deg, 1, 0, 0);
+    gles.rotatef(g, m.spin_deg, 0, 1, 0);
+    gles.enableClientState(g, gles.GL_VERTEX_ARRAY);
+    // Disarm the painter's client arrays: left enabled, a lit draw fetches
+    // per-vertex colours/texcoords from a stale batch buffer — garbage, and
+    // the lit-plus-COLOR_ARRAY fence hang on the 4090.
+    gles.disableClientState(g, gles.GL_COLOR_ARRAY);
+    gles.disableClientState(g, gles.GL_TEXTURE_COORD_ARRAY);
+    gles.disable(g, gles.GL_TEXTURE_2D);
+    gles.enable(g, gles.GL_DEPTH_TEST);
+    gles.enable(g, gles.GL_CULL_FACE);
+    gles.enable(g, gles.GL_LIGHTING);
+    gles.enable(g, gles.GL_LIGHT0);
+    gles.enable(g, gles.GL_NORMALIZE);
+    gles.lightfv(g, gles.GL_LIGHT0, gles.GL_POSITION, &m.lamp_dir);
+    gles.lightfv(g, gles.GL_LIGHT0, gles.GL_DIFFUSE, &m.lamp_color);
+    gles.lightfv(g, gles.GL_LIGHT0, gles.GL_SPECULAR, &m.lamp_color);
+    gles.lightModelfv(g, gles.GL_LIGHT_MODEL_AMBIENT, &m.lamp_ambient);
+    gles.materialf(g, gles.GL_FRONT_AND_BACK, gles.GL_SHININESS, m.shininess);
+    gles.color4f(g, m.material[0], m.material[1], m.material[2], m.material[3]);
+    gles.materialfv(g, gles.GL_FRONT_AND_BACK, gles.GL_AMBIENT_AND_DIFFUSE, &m.material);
+    // Client pointers mean CPU addresses only with no buffer bound — unbind
+    // first so the meaning does not depend on who drew before (begin's rule).
+    gles.bindBuffer(g, gles.GL_ARRAY_BUFFER, 0);
+    gles.vertexPointer(g, 3, gles.GL_FLOAT, 0, m.verts.ptr);
+    gles.enableClientState(g, gles.GL_NORMAL_ARRAY);
+    gles.normalPointer(g, gles.GL_FLOAT, 0, m.norms.ptr);
+    gles.drawArrays(g, gles.GL_TRIANGLES, 0, @intCast(m.verts.len / 3));
+    // Hand the context back 2D-clean: a client array left armed turns the
+    // painter's next batch into wild fetches.
+    gles.disableClientState(g, gles.GL_NORMAL_ARRAY);
+    gles.disable(g, gles.GL_DEPTH_TEST);
+    gles.disable(g, gles.GL_CULL_FACE);
+    gles.disable(g, gles.GL_LIGHTING);
+    gles.disable(g, gles.GL_LIGHT0);
+    gles.disable(g, gles.GL_NORMALIZE);
 }
 
 /// The 1×1 opaque-white texture flat fills sample so one MODULATE pipeline serves shapes,

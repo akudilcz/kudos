@@ -3928,6 +3928,8 @@ src/ui/screen/kgl.zig: pub fn textWidth(atlas: Atlas, str: []const u8) f32
 src/ui/screen/kgl.zig: pub const Painter = struct
 src/ui/screen/kgl.zig: pub fn uploadAtlas(g: *gles.Context, w: u32, h: u32, bytes: []const u8) u32
 src/ui/screen/kgl.zig: pub fn uploadImage(g: *gles.Context, w: u32, h: u32, rgba: []const u8) u32
+src/ui/screen/kgl.zig: pub const LitMesh = struct
+src/ui/screen/kgl.zig: pub fn litMesh(g: *gles.Context, m: LitMesh) void
 src/ui/screen/surface.zig: pub const Color = u32; // 0xAARRGGBB, PREMULTIPLIED alpha. The alpha byte only
 src/ui/screen/surface.zig: pub fn premultiply(c: Color, a: u8) Color
 src/ui/screen/surface.zig: pub const Surface = struct
@@ -4004,6 +4006,14 @@ src/ui/wm/square.zig: pub const SIZE: i32 = 50;
 src/ui/wm/square.zig: pub const STEP: i32 = 1;
 src/ui/wm/square.zig: pub const STEP_TICKS: u64 = 1;
 src/ui/wm/square.zig: pub const COLOR: u32 = 0xFF33DDEE;
+src/ui/wm/square.zig: pub const MATERIAL: [4]f32 = .{
+src/ui/wm/square.zig: pub const SPIN_DEG_PER_STEP: f64 = 0.9;
+src/ui/wm/square.zig: pub const TILT_DEG: f32 = 20.0;
+src/ui/wm/square.zig: pub fn angleDeg(phase: u64) f32
+src/ui/wm/square.zig: pub const CUBE_VERTS = 36;
+src/ui/wm/square.zig: pub const PROJ_HALF_EXTENT: f32 = @sqrt(3.0);
+src/ui/wm/square.zig: pub const VERTS: [CUBE_VERTS * 3]f32 = flat(cubeVertex);
+src/ui/wm/square.zig: pub const NORMS: [CUBE_VERTS * 3]f32 = flat(cubeNormal);
 src/ui/wm/square.zig: pub const Motion = struct
 src/ui/wm/window.zig: pub const BORDER: usize = 1;
 src/ui/wm/window.zig: pub const TITLE_H: usize = @as(usize, @intFromFloat(chrome.TITLE_H)) - BORDER;

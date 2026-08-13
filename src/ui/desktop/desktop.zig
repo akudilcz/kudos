@@ -436,9 +436,9 @@ pub const Desktop = struct {
                 self.wm.markWindow(a.window());
             }
         }
-        // Bouncing-square screensaver: advance it on its own cadence phase and mark
-        // its damage. It composites below the windows, so
-        // no per-window state to touch — the frame draws it from its Motion.
+        // Screensaver cube: advance it on its own cadence phase and mark its
+        // damage. It composites below the windows, so no per-window state to
+        // touch — the frame draws it from its Motion (position AND spin angle).
         if (self.wm.tickSquare(timer.now() / square.STEP_TICKS)) changed = true;
         // Test-hooks WM state mirror: emit any window-manager state CHANGES since
         // the last tick as `dbg: wm.*` records, so the integration harness asserts

@@ -124,14 +124,14 @@ pub const Wm = struct {
     dirty: [MAX_DIRTY]Rect = undefined,
     ndirty: usize = 0,
     full: bool = true, // first render paints everything
-    // The bouncing-square screensaver's pure motion — drawn by the GL desktop
-    // above the wallpaper, below every window. The desktop drives it via
-    // tickSquare beside its app ticks.
+    // The screensaver cube's pure motion — drawn by the GL desktop above the
+    // wallpaper, below every window, inside this SIZE box. The desktop drives
+    // it via tickSquare beside its app ticks.
     square: square.Motion,
 
     /// The WM model for a `screen_w`×`screen_h` desktop with an empty window
     /// list. The first frame is a full redraw (`full` defaults true). `seed`
-    /// seeds the bouncing square's initial direction (the kernel passes
+    /// seeds the screensaver's initial drift direction (the kernel passes
     /// `tsc.rdtsc()`; host tests pass any value).
     pub fn init(a: std.mem.Allocator, screen_w: usize, screen_h: usize, seed: u64) Wm {
         return .{
@@ -204,7 +204,7 @@ pub const Wm = struct {
         self.full = true;
     }
 
-    /// Advance the bouncing square for `phase` (the desktop's `timer.now() /
+    /// Advance the screensaver cube's box for `phase` (the desktop's `timer.now() /
     /// square.STEP_TICKS`) and, if it moved, mark its old + new rects dirty — the
     /// same move-and-damage primitive a window drag uses. Returns true iff it
     /// moved (the desktop ORs this into `changed` to trigger a render).

@@ -1,6 +1,6 @@
 //! The desktop's compositing/render path: the one gles context the whole
 //! desktop draws through (GlesComp), the whole-desktop GL frame (wallpaper,
-//! screensaver square, window chrome and content, dock), the deferred
+//! screensaver cube, window chrome and content, dock), the deferred
 //! frame-completion handshake with the present ring, and the wallpaper
 //! hand-off from the `background` command. One concern of the Desktop: every
 //! function takes the Desktop and keeps its call order.
@@ -24,6 +24,9 @@ comptime {
         @compileError("dock.Icon and the baked icon atlas disagree — regenerate scripts/gen-icons.py");
 }
 const square = @import("../wm/square.zig");
+// The screensaver cube is lit with the machine's ONE lamp — spin.zig owns the
+// lighting facts, so every lit surface on the desktop reads as one world.
+const spin = @import("../../apps/spin.zig");
 const BlobWindow = @import("../../apps/blobwin.zig").BlobWindow; // the module-drawn window (never_inline'd replay)
 const vfs = @import("vfs");
 const png = @import("modelcache").png;
@@ -223,7 +226,7 @@ fn uploadTypeface(g: *gles.Context, alloc: std.mem.Allocator) u32 {
     return kgl.uploadAtlas(g, typeface.SHEET_W, typeface.sheetHeight(), la);
 }
 
-/// Render the whole desktop as ONE GL frame — wallpaper, screensaver square, every
+/// Render the whole desktop as ONE GL frame — wallpaper, screensaver cube, every
 /// window's frosted chrome and content (2D apps as batched painter draws, 3D models
 /// inline), then the dock — through `kgl → gles → idraw` onto the GPU. The backend
 /// de-tiles the finished frame into the scanout ring and flips it. The caller
@@ -281,8 +284,13 @@ fn renderGles(d: *Desktop) void {
     } else {
         glcomp.wallpaper(&gc.painter, wf, hf, WP_TOP, WP_BOTTOM);
     }
-    // The bouncing square — above the wallpaper, below every window.
-    gc.painter.fillRect(@floatFromInt(d.wm.square.x), @floatFromInt(d.wm.square.y), @floatFromInt(square.SIZE), @floatFromInt(square.SIZE), square.COLOR);
+    // The screensaver cube — above the wallpaper, below every window. A 3D
+    // draw mid-2D-frame: flush the painter batch, hand the context to the
+    // confined cube, then re-open the 2D state (the model-window shape).
+    gc.painter.end();
+    drawScreensaverCube(gc, d.wm.square.x, d.wm.square.y, d.wm.square.step_phase, sh, clip);
+    gc.painter.begin(&gc.gctx, @intCast(sw), @intCast(sh));
+    applyClip(gc, sh, clip); // begin() reset the scissor; restore the frame clip
     for (d.wm.windows.items) |win| {
         if (win.minimized) continue; // hidden until restored from the dock
         gc.painter.setOrigin(0, 0);
@@ -433,6 +441,35 @@ noinline fn drawSceneWindow(
         gc.painter.setOrigin(@floatFromInt(cx), @floatFromInt(cy));
         gc.painter.text(gc.atlas_tex, gc.atlas, "waiting for the app's first frame ...", 12, 12, 0xFF8A9099);
     }
+}
+
+/// The screensaver's rotating lit cube, confined to its SIZE×SIZE box at
+/// (x, y): the viewport maps kgl's tight orthographic projection into the box
+/// (square.PROJ_HALF_EXTENT is the cube's circumsphere radius, so no rotation
+/// can project outside it) and the scissor — the box ∩ the frame's damage
+/// clip — guarantees regardless that no pixel escapes the rect tickSquare
+/// marked. The spin angle derives from the motion's own cadence phase — one
+/// clock drives both. Geometry and pose are the screensaver's (square.zig),
+/// the lamp is the machine's (spin.zig). Its own noinline function so its
+/// locals stay out of renderGles's per-frame stack (the scene-replay rule).
+noinline fn drawScreensaverCube(gc: *GlesComp, x: i32, y: i32, phase: u64, sh: usize, clip: ?Clip) void {
+    const g = &gc.gctx;
+    const y_gl: i32 = @as(i32, @intCast(sh)) - (y + square.SIZE);
+    gles.viewport(g, x, y_gl, square.SIZE, square.SIZE);
+    scissorWithin(gc, sh, x, y, @intCast(square.SIZE), @intCast(square.SIZE), clip);
+    kgl.litMesh(g, .{
+        .verts = &square.VERTS,
+        .norms = &square.NORMS,
+        .material = square.MATERIAL,
+        .tilt_deg = square.TILT_DEG,
+        .spin_deg = square.angleDeg(phase),
+        .half_extent = square.PROJ_HALF_EXTENT,
+        .lamp_dir = spin.LAMP_DIR,
+        .lamp_color = spin.LAMP_COLOR,
+        .lamp_ambient = spin.LAMP_AMBIENT,
+        .shininess = spin.LAMP_SHININESS,
+    });
+    gles.disable(g, gles.GL_SCISSOR_TEST); // the caller's applyClip restores the frame clip
 }
 
 /// Scissor the context to `clip` (whole-frame damage), or DISABLE the scissor
