@@ -2813,8 +2813,8 @@ src/iface/ivirt.zig: pub fn setFetchProgress(id: Id, half: FetchHalf, done: u64,
 src/iface/ivirt.zig: pub fn fetchProgress(id: Id) FetchProgress
 src/iface/ivirt.zig: pub fn requestStop(id: Id) void
 src/iface/ivirt.zig: pub fn takeStop(id: Id) bool
-src/iface/ivirt.zig: pub const BootRequest = struct { image: u8 };
-src/iface/ivirt.zig: pub fn postBootRequest(image: u8) bool
+src/iface/ivirt.zig: pub const BootRequest = struct { image: u8, adopt_win: u32 };
+src/iface/ivirt.zig: pub fn postBootRequest(image: u8, adopt_win: u32) bool
 src/iface/ivirt.zig: pub fn takeBootRequest() ?BootRequest
 src/iface/ivirt.zig: pub fn stopRequested(id: Id) bool
 src/iface/ivirt.zig: pub fn conWrite(id: Id, b: u8) bool
@@ -3881,6 +3881,9 @@ src/ui/desktop/input.zig: pub fn drainFaults(d: *Desktop) bool
 src/ui/desktop/lifecycle.zig: pub fn spawnTerm(d: *Desktop, x: i32, y: i32, w: usize, h: usize, title: ?[]const u8, ai_mode: bool) !*Window
 src/ui/desktop/lifecycle.zig: pub fn spawnApp(d: *Desktop, kind: Kind) !void
 src/ui/desktop/lifecycle.zig: pub fn spawnVmWindow(d: *Desktop, id: ivirt.Id) !void
+src/ui/desktop/lifecycle.zig: pub const AdoptResult = enum { done, busy, gone };
+src/ui/desktop/lifecycle.zig: pub fn adoptVmWindow(d: *Desktop, win_id: u32, id: ivirt.Id) AdoptResult
+src/ui/desktop/lifecycle.zig: pub fn restoreTerminalWindow(d: *Desktop, i: usize) void
 src/ui/desktop/lifecycle.zig: pub fn spawnBlobWindow(d: *Desktop, req: iwindow.CreateReq) !void
 src/ui/desktop/lifecycle.zig: pub fn spawnAgent(d: *Desktop) !void
 src/ui/desktop/lifecycle.zig: pub fn focusRunning(d: *Desktop, kind: Kind) bool

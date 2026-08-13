@@ -43,10 +43,38 @@ pub const Item = struct {
     running: bool,
 };
 
-/// The slab rectangle for `n` tiles, centred along the bottom of `screen_w × h`.
-pub fn slabRect(screen_w: f32, screen_h: f32, n: usize) Rect {
+/// One RUNNING-window slot (DSK-021): every open window holds one, visible or
+/// minimised. The slot draws the window title's initial rather than an app
+/// icon — the letter is what visually separates "switch to this window" from
+/// the launcher zone's "spawn a new one", beside the separator bar.
+pub const WinItem = struct {
+    accent: u32,
+    /// The window title's first character, uppercased by the caller.
+    ch: u8,
+    focused: bool,
+    minimized: bool,
+};
+
+/// Where a dock click landed: a LAUNCHER tile (spawn a new window of that
+/// app, DSK-016) or a WINDOW slot (focus/restore that window, DSK-021).
+pub const Hit = union(enum) { launcher: usize, window: usize };
+
+/// The separator between the zones, and its breathing room.
+pub const SEP_W: f32 = 2;
+pub const SEP_GAP: f32 = 14;
+
+/// Width of a row of `n` tiles including inner gaps.
+fn rowWidth(n: usize) f32 {
     const nf: f32 = @floatFromInt(n);
-    const inner = nf * ICON + (if (n > 0) (nf - 1) * GAP else 0);
+    return if (n > 0) nf * ICON + (nf - 1) * GAP else 0;
+}
+
+/// The slab rectangle for `n_launch` launcher tiles and `n_win` window slots,
+/// centred along the bottom of `screen_w × h`. The separator is only present
+/// when both zones are.
+pub fn slabRect(screen_w: f32, screen_h: f32, n_launch: usize, n_win: usize) Rect {
+    var inner = rowWidth(n_launch);
+    if (n_win > 0) inner += SEP_GAP + SEP_W + SEP_GAP + rowWidth(n_win);
     const w = inner + PAD * 2;
     return .{
         .x = (screen_w - w) * 0.5,
@@ -57,7 +85,7 @@ pub fn slabRect(screen_w: f32, screen_h: f32, n: usize) Rect {
 }
 pub const MARGIN: f32 = 16; // gap between the slab and the screen bottom
 
-/// Tile `i`'s rectangle within the slab.
+/// Launcher tile `i`'s rectangle within the slab.
 pub fn iconRect(slab: Rect, i: usize) Rect {
     const fi: f32 = @floatFromInt(i);
     return .{
@@ -68,15 +96,40 @@ pub fn iconRect(slab: Rect, i: usize) Rect {
     };
 }
 
-/// Which tile (0..n) a screen point hits, or null — the desktop maps the index to
-/// launch-or-focus that app.
-pub fn iconAt(screen_w: f32, screen_h: f32, n: usize, px: f32, py: f32) ?usize {
-    const slab = slabRect(screen_w, screen_h, n);
+/// The separator bar's rectangle (call only with both zones populated).
+pub fn sepRect(slab: Rect, n_launch: usize) Rect {
+    return .{
+        .x = slab.x + PAD + rowWidth(n_launch) + SEP_GAP,
+        .y = slab.y + (DOCK_H - ICON) * 0.5,
+        .w = SEP_W,
+        .h = ICON,
+    };
+}
+
+/// Window slot `j`'s rectangle within the slab.
+pub fn winRect(slab: Rect, n_launch: usize, j: usize) Rect {
+    const fj: f32 = @floatFromInt(j);
+    return .{
+        .x = slab.x + PAD + rowWidth(n_launch) + SEP_GAP + SEP_W + SEP_GAP + fj * (ICON + GAP),
+        .y = slab.y + (DOCK_H - ICON) * 0.5,
+        .w = ICON,
+        .h = ICON,
+    };
+}
+
+/// Which tile a screen point hits, in either zone, or null.
+pub fn hitAt(screen_w: f32, screen_h: f32, n_launch: usize, n_win: usize, px: f32, py: f32) ?Hit {
+    const slab = slabRect(screen_w, screen_h, n_launch, n_win);
     if (py < slab.y or py > slab.y + slab.h) return null;
     var i: usize = 0;
-    while (i < n) : (i += 1) {
+    while (i < n_launch) : (i += 1) {
         const r = iconRect(slab, i);
-        if (px >= r.x and px < r.x + r.w and py >= r.y and py < r.y + r.h) return i;
+        if (px >= r.x and px < r.x + r.w and py >= r.y and py < r.y + r.h) return .{ .launcher = i };
+    }
+    var j: usize = 0;
+    while (j < n_win) : (j += 1) {
+        const r = winRect(slab, n_launch, j);
+        if (px >= r.x and px < r.x + r.w and py >= r.y and py < r.y + r.h) return .{ .window = j };
     }
     return null;
 }
