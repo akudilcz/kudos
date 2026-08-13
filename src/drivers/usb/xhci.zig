@@ -1085,10 +1085,14 @@ const Hid = struct {
     mps: u32, // endpoint max packet size
     last_keys: [6]u8 = .{0} ** 6, // previous keyboard report, for the press/release diff
     last_mods: u8 = 0, // previous modifier bitmap, for the modifier edges
-    /// The next report seeds the diff instead of producing edges — true on a
-    /// FRESH configuration (this struct is replaced on re-init, which zeroes
-    /// the diff state while the device may still hold keys).
-    baseline_pending: bool = true,
+    /// The next report seeds the diff instead of producing edges. Armed ONLY on
+    /// a RE-configuration (configureHid sees a Hid already in the slot): the
+    /// re-init zeroes the diff state while the device may still HOLD keys, and
+    /// without the baseline every recovery cycle replays them as presses (the
+    /// flood wedge). A FIRST configuration keeps this false — its all-zero
+    /// last_keys already describe the device, and a baseline there EATS the
+    /// machine's first real keystroke (compile-run typed `ip`, the shell got `p`).
+    baseline_pending: bool = false,
     layout: hid_report.MouseLayout = .{}, // mouse report field offsets (boot layout default)
     // Per-endpoint recovery state (a composite device drives two endpoints — a
     // keyboard and a mouse — and each falls silent, halts, and self-heals on its
@@ -2490,6 +2494,12 @@ fn configureHidInterface(d: *Device, pick: hid_report.Pick, slot: usize, is_cand
     // state defaults (seen_report=false, rekicks=0, resurrected=false) leave it
     // alone until it delivers a report. A resurrect re-arm (queueHid, not this)
     // does NOT reset those: that endpoint already proved live once.
+    //
+    // Baseline only on RE-configuration: replacing an existing Hid zeroes its
+    // press/release diff while the device may still hold keys, so the next
+    // report must seed, not type (the flood wedge). A first configuration's
+    // report is the first real input — seeding from it would swallow it.
+    const was_configured = d.hids[slot] != null;
     d.hids[slot] = .{
         .kind = kind,
         .ring = d.hid_rings[slot].?,
@@ -2497,6 +2507,7 @@ fn configureHidInterface(d: *Device, pick: hid_report.Pick, slot: usize, is_cand
         .report = d.hid_reports[slot],
         .mps = ep_mps,
         .layout = layout,
+        .baseline_pending = was_configured,
     };
     const hid = &d.hids[slot].?;
 
