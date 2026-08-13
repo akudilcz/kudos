@@ -61,7 +61,7 @@ pub fn windowFrame(p: *kgl.Painter, win: Window, atlas_tex: u32, atlas: kgl.Atla
 
 /// The dock along the bottom. Resets the origin first, so it lands in screen space
 /// whatever the last window left it at.
-pub fn dockBar(p: *kgl.Painter, icons_tex: u32, icons: kgl.Atlas, screen_w: f32, screen_h: f32, items: []const dock.Item) void {
+pub fn dockBar(p: *kgl.Painter, icons_tex: u32, icons: kgl.Atlas, glyph_tex: u32, glyphs: kgl.Atlas, screen_w: f32, screen_h: f32, items: []const dock.Item, wins: []const dock.WinItem) void {
     p.setOrigin(0, 0);
-    dock.draw(p, icons_tex, icons, screen_w, screen_h, items);
+    dock.draw(p, icons_tex, icons, glyph_tex, glyphs, screen_w, screen_h, items, wins);
 }

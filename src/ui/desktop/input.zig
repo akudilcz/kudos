@@ -141,16 +141,28 @@ pub fn onMouse(d: *Desktop, ev: imouse.MouseEvent) bool {
     if ((gles.hasGpuDevice() or gles.hasSoftwareDevice()) and (ev.buttons & 1) != 0 and (d.wm.prev_buttons & 1) == 0) {
         const sw: f32 = @floatFromInt(framebuffer.width());
         const sh: f32 = @floatFromInt(framebuffer.height());
-        if (dock.iconAt(sw, sh, desktop_mod.DOCK_APPS.len, @floatFromInt(d.cursor_x), @floatFromInt(d.cursor_y))) |i| {
-            // The tile REVEALS before it launches: a minimised window of
-            // this kind restores, a visible one raises to focus — only
-            // when none is running does the tile spawn (spec R26). Never
-            // a duplicate from a tile click.
-            if (lifecycle.restoreMinimised(d, desktop_mod.DOCK_APPS[i].kind)) {} else if (lifecycle.focusRunning(d, desktop_mod.DOCK_APPS[i].kind)) {} else lifecycle.spawnApp(d, desktop_mod.DOCK_APPS[i].kind) catch |e| {
-                klog.puts("desktop: dock spawn failed (");
-                klog.puts(@errorName(e));
-                klog.puts(")\n");
-            };
+        const n_wins = blk: {
+            var tmp: [desktop_mod.DOCK_WIN_SLOTS]dock.WinItem = undefined;
+            break :blk d.dockWinItems(&tmp);
+        };
+        if (dock.hitAt(sw, sh, desktop_mod.DOCK_APPS.len, n_wins, @floatFromInt(d.cursor_x), @floatFromInt(d.cursor_y))) |hit| {
+            switch (hit) {
+                // A launcher tile SPAWNS — always a new window. Reaching a
+                // running one is the window zone's job (DSK-021); the two
+                // zones existing separately is what makes either unambiguous.
+                .launcher => |i| lifecycle.spawnApp(d, desktop_mod.DOCK_APPS[i].kind) catch |e| {
+                    klog.puts("desktop: dock spawn failed (");
+                    klog.puts(@errorName(e));
+                    klog.puts(")\n");
+                },
+                // A window slot focuses its window, restoring it out of the
+                // dock first when minimised.
+                .window => |j| if (d.dockWindowAt(j)) |win| {
+                    if (win.minimized) d.wm.unminimise(win);
+                    d.wm.focus(win);
+                    d.wm.markFull();
+                },
+            }
             d.wm.prev_buttons = ev.buttons; // consume the press
             return true;
         }

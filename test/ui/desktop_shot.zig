@@ -90,7 +90,7 @@ fn compose(p: *kgl.Painter, atlas_tex: u32, icons_tex: u32, icons: []const dock.
         drawBody(p, win, atlas_tex, atlas, body);
     }
 
-    glcomp.dockBar(p, icons_tex, iconsAtlas(), DWf, DHf, icons);
+    glcomp.dockBar(p, icons_tex, iconsAtlas(), atlas_tex, atlas, DWf, DHf, icons, &.{});
 }
 
 /// Read the sim's BGRA framebuffer back and write it as a binary PPM (P6, RGB).
@@ -194,7 +194,7 @@ fn dockHash(ta: std.mem.Allocator, running: bool) !u64 {
     p.begin(&g, DW, DH);
     glcomp.wallpaper(&p, DWf, DHf, 0xFF1E4E8C, 0xFF6B3F9E);
     const icons = [_]dock.Item{.{ .accent = 0xFF0A84FF, .icon = .terminal, .running = running }};
-    glcomp.dockBar(&p, icons_tex, iconsAtlas(), DWf, DHf, &icons);
+    glcomp.dockBar(&p, icons_tex, iconsAtlas(), icons_tex, iconsAtlas(), DWf, DHf, &icons, &.{});
     p.end();
     gles.swapBuffers(&g);
     gles.finish(&g);

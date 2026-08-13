@@ -3861,6 +3861,7 @@ src/ui/desktop/cursor.zig: pub const HOT_X: u32 = 0;
 src/ui/desktop/cursor.zig: pub const HOT_Y: u32 = 0;
 src/ui/desktop/cursor.zig: pub fn bake() [W * H * 4]u8
 src/ui/desktop/desktop.zig: pub const DockApp = struct { kind: Kind, accent: u32, icon: dock.Icon };
+src/ui/desktop/desktop.zig: pub const DOCK_WIN_SLOTS: usize = 12;
 src/ui/desktop/desktop.zig: pub const DOCK_APPS = [_]DockApp{
 src/ui/desktop/desktop.zig: pub const Desktop = struct
 src/ui/desktop/dock.zig: pub const DOCK_H: f32 = 68;
@@ -3871,14 +3872,20 @@ src/ui/desktop/dock.zig: pub const RADIUS: f32 = 20; // the slab's rounded corne
 src/ui/desktop/dock.zig: pub const Rect = struct { x: f32, y: f32, w: f32, h: f32 };
 src/ui/desktop/dock.zig: pub const Icon = enum(u8)
 src/ui/desktop/dock.zig: pub const Item = struct
-src/ui/desktop/dock.zig: pub fn slabRect(screen_w: f32, screen_h: f32, n: usize) Rect
+src/ui/desktop/dock.zig: pub const WinItem = struct
+src/ui/desktop/dock.zig: pub const Hit = union(enum) { launcher: usize, window: usize };
+src/ui/desktop/dock.zig: pub const SEP_W: f32 = 2;
+src/ui/desktop/dock.zig: pub const SEP_GAP: f32 = 14;
+src/ui/desktop/dock.zig: pub fn slabRect(screen_w: f32, screen_h: f32, n_launch: usize, n_win: usize) Rect
 src/ui/desktop/dock.zig: pub const MARGIN: f32 = 16; // gap between the slab and the screen bottom
 src/ui/desktop/dock.zig: pub fn iconRect(slab: Rect, i: usize) Rect
-src/ui/desktop/dock.zig: pub fn iconAt(screen_w: f32, screen_h: f32, n: usize, px: f32, py: f32) ?usize
+src/ui/desktop/dock.zig: pub fn sepRect(slab: Rect, n_launch: usize) Rect
+src/ui/desktop/dock.zig: pub fn winRect(slab: Rect, n_launch: usize, j: usize) Rect
+src/ui/desktop/dock.zig: pub fn hitAt(screen_w: f32, screen_h: f32, n_launch: usize, n_win: usize, px: f32, py: f32) ?Hit
 src/ui/desktop/dock.zig: pub fn lighten(c: u32, t: f32) u32
 src/ui/desktop/dock.zig: pub fn darken(c: u32, t: f32) u32
 src/ui/desktop/dock.zig: pub const ICON_GLYPH: f32 = 30;
-src/ui/desktop/dock.zig: pub fn draw(p: *kgl.Painter, icons_tex: u32, icons: kgl.Atlas, screen_w: f32, screen_h: f32, items: []const Item) void
+src/ui/desktop/dock.zig: pub fn draw(p: *kgl.Painter, icons_tex: u32, icons: kgl.Atlas, glyph_tex: u32, glyphs: kgl.Atlas, screen_w: f32, screen_h: f32, items: []const Item, wins: []const WinItem) void
 src/ui/desktop/hud.zig: pub const SAMPLE_MS = hudview.SAMPLE_MS;
 src/ui/desktop/hud.zig: pub fn visible() bool
 src/ui/desktop/hud.zig: pub fn toggle() void
@@ -4040,7 +4047,7 @@ src/ui/wm/glcomp.zig: pub const Window = struct
 src/ui/wm/glcomp.zig: pub fn wallpaper(p: *kgl.Painter, w: f32, h: f32, top: u32, bottom: u32) void
 src/ui/wm/glcomp.zig: pub fn wallpaperImage(p: *kgl.Painter, w: f32, h: f32, tex: u32) void
 src/ui/wm/glcomp.zig: pub fn windowFrame(p: *kgl.Painter, win: Window, atlas_tex: u32, atlas: kgl.Atlas) void
-src/ui/wm/glcomp.zig: pub fn dockBar(p: *kgl.Painter, icons_tex: u32, icons: kgl.Atlas, screen_w: f32, screen_h: f32, items: []const dock.Item) void
+src/ui/wm/glcomp.zig: pub fn dockBar(p: *kgl.Painter, icons_tex: u32, icons: kgl.Atlas, glyph_tex: u32, glyphs: kgl.Atlas, screen_w: f32, screen_h: f32, items: []const dock.Item, wins: []const dock.WinItem) void
 src/ui/wm/square.zig: pub const SIZE: i32 = 50;
 src/ui/wm/square.zig: pub const STEP: i32 = 1;
 src/ui/wm/square.zig: pub const STEP_TICKS: u64 = 1;

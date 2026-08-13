@@ -50,11 +50,15 @@ const WM_SNAP_CAP: usize = 32; // more windows than any test scenario opens
 const WmSnap = struct { id: u32, x: i32, y: i32, w: usize, h: usize, max: bool, seen: bool };
 
 /// The dock's launcher tiles — a fixed set of apps, each a rounded accent tile with a
-/// glyph; `running` is filled per frame from the open windows. Clicking a tile reveals a
-/// running instance of that app or spawns one (input.zig, spec R26). The dock is drawn
-/// only on the gles/GPU compositor path.
+/// glyph; `running` is filled per frame from the open windows. Clicking a tile SPAWNS a
+/// new window (DSK-016); reaching a running one is the window zone's job (DSK-021).
+/// The dock is drawn only on the gles/GPU compositor path.
 /// Shared home for its two users: input.zig hit-tests the tiles, render.zig draws them.
 pub const DockApp = struct { kind: Kind, accent: u32, icon: dock.Icon };
+/// Most window slots the dock shows (DSK-021) — past this the newest windows
+/// go slot-less rather than shrinking the tiles below hit size.
+pub const DOCK_WIN_SLOTS: usize = 12;
+
 pub const DOCK_APPS = [_]DockApp{
     .{ .kind = .term, .accent = 0xFF0A84FF, .icon = .terminal }, // Terminal — blue
     .{ .kind = .system, .accent = 0xFF30D158, .icon = .system }, // System monitor — green
@@ -326,6 +330,47 @@ pub const Desktop = struct {
             if (a.kind() == kind) return true;
         }
         return false;
+    }
+
+    /// Fill `out` with one dock slot per open window (DSK-021), in app-list
+    /// order — the SAME order input.zig maps a slot click back through
+    /// (dockWindowAt). Returns the count; past out.len the tail is dropped and
+    /// the drop is visible as a slot-less window, never a shifted mapping.
+    pub fn dockWinItems(self: *Desktop, out: []dock.WinItem) usize {
+        var n: usize = 0;
+        for (self.apps.items) |a| {
+            if (n == out.len) break;
+            const win = a.window();
+            out[n] = .{
+                .accent = accentFor(a),
+                .ch = std.ascii.toUpper(if (win.title.len > 0) win.title[0] else '?'),
+                .focused = self.wm.focused == win,
+                .minimized = win.minimized,
+            };
+            n += 1;
+        }
+        return n;
+    }
+
+    /// The window at dock slot `j` — dockWinItems' order, resolved back.
+    pub fn dockWindowAt(self: *Desktop, j: usize) ?*Window {
+        if (j >= self.apps.items.len or j >= DOCK_WIN_SLOTS) return null;
+        return self.apps.items[j].window();
+    }
+
+    /// A window slot's accent: the launcher accent of the app's Kind; the
+    /// kind-less windows get their own stable colours.
+    fn accentFor(a: App) u32 {
+        if (a.kind()) |k| {
+            for (DOCK_APPS) |da| {
+                if (da.kind == k) return da.accent;
+            }
+        }
+        return switch (a) {
+            .model => 0xFF64D2FF, // the model viewer — teal
+            .blob => 0xFF8E8E93, // a module's window — gray
+            else => 0xFF636366,
+        };
     }
 
     /// Force the next render to do a full-screen present (used by the SMP system

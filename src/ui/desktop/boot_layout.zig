@@ -13,6 +13,7 @@ const buildinfo = @import("buildinfo");
 const framebuffer = @import("../screen/framebuffer.zig");
 const window_mod = @import("../wm/window.zig");
 const desktop_mod = @import("desktop.zig");
+const dock = @import("dock.zig");
 const Desktop = desktop_mod.Desktop;
 const lifecycle = @import("lifecycle.zig");
 
@@ -46,7 +47,12 @@ const BootRect = struct { x: i32, y: i32, w: usize, h: usize };
 /// screen exactly: no overlap, no uncovered strip.
 fn tileRect(i: usize) BootRect {
     const sw = framebuffer.width();
-    const sh = framebuffer.height();
+    // The tiles partition the screen ABOVE the dock strip: a tile under the
+    // slab would put its close box and its content's bottom rows beneath
+    // frosted glass.
+    const dock_strip: usize = @intFromFloat(dock.DOCK_H + 2 * dock.MARGIN);
+    const sh_full = framebuffer.height();
+    const sh = if (sh_full > dock_strip * 2) sh_full - dock_strip else sh_full;
     const col = i % BOOT_COLS;
     const row = i / BOOT_COLS;
     const x = col * (sw / BOOT_COLS);

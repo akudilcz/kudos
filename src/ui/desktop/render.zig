@@ -348,14 +348,17 @@ fn renderGles(d: *Desktop) void {
             applyClip(gc, sh, clip); // back to the frame's damage clip
         }
     }
-    // The dock, over the wallpaper and windows — a rounded frosted bar of app tiles.
+    // The dock, over the wallpaper and windows — the launcher tiles, then one
+    // slot per open window (DSK-021), in app-list order.
     var dock_items: [desktop_mod.DOCK_APPS.len]dock.Item = undefined;
     for (desktop_mod.DOCK_APPS, 0..) |da, i| dock_items[i] = .{
         .accent = da.accent,
         .icon = da.icon,
         .running = d.kindRunning(da.kind),
     };
-    glcomp.dockBar(&gc.painter, gc.icons_tex, gc.icons, wf, hf, &dock_items);
+    var win_items: [desktop_mod.DOCK_WIN_SLOTS]dock.WinItem = undefined;
+    const n_wins = d.dockWinItems(&win_items);
+    glcomp.dockBar(&gc.painter, gc.icons_tex, gc.icons, gc.atlas_tex, gc.atlas, wf, hf, &dock_items, win_items[0..n_wins]);
 
     // The heads-up display goes over everything, including the dock (spec
     // HUD-003): it is a view of the machine, not another window in it.

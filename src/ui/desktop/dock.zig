@@ -164,14 +164,42 @@ pub fn darken(c: u32, t: f32) u32 {
 /// the scale below is what keeps a bitmap from pixellating at tile size.
 pub const ICON_GLYPH: f32 = 30;
 
-/// Paint the dock. `icons_tex`/`icons` is the uploaded dockicons atlas (one
-/// cell per Icon, in enum order). The painter's projection must already be the
-/// whole desktop.
-pub fn draw(p: *kgl.Painter, icons_tex: u32, icons: kgl.Atlas, screen_w: f32, screen_h: f32, items: []const Item) void {
-    const slab = slabRect(screen_w, screen_h, items.len);
+/// Paint the dock: the launcher zone, the separator, then one slot per open
+/// window (DSK-021). `icons_tex`/`icons` is the uploaded dockicons atlas (one
+/// cell per Icon, in enum order); `glyph_tex`/`glyphs` is the TEXT atlas the
+/// window slots draw their title initial from. The painter's projection must
+/// already be the whole desktop.
+pub fn draw(p: *kgl.Painter, icons_tex: u32, icons: kgl.Atlas, glyph_tex: u32, glyphs: kgl.Atlas, screen_w: f32, screen_h: f32, items: []const Item, wins: []const WinItem) void {
+    const slab = slabRect(screen_w, screen_h, items.len, wins.len);
     // Frosted slab, then a 1px top highlight so the glass catches a light edge.
     p.fillRoundedRect(slab.x, slab.y, slab.w, slab.h, RADIUS, theme.DOCK_BG);
     p.fillRect(slab.x + RADIUS, slab.y, slab.w - 2 * RADIUS, 1, theme.DOCK_HAIRLINE);
+
+    if (wins.len > 0) {
+        const sep = sepRect(slab, items.len);
+        p.fillRoundedRect(sep.x, sep.y, sep.w, sep.h, 1, theme.DOCK_HAIRLINE);
+        for (wins, 0..) |w, j| {
+            const r = winRect(slab, items.len, j);
+            // Focused: an accent ring behind the tile — the one slot whose
+            // window takes the next keystroke reads at a glance.
+            if (w.focused)
+                p.fillRoundedRect(r.x - 3, r.y - 3, r.w + 6, r.h + 6, TILE_RADIUS + 3, theme.FOCUS_ACCENT);
+            // The body: the window's kind accent, dimmed while it waits in the
+            // dock minimised.
+            const body = if (w.minimized) darken(w.accent, 0.55) else darken(w.accent, 0.20);
+            p.fillRoundedRect(r.x, r.y, r.w, r.h, TILE_RADIUS, body);
+            if (!w.minimized)
+                p.fillRoundedRect(r.x, r.y, r.w, r.h * 0.45, TILE_RADIUS, w.accent);
+            // The title initial, not an app icon: a LETTER is what says "an
+            // open window" against the launcher zone's pictures.
+            const g = [_]u8{w.ch};
+            const scale = ICON_GLYPH / glyphs.cell_h;
+            const gx = r.x + (r.w - glyphs.cell_w * scale) * 0.5;
+            const gy = r.y + (r.h - ICON_GLYPH) * 0.5;
+            p.textScaled(glyph_tex, glyphs, &g, gx, gy + 1, scale, 0x50000000);
+            p.textScaled(glyph_tex, glyphs, &g, gx, gy, scale, 0xFFFFFFFF);
+        }
+    }
 
     for (items, 0..) |it, i| {
         const r = iconRect(slab, i);
