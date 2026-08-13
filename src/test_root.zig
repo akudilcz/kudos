@@ -46,7 +46,7 @@ pub const kernel = struct {
 pub const gpu = struct {
     pub const dp = @import("drivers/gpu/display/dp.zig");
     pub const modeset = @import("drivers/gpu/display/modeset.zig");
-    pub const push = @import("drivers/gpu/core/push.zig");
+    pub const push = @import("drivers/gpu/engines/push.zig");
     pub const prof = @import("drivers/gpu/prof.zig");
 };
 

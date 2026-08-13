@@ -38,12 +38,9 @@ const tools = @import("../agent/tools.zig");
 const vfs = @import("vfs");
 const features = hotload.features;
 
-/// Where the AI.CFG file lives, named here because the tools that need one
-/// (compile, without a factory) say so in their refusal.
-/// The agent's configuration. On the RAMDISK, where a copy is seeded from the
-/// build at boot (main_root.zig): the USB stick this used to live on is a real
-/// device that no emulator run has, so a configuration kept only there was one
-/// the agent could never be given under QEMU — which is where it is developed.
+/// The agent's configuration, on the RAMDISK with a copy seeded from the build at
+/// boot (main_root.zig): a USB-only location is unreachable under QEMU, where the
+/// agent is developed. Tools that need one name this path in their refusal.
 pub const CFG_PATH = "/ramdisk/AI.CFG";
 
 /// Cap on the feature output captured into one tool result — a chatty feature
@@ -232,7 +229,7 @@ pub fn compileSource(
         if (std.mem.eql(u8, kind, "feature")) {
             try tools.printTo(out, "compiled feature {s}.kudos ({d} bytes). Hot-load it with the load_feature tool.", .{ name, resp.len });
         } else {
-            try tools.printTo(out, "compiled {s}.kudos ({d} bytes). Run it with the run_app tool, or `run {s}` in a terminal.", .{ name, resp.len, name });
+            try tools.printTo(out, "compiled {s}.kudos ({d} bytes). Run it with the run_app tool, or `kudos run {s}` in a terminal.", .{ name, resp.len, name });
         }
     } else {
         try out.appendSlice("the compiler rejected the code:\n");

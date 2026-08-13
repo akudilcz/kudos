@@ -46,7 +46,7 @@ pub fn run(c: console.Console, args: []const u8) void {
     } else if (isNumber(cmd)) {
         bootNumber(c, cmd);
     } else {
-        c.write("usage: vm [<n>|list|status|stop <id>]   (`vm list` numbers the images)\n");
+        c.write("usage: kudos vm [<n>|list|status|stop <id>]   (`kudos vm list` numbers the images)\n");
     }
 }
 
@@ -149,7 +149,7 @@ fn printStatus(c: console.Console) void {
 /// The `vm stop` body over any sink with `write([]const u8)`.
 pub fn writeStop(w: anytype, arg: []const u8) void {
     if (arg.len == 0) {
-        w.write("usage: vm stop <id>   (see `vm` for the slot ids)\n");
+        w.write("usage: kudos vm stop <id>   (see `kudos vm` for the slot ids)\n");
         return;
     }
     const id = std.fmt.parseInt(usize, arg, 10) catch {

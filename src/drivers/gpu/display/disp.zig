@@ -12,21 +12,21 @@
 
 const algn = @import("algn"); // alignment: ONE home
 const std = @import("std");
-const log = @import("../base/log.zig").gpu;
+const log = @import("../rm/log.zig").gpu;
 const gsp = @import("../gsp/gsp.zig");
 const rm = @import("../gsp/rm.zig");
-const nvrm = @import("../base/nvrm.zig");
-const vram = @import("../core/vram.zig");
-const mmio = @import("../base/mmio.zig");
-const shim = @import("../base/shim.zig");
-const fblayout = @import("../base/fblayout.zig");
+const nvrm = @import("../rm/nvrm.zig");
+const vram = @import("../engines/vram.zig");
+const mmio = @import("../rm/mmio.zig");
+const shim = @import("../rm/shim.zig");
+const fblayout = @import("../rm/fblayout.zig");
 const dp = @import("dp.zig");
-const chan = @import("../core/chan.zig");
-const ctxdma = @import("../core/ctxdma.zig");
+const chan = @import("../engines/chan.zig");
+const ctxdma = @import("../engines/ctxdma.zig");
 const modeset = @import("modeset.zig");
-const calc = @import("../base/calc.zig");
+const calc = @import("../rm/calc.zig");
 const edid = @import("edid.zig");
-const Push = @import("../core/push.zig").Push;
+const Push = @import("../engines/push.zig").Push;
 const gate = @import("../../../kernel/debug/gate.zig");
 const alignUp = algn.up;
 

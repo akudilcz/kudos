@@ -108,12 +108,12 @@ test "the boot banner reaches the ring FILE on the volume, headered and parseabl
     try std.testing.expect(second > first);
 
     // The trace itself arrives through the registered KLOG SINK — the same
-    // path kernel puts() takes — and service() drains whole sectors without a
+    // path kernel puts() takes — and drain() writes whole sectors without a
     // panic flush.
     var i: usize = 0;
     while (i < 40) : (i += 1)
         testroot.kernel.klog.puts("the quick brown fox jumps over the flight recorder\n");
-    bootlog.service();
+    bootlog.drain();
     _ = try lf.readAt(512, &body);
     try std.testing.expect(std.mem.indexOf(u8, &body, "quick brown fox") != null);
 

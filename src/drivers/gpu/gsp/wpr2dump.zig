@@ -15,8 +15,8 @@
 //!   KDUMP <name> <offset>: <w0> <w1> <w2> <w3>
 //! so the two traces diff line-for-line.
 
-const mmio = @import("../base/mmio.zig");
-const log = @import("../base/log.zig").gpu;
+const mmio = @import("../rm/mmio.zig");
+const log = @import("../rm/log.zig").gpu;
 
 const PRAMIN_WINDOW_REG: u64 = 0x001700; // window base = vram_addr >> 16
 const PRAMIN_APERTURE: u64 = 0x700000; // 1 MiB BAR0 mirror of (base << 16)

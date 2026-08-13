@@ -133,11 +133,16 @@ pub fn spawnTerm(d: *Desktop, x: i32, y: i32, w: usize, h: usize, title: ?[]cons
     // can legitimately run out (every slot in use), and failing here costs
     // nothing, whereas failing after the window is up has to unwind it.
     const sess: ?*sessionmod.Session = if (buildinfo.smp) (sessionmod.open() orelse return error.NoFreeSessions) else null;
-    // On a later failure (window cap, OOM) the session's editor TASK is already
-    // live — abort signals the close and cancels it before releasing, exactly
-    // as a window close would; a bare release would wait on a task that was
-    // never told to exit.
-    errdefer if (sess) |sp| sessionmod.abort(sp);
+    // The session has ONE owner at every instant, and the owner changes here:
+    // until the Terminal exists this function holds it (abort signals the
+    // close and cancels the already-live editor task before releasing — a bare
+    // release would wait on a task never told to exit); once the Terminal
+    // exists, the Terminal's `close` is its release path. Handing it over by
+    // clearing this variable is what stops both unwinds from releasing the
+    // same slot — a double release could hand it to a DIFFERENT terminal that
+    // had already claimed it.
+    var unowned_session = sess;
+    errdefer if (unowned_session) |sp| sessionmod.abort(sp);
     const id: u32 = if (sess) |sp| sp.id else 0;
 
     const owned_title = title orelse try std.fmt.allocPrint(d.a, "term #{d}", .{id});
@@ -149,7 +154,8 @@ pub fn spawnTerm(d: *Desktop, x: i32, y: i32, w: usize, h: usize, title: ?[]cons
     errdefer destroyWindow(d, win);
 
     const t = try Terminal.create(d.a, win, consoleDesktop(d), id, sess, ai_mode);
-    errdefer t.destroy(d.a);
+    unowned_session = null; // the Terminal owns the session from here
+    errdefer t.close(d.a, null); // frees the grid, the struct AND the session
     try appendApp(d, .{ .term = t });
     return win;
 }
@@ -433,48 +439,19 @@ pub fn closeWindow(d: *Desktop, win: *Window) void {
     // 4) Refocus the new front-most window (win is still alive here).
     if (d.wm.topmost()) |t| d.wm.focus(t);
 
-    // 5) Free app-specific buffers + the app struct.
-    switch (a) {
-        .term => |t| {
-            // Release this terminal's core (SMP) so the next `term` reuses the
-            // lowest free core; the Terminal owns the session-teardown plumbing.
-            t.shutdown();
-            t.destroy(d.a);
-        },
-        .system => |s| d.a.destroy(s),
-        .clock => |c| d.a.destroy(c),
-        .calc => |c| d.a.destroy(c),
-        .model => |mv| {
-            // Return the mesh's GL objects to the desktop context before the
-            // CPU-side teardown, so a closed window's VRAM is reusable now.
-            // The deferred frame may still be fetching from them on the GPU —
-            // complete it first, or the freed extents get reused mid-flight.
-            render.completeOpenFrame(d);
-            if (d.gles_comp) |*gc| mv.deinitGl(&gc.gctx);
-            mv.deinit();
-            d.a.destroy(mv);
-        },
-        .vm => |v| {
-            // Complete any deferred frame before freeing the scanout texture —
-            // the GPU may still be sampling it — then hand the guest back.
-            // windowClosed asks it to stop and releases the window's hold on its
-            // slot; the guest's own core frees its memory and releases the other
-            // hold, so this returns immediately and frees nothing the guest owns.
-            render.completeOpenFrame(d);
-            if (d.gles_comp) |*gc| v.deinitGl(&gc.gctx);
-            virt.windowClosed(v.id);
-            d.a.destroy(v);
-        },
-        .blob => |b| {
-            // Same GPU rule as the other textured windows; deinit resets the
-            // iwindow mailbox, which is how the module (on its own core) learns
-            // its window is gone and returns.
-            render.completeOpenFrame(d);
-            if (d.gles_comp) |*gc| b.deinitGl(&gc.gctx);
-            b.deinit();
-            d.a.destroy(b);
-        },
-    }
+    // 5) Release everything the app owns, and the app itself.
+    //
+    // The deferred frame is completed FIRST, once, for every kind: the GPU may
+    // still be sampling a texture or fetching from a mesh the app is about to
+    // give back, and freed extents reused mid-flight are a corrupted frame.
+    // Stating it here — rather than inside each textured app's arm — is why it
+    // cannot be forgotten by the next app kind that holds GPU objects.
+    //
+    // What each app owns is the APP's knowledge, not the desktop's: a close is
+    // one call, and an app that grows a buffer tomorrow frees it in its own
+    // `close` without this file changing at all.
+    render.completeOpenFrame(d);
+    a.close(d.a, if (d.gles_comp) |*gc| &gc.gctx else null);
 
     // 6) Free the window: heap-owned title + struct (a window owns no pixels).
     d.a.free(win.title);

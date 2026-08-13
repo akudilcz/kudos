@@ -33,24 +33,6 @@ const RES_ID: u32 = 1;
 
 // Register offsets, spelled independently of the transport so a transposed
 // offset there cannot self-verify (virtio 1.1 §4.2.2).
-const MAGIC: u64 = 0x000;
-const VERSION: u64 = 0x004;
-const DEVICE_ID: u64 = 0x008;
-const DEVICE_FEATURES: u64 = 0x010;
-const DEVICE_FEATURES_SEL: u64 = 0x014;
-const DRIVER_FEATURES: u64 = 0x020;
-const DRIVER_FEATURES_SEL: u64 = 0x024;
-const QUEUE_SEL: u64 = 0x030;
-const QUEUE_NUM: u64 = 0x038;
-const QUEUE_READY: u64 = 0x044;
-const QUEUE_NOTIFY: u64 = 0x050;
-const INT_STATUS: u64 = 0x060;
-const INT_ACK: u64 = 0x064;
-const STATUS: u64 = 0x070;
-const QUEUE_DESC_LOW: u64 = 0x080;
-const QUEUE_DRIVER_LOW: u64 = 0x090;
-const QUEUE_DEVICE_LOW: u64 = 0x0a0;
-const CONFIG: u64 = 0x100;
 
 // §2.1 device status bits, as a driver sets them in order.
 const STATUS_ACKNOWLEDGE: u32 = 1;
@@ -85,26 +67,26 @@ const Fx = struct {
     /// Everything a Linux virtio driver does before it submits work: probe,
     /// negotiate features, program the control queue, DRIVER_OK.
     fn bringUp(self: *Fx) !void {
-        try expectEqual(@as(u32, 0x74726976), self.dev.read(MAGIC, 4)); // "virt"
-        try expectEqual(@as(u32, 2), self.dev.read(VERSION, 4));
-        try expectEqual(@as(u32, 16), self.dev.read(DEVICE_ID, 4)); // GPU device
+        try expectEqual(@as(u32, 0x74726976), self.dev.read(mmio.REG_MAGIC_VALUE, 4)); // "virt"
+        try expectEqual(@as(u32, 2), self.dev.read(mmio.REG_VERSION, 4));
+        try expectEqual(@as(u32, 16), self.dev.read(mmio.REG_DEVICE_ID, 4)); // GPU device
 
-        self.dev.write(STATUS, 4, STATUS_ACKNOWLEDGE);
-        self.dev.write(STATUS, 4, STATUS_ACKNOWLEDGE | STATUS_DRIVER);
+        self.dev.write(mmio.REG_STATUS, 4, STATUS_ACKNOWLEDGE);
+        self.dev.write(mmio.REG_STATUS, 4, STATUS_ACKNOWLEDGE | STATUS_DRIVER);
         // VIRTIO_F_VERSION_1 lives in feature bank 1, bit 0.
-        self.dev.write(DEVICE_FEATURES_SEL, 4, 1);
-        try expectEqual(@as(u32, 1), self.dev.read(DEVICE_FEATURES, 4));
-        self.dev.write(DRIVER_FEATURES_SEL, 4, 1);
-        self.dev.write(DRIVER_FEATURES, 4, 1);
-        self.dev.write(STATUS, 4, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
+        self.dev.write(mmio.REG_DEVICE_FEATURES_SEL, 4, 1);
+        try expectEqual(@as(u32, 1), self.dev.read(mmio.REG_DEVICE_FEATURES, 4));
+        self.dev.write(mmio.REG_DRIVER_FEATURES_SEL, 4, 1);
+        self.dev.write(mmio.REG_DRIVER_FEATURES, 4, 1);
+        self.dev.write(mmio.REG_STATUS, 4, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
 
-        self.dev.write(QUEUE_SEL, 4, 0);
-        self.dev.write(QUEUE_NUM, 4, QSIZE);
-        self.dev.write(QUEUE_DESC_LOW, 4, @intCast(DESC_GPA));
-        self.dev.write(QUEUE_DRIVER_LOW, 4, @intCast(AVAIL_GPA));
-        self.dev.write(QUEUE_DEVICE_LOW, 4, @intCast(USED_GPA));
-        self.dev.write(QUEUE_READY, 4, 1);
-        self.dev.write(STATUS, 4, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
+        self.dev.write(mmio.REG_QUEUE_SEL, 4, 0);
+        self.dev.write(mmio.REG_QUEUE_NUM, 4, QSIZE);
+        self.dev.write(mmio.REG_QUEUE_DESC_LOW, 4, @intCast(DESC_GPA));
+        self.dev.write(mmio.REG_QUEUE_DRIVER_LOW, 4, @intCast(AVAIL_GPA));
+        self.dev.write(mmio.REG_QUEUE_DEVICE_LOW, 4, @intCast(USED_GPA));
+        self.dev.write(mmio.REG_QUEUE_READY, 4, 1);
+        self.dev.write(mmio.REG_STATUS, 4, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
     }
 
     fn setDesc(self: *Fx, i: u16, addr: u64, len: u32, flags: u16, next: u16) void {
@@ -131,7 +113,7 @@ const Fx = struct {
         self.setDesc(0, REQ_GPA, @intCast(req.len), virtq.F_NEXT, 1);
         self.setDesc(1, RESP_GPA, RESP_CAP, virtq.F_WRITE, 0);
         self.pushAvail(0);
-        self.dev.write(QUEUE_NOTIFY, 4, 0);
+        self.dev.write(mmio.REG_QUEUE_NOTIFY, 4, 0);
         self.submitted += 1;
         try expectEqual(self.submitted, std.mem.readInt(u16, self.ram[@intCast(USED_GPA + 2)..][0..2], .little));
         return std.mem.readInt(u32, self.ram[@intCast(RESP_GPA)..][0..4], .little);
@@ -176,18 +158,18 @@ test "config space reports one scanout, at every access width" {
     var f: Fx = undefined;
     f.init();
     // num_scanouts is the third u32 of struct virtio_gpu_config.
-    try expectEqual(@as(u32, 1), f.dev.read(CONFIG + 8, 4));
-    try expectEqual(@as(u32, 1), f.dev.read(CONFIG + 8, 1));
-    try expectEqual(@as(u32, 1), f.dev.read(CONFIG + 8, 2));
+    try expectEqual(@as(u32, 1), f.dev.read(mmio.REG_CONFIG + 8, 4));
+    try expectEqual(@as(u32, 1), f.dev.read(mmio.REG_CONFIG + 8, 1));
+    try expectEqual(@as(u32, 1), f.dev.read(mmio.REG_CONFIG + 8, 2));
     // events_read / events_clear / num_capsets are all zero.
-    try expectEqual(@as(u32, 0), f.dev.read(CONFIG, 4));
-    try expectEqual(@as(u32, 0), f.dev.read(CONFIG + 12, 4));
+    try expectEqual(@as(u32, 0), f.dev.read(mmio.REG_CONFIG, 4));
+    try expectEqual(@as(u32, 0), f.dev.read(mmio.REG_CONFIG + 12, 4));
 }
 
 test "an unbound device answers as absent hardware" {
     var dev = gpudev.GpuDev{};
-    try expectEqual(@as(u32, 0), dev.read(MAGIC, 4));
-    dev.write(STATUS, 4, STATUS_ACKNOWLEDGE); // must not fault
+    try expectEqual(@as(u32, 0), dev.read(mmio.REG_MAGIC_VALUE, 4));
+    dev.write(mmio.REG_STATUS, 4, STATUS_ACKNOWLEDGE); // must not fault
     try expect(!dev.irqLevel());
 }
 
@@ -247,11 +229,11 @@ test "used-ring interrupt is raised per notify and cleared by the ACK register" 
     try f.expectOk(r.hdr(gpu.CMD_RESOURCE_CREATE_2D).u32le(RES_ID)
         .u32le(gpu.FORMAT_B8G8R8A8_UNORM).u32le(IMG_W).u32le(IMG_H).bytes());
     try expect(f.dev.irqLevel());
-    try expectEqual(mmio.INT_USED_RING, f.dev.read(INT_STATUS, 4));
+    try expectEqual(mmio.INT_USED_RING, f.dev.read(mmio.REG_INTERRUPT_STATUS, 4));
 
-    f.dev.write(INT_ACK, 4, mmio.INT_USED_RING);
+    f.dev.write(mmio.REG_INTERRUPT_ACK, 4, mmio.INT_USED_RING);
     try expect(!f.dev.irqLevel());
-    try expectEqual(@as(u32, 0), f.dev.read(INT_STATUS, 4));
+    try expectEqual(@as(u32, 0), f.dev.read(mmio.REG_INTERRUPT_STATUS, 4));
 }
 
 test "the cursor queue is answered, not ignored" {
@@ -259,12 +241,12 @@ test "the cursor queue is answered, not ignored" {
     f.init();
     try f.bringUp();
     // Program queue 1 the same way, then notify it.
-    f.dev.write(QUEUE_SEL, 4, 1);
-    f.dev.write(QUEUE_NUM, 4, QSIZE);
-    f.dev.write(QUEUE_DESC_LOW, 4, @intCast(DESC_GPA));
-    f.dev.write(QUEUE_DRIVER_LOW, 4, @intCast(AVAIL_GPA));
-    f.dev.write(QUEUE_DEVICE_LOW, 4, @intCast(USED_GPA));
-    f.dev.write(QUEUE_READY, 4, 1);
+    f.dev.write(mmio.REG_QUEUE_SEL, 4, 1);
+    f.dev.write(mmio.REG_QUEUE_NUM, 4, QSIZE);
+    f.dev.write(mmio.REG_QUEUE_DESC_LOW, 4, @intCast(DESC_GPA));
+    f.dev.write(mmio.REG_QUEUE_DRIVER_LOW, 4, @intCast(AVAIL_GPA));
+    f.dev.write(mmio.REG_QUEUE_DEVICE_LOW, 4, @intCast(USED_GPA));
+    f.dev.write(mmio.REG_QUEUE_READY, 4, 1);
 
     var r = Req{};
     const req = r.hdr(gpu.CMD_UPDATE_CURSOR).bytes();
@@ -272,7 +254,7 @@ test "the cursor queue is answered, not ignored" {
     f.setDesc(0, REQ_GPA, @intCast(req.len), virtq.F_NEXT, 1);
     f.setDesc(1, RESP_GPA, RESP_CAP, virtq.F_WRITE, 0);
     f.pushAvail(0);
-    f.dev.write(QUEUE_NOTIFY, 4, 1);
+    f.dev.write(mmio.REG_QUEUE_NOTIFY, 4, 1);
     try expectEqual(@as(u16, 1), std.mem.readInt(u16, f.ram[@intCast(USED_GPA + 2)..][0..2], .little));
     try expectEqual(gpu.RESP_OK_NODATA, std.mem.readInt(u32, f.ram[@intCast(RESP_GPA)..][0..4], .little));
 }
@@ -284,8 +266,8 @@ test "a malformed descriptor chain marks the device needs-reset instead of loopi
     // A descriptor whose buffer runs past guest RAM: the virtq refuses it.
     f.setDesc(0, RAM_LEN - 8, 64, 0, 0);
     f.pushAvail(0);
-    f.dev.write(QUEUE_NOTIFY, 4, 0);
-    try expect(f.dev.read(STATUS, 4) & STATUS_NEEDS_RESET != 0);
+    f.dev.write(mmio.REG_QUEUE_NOTIFY, 4, 0);
+    try expect(f.dev.read(mmio.REG_STATUS, 4) & STATUS_NEEDS_RESET != 0);
     try expect(!f.dev.irqLevel()); // nothing was consumed, so nothing is signalled
 }
 
@@ -300,9 +282,9 @@ test "a driver reset drops the scanout and the device comes back clean" {
     try f.expectOk(r2.hdr(gpu.CMD_SET_SCANOUT).rect(0, 0, IMG_W, IMG_H).u32le(0).u32le(RES_ID).bytes());
     try expect(ivirt.fb(VM) != null);
 
-    f.dev.write(STATUS, 4, 0);
+    f.dev.write(mmio.REG_STATUS, 4, 0);
     try expect(ivirt.fb(VM) == null);
-    try expectEqual(@as(u32, 0), f.dev.read(STATUS, 4));
+    try expectEqual(@as(u32, 0), f.dev.read(mmio.REG_STATUS, 4));
     try expect(!f.dev.irqLevel());
 
     // A re-probing driver finds a working device and its resource ids free.

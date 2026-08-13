@@ -12,29 +12,27 @@
 const cpu = @import("../../kernel/cpu/cpu.zig");
 const pci = @import("../pci/pci.zig");
 const isr = @import("../../kernel/interrupts/isr.zig");
-const log = @import("base/log.zig").gpu;
-const shim = @import("base/shim.zig");
-const mmio = @import("base/mmio.zig");
-const msi = @import("core/msi.zig");
+const log = @import("rm/log.zig").gpu;
+const shim = @import("rm/shim.zig");
+const mmio = @import("rm/mmio.zig");
+const msi = @import("engines/msi.zig");
 const gsp = @import("gsp/gsp.zig");
 const rm = @import("gsp/rm.zig");
 const disp = @import("display/disp.zig");
-const fifo = @import("core/fifo.zig");
+const fifo = @import("engines/fifo.zig");
 const present = @import("present/present.zig");
 const iaccel = @import("iaccel"); // the compositor seam (drive a frame, resize the desktop)
 const iopengl = @import("idraw"); // where we publish the 3D device for apps to draw with
 const power = @import("../../kernel/power/reboot.zig");
 const timer = @import("../../kernel/timer/timer.zig");
 const netdebug = @import("../net/debug/netdebug.zig");
-const net = @import("../net/stack/net.zig");
 const nic = @import("../net/nic/nic.zig");
 const fileserv = @import("../net/debug/fileserv.zig");
-const jobs = @import("../../kernel/sched/jobs.zig");
 const bootlog = @import("../storage/bootlog.zig");
 const tsc = @import("../../kernel/cpu/tsc.zig");
 const prof = @import("prof.zig");
 const xhci = @import("../usb/xhci.zig"); // HID report counters for FPS tracking
-const vram = @import("core/vram.zig");
+const vram = @import("engines/vram.zig");
 const firmware = @import("gsp/firmware.zig");
 const gr = @import("../gl/engine/gr.zig");
 const gl_shaders = @import("../gl/engine/shaders.zig");
@@ -59,8 +57,11 @@ const screenshot = @import("screenshot.zig");
 var mb_info_addr: u64 = 0;
 
 /// Stash the multiboot2 info pointer for the firmware lookup. Called early in
-/// the entry root's run() (before interrupts). No device work.
-pub fn init(info_addr: u64) void {
+/// the entry root's run() (before interrupts). CONFIGURATION, not bring-up: it
+/// takes a value and does no device work, which is why it is not called `init`
+/// — the GPU's actual bring-up is `bootAtInit`, and a reader must be able to
+/// tell the cost of a call from its name.
+pub fn configure(info_addr: u64) void {
     mb_info_addr = info_addr;
 }
 
@@ -568,7 +569,6 @@ pub fn bringUp(fw: gsp.Firmware) shim.Status {
     var stats = SessionStats.init();
     var wd_t0 = tsc.rdtsc();
     var glstat_t0 = tsc.rdtsc();
-    var bootlog_t0 = tsc.rdtsc();
     while (!power.shutdown_requested) {
         // Netdebug metered drain — on native boot THIS loop is where the machine
         // lives, so the queued log must be shipped from here too. Timed
@@ -576,29 +576,23 @@ pub fn bringUp(fw: gsp.Firmware) shim.Status {
         // section (it runs around the pump, not inside its span chain) so a pacing
         // run can see how much the wire drain itself costs.
         const t_nl = tsc.rdtsc();
-        // While a cadence sample records, pace the trace drain to one datagram per
-        // tick so a backlog catch-up never burst-fills the NIC TX ring and stalls a
-        // frame — the same yield GLSTAT and the bootlog flush make below.
+        // Two pacing decisions this loop owns, because measuring frame cadence
+        // is its concern and neither service can know about it: pace the trace
+        // drain to one datagram per tick, and hold the boot log's USB write off
+        // entirely, while a flip-sample window records. Either one landing
+        // inside that window reads as a late flip — a real USB bulk write costs
+        // ~6 ms, enough outliers to fail the `steady` gate outright. Neither
+        // service loses anything: both resume the instant the window closes.
         netdebug.setGentle(present.sampleActive());
-        netdebug.drain();
-        // netdebug servicing: drain RX + answer
-        // pending pull requests — the session loop is the only steady loop on
-        // a passthrough run.
-        net.pump();
-        jobs.pump(); // advance any backgrounded long task (a fetch) one bounded
-        //            step, so downloading interleaves with rendering (job.zig)
-        fileserv.service();
-        // Boot-log drain to the stick, THROTTLED to ~4 Hz (tick_hz/4) and HELD OFF
-        // while a flip-sample window records — same as GLSTAT below. Each drain is
-        // a real USB bulk write of a few ms, which the window sees as a late flip
-        // (measured: ~6 ms outliers, a `steady` FAIL on the 10 s from-first-present
-        // gate). t0 is not reset while held, so the drain fires the instant the
-        // window closes; the boot log stays in its RAM ring meanwhile and the live
-        // netdebug stream carries everything regardless.
-        if (!present.sampleActive() and tsc.rdtsc() -% bootlog_t0 >= stats.tick_hz / 4) {
-            bootlog_t0 = tsc.rdtsc();
-            bootlog.service();
-        }
+        bootlog.setHoldOff(present.sampleActive());
+        // EVERY background service, in one ordered pass, from the SAME table
+        // the no-GPU system loop steps (boot/services.zig) — reached through
+        // the compositor seam because a driver must not import the apex. On a
+        // native boot this loop never returns and IS the machine, so this is
+        // where the trace drain, the network pump, KMR1 replies, backgrounded
+        // jobs, the boot log and guest boot requests all live. A hand-written
+        // list here is what silently lost `vm boot` on real hardware.
+        if (iaccel.compositor.service) |service| service(false);
         // netdebug SHOT (remote request): capture the LIVE desktop into ramdisk
         // screenshot.png + the stick (the host then pulls it via the mirror).
         // ON DEMAND ONLY — a smooth desktop never does unbidden heavy I/O: the
@@ -615,6 +609,9 @@ pub fn bringUp(fw: gsp.Firmware) shim.Status {
         // ~ms of the fence, not at the next present).
         opengl.pumpAll();
         if (iaccel.compositor.pump) |pump| pump(false);
+        // The post-render slice: bounded guest work, AFTER this pass's render,
+        // so a guest can never push a present past its deadline (PERF-003).
+        if (iaccel.compositor.service) |service| service(true);
         stats.samplePump(t_pump, tsc.rdtsc());
         present.fpsSample(); // rolling-window FPS: sample the frame counter (~2 Hz, self-throttled)
         if (stats.tick()) |snap| {

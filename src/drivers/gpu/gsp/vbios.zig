@@ -15,8 +15,8 @@
 //! Isolation invariant: reads the BAR0 mmio.Mapping; adds nothing to other
 //! modules. The VBIOS bytes are copied into a kudos heap buffer.
 
-const mmio = @import("../base/mmio.zig");
-const log = @import("../base/log.zig").gpu;
+const mmio = @import("../rm/mmio.zig");
+const log = @import("../rm/log.zig").gpu;
 const heap = @import("../../../kernel/memory/heap.zig");
 const pci = @import("../../pci/pci.zig");
 

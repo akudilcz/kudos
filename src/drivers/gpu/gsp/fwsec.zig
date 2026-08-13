@@ -11,9 +11,9 @@
 //!
 //! All structures are byte-exact from nouveau fwsec.c (see resources).
 
-const mmio = @import("../base/mmio.zig");
-const log = @import("../base/log.zig").gpu;
-const shim = @import("../base/shim.zig");
+const mmio = @import("../rm/mmio.zig");
+const log = @import("../rm/log.zig").gpu;
+const shim = @import("../rm/shim.zig");
 const falcon = @import("falcon.zig");
 const vbios = @import("vbios.zig");
 

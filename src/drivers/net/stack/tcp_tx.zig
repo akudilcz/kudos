@@ -102,15 +102,49 @@ pub const Sender = struct {
             self.tries += 1;
             self.nxt = self.una;
             self.armed = false;
+            // PERSIST PROBE: the timer fired against a CLOSED window, not lost
+            // data. The window-update ACK is the one segment TCP never
+            // retransmits, so with nothing in flight this sender must ask —
+            // one byte past the window. Any ACK it provokes re-reports the
+            // peer's window (onAck stores it before the advance check), and a
+            // peer that stays closed meets the same MAX_TRIES budget above.
+            if (self.peer_window == 0 and self.una < self.data.len) {
+                if (t.emit(t.ctx, self.base_seq +% @as(u32, @intCast(self.nxt)), self.data[self.nxt..][0..1]))
+                    self.nxt += 1;
+                self.armed = true;
+                self.deadline_ms = now +% rtoFor(self.tries);
+                return .sending;
+            }
         }
 
         while (self.nxt < self.data.len) {
             const remaining = self.data.len - self.nxt;
             const inflight = self.nxt - self.una;
-            if (inflight >= self.peer_window) break; // window full — wait for an ACK
+            if (inflight >= self.peer_window) {
+                // Window full — wait for an ACK. CLOSED (zero) window with
+                // nothing in flight is the dangerous case: no retransmission
+                // will provoke the peer, so arm the persist timer and let the
+                // probe above ask for the window (a lost window-update ACK
+                // otherwise stalls the transfer forever).
+                if (inflight == 0 and !self.armed) {
+                    self.armed = true;
+                    self.deadline_ms = now +% rtoFor(self.tries);
+                }
+                break;
+            }
             const room: u16 = @intCast(@as(usize, self.peer_window) - inflight);
             const seg = tcp_seg.nextSegment(remaining, MAX_SEG_BYTES, self.peer_mss, room);
-            if (seg == 0) break; // zero window — persist until it opens
+            if (seg == 0) {
+                // Zero window. Arm the persist timer if nothing is in flight:
+                // an idle sender has no retransmission to provoke the peer
+                // with, so without this the probe above never fires and a lost
+                // window update stalls the transfer forever.
+                if (!self.armed) {
+                    self.armed = true;
+                    self.deadline_ms = now +% rtoFor(self.tries);
+                }
+                break;
+            }
             if (!t.emit(t.ctx, self.base_seq +% @as(u32, @intCast(self.nxt)), self.data[self.nxt .. self.nxt + seg]))
                 break; // no route right now — retry on a later step
             self.nxt += seg;

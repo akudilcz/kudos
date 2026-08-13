@@ -24,7 +24,7 @@ drivers.net.stack.tlsclient.init 51688
 # pops before certificate verification runs beneath it, instead of coexisting
 # with it. Was 54272 under the previous vendored client.
 drivers.net.stack.tlsclient.KeyShare.init 53176
-drivers.gpu.base.pngenc.initCompressInto 99328
+drivers.gpu.rm.pngenc.initCompressInto 99328
 # The desktop's whole-scene GL frame (renderGles, inlined into its only caller).
 # No single allocation is large: the frame is spill slots for the per-window
 # content paths inlined into the loop. Shrinking it means lifting that dispatch

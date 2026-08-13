@@ -37,7 +37,7 @@ pub fn lastRt() RtResult {
 /// cumulative drift (µs) vs the ideal N × period.
 pub fn run(out: Out, args: []const u8) void {
     const periods = std.fmt.parseInt(u64, args, 10) catch {
-        out.str("usage: rt N   (run N periods of a 10 Hz real-time task)\n");
+        out.str("usage: kudos rt N   (run N periods of a 10 Hz real-time task)\n");
         return;
     };
     sched.setActivity("rt");

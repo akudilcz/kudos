@@ -8,10 +8,10 @@ const std = @import("std");
 const pci = @import("../pci/pci.zig");
 const pmm = @import("../../kernel/memory/pmm.zig");
 const klog = @import("../../kernel/debug/klog.zig");
-const wait = @import("../io/wait.zig");
+const wait = @import("../../kernel/io/wait.zig");
 const timer = @import("../../kernel/timer/timer.zig");
 const tsc = @import("../../kernel/cpu/tsc.zig");
-const mmioz = @import("../io/mmio.zig");
+const mmioz = @import("../../kernel/io/mmio.zig");
 const dbg = @import("../../kernel/debug/debug.zig");
 const gate = @import("../../kernel/debug/gate.zig");
 const counter = @import("../../kernel/debug/counter.zig");
@@ -196,13 +196,14 @@ const w64 = mmioz.write64;
 // the assert (one home for the DMA rail — see pmm.DMA_LIMIT).
 
 /// Allocate `bytes` of zeroed, physically-contiguous, controller-visible DMA
-/// memory (rounded up to whole frames). Returns the physical address, or 0 on
-/// allocation failure; the DMA <4 GiB rail is enforced inside the allocator.
-fn dmaAlloc(bytes: usize) usize {
+/// memory (rounded up to whole frames). Null on failure — a value, not a 0
+/// sentinel, so a forgotten check refuses to compile (physical 0 is the
+/// real-mode IVT); the DMA <4 GiB rail is enforced inside the allocator.
+fn dmaAlloc(bytes: usize) ?usize {
     const frames = (bytes + pmm.FRAME_SIZE - 1) / pmm.FRAME_SIZE;
     const p = pmm.allocContiguousDma(frames) orelse {
         log("xhci: DMA alloc failed\n");
-        return 0;
+        return null;
     };
     @memset(@as([*]u8, @ptrFromInt(p))[0 .. frames * pmm.FRAME_SIZE], 0);
     return p;
@@ -445,21 +446,18 @@ fn reset() bool {
 /// allocation fails. Must run on a reset controller before it is set running.
 fn setupRings() bool {
     // Device Context Base Address Array.
-    const dcbaa_phys = dmaAlloc((max_slots + 1) * 8);
-    if (dcbaa_phys == 0) return false;
+    const dcbaa_phys = dmaAlloc((max_slots + 1) * 8) orelse return false;
     dcbaa = @ptrFromInt(dcbaa_phys);
 
     // Scratchpad buffers, if the controller needs any.
     const hcs2 = r32(mmio + CAP_HCSPARAMS2);
     const max_sp = ((hcs2 >> 27) & 0x1F) | (((hcs2 >> 21) & 0x1F) << 5);
     if (max_sp > 0) {
-        const sp_array = dmaAlloc(max_sp * 8);
-        if (sp_array == 0) return false;
+        const sp_array = dmaAlloc(max_sp * 8) orelse return false;
         const arr: [*]volatile u64 = @ptrFromInt(sp_array);
         var i: u32 = 0;
         while (i < max_sp) : (i += 1) {
-            const buf = dmaAlloc(pmm.FRAME_SIZE);
-            if (buf == 0) return false;
+            const buf = dmaAlloc(pmm.FRAME_SIZE) orelse return false;
             arr[i] = buf;
         }
         dcbaa[0] = sp_array;
@@ -476,8 +474,7 @@ fn setupRings() bool {
     // Event ring + ERST (single segment).
     events = EventRing.create(EVENT_RING_TRBS);
     if (events.phys == 0) return false;
-    const erst_phys = dmaAlloc(16);
-    if (erst_phys == 0) return false;
+    const erst_phys = dmaAlloc(16) orelse return false;
     const erst: [*]volatile u32 = @ptrFromInt(erst_phys);
     erst[0] = @truncate(events.phys);
     erst[1] = @truncate(events.phys >> 32);
@@ -959,10 +956,11 @@ const Ring = struct {
     /// Link TRB back to the ring head (Toggle Cycle set), so `push` wraps
     /// automatically. Starts at cycle 1 (matching the controller's initial RCS).
     fn create(trbs: usize) Ring {
-        const phys = dmaAlloc(trbs * @sizeOf(trb.Trb));
         // Alloc failure must return BEFORE the Link-TRB store: writing
         // through phys 0 lands in the real-mode IVT/BDA (review M-U2).
-        if (phys == 0) return Ring{ .trbs = undefined, .phys = 0, .size = trbs, .enqueue = 0, .cycle = 1 };
+        // `.phys = 0` is this ring's documented failure sentinel to callers.
+        const phys = dmaAlloc(trbs * @sizeOf(trb.Trb)) orelse
+            return Ring{ .trbs = undefined, .phys = 0, .size = trbs, .enqueue = 0, .cycle = 1 };
         var r = Ring{ .trbs = @ptrFromInt(phys), .phys = phys, .size = trbs, .enqueue = 0, .cycle = 1 };
         r.trbs[trbs - 1].param = phys;
         r.trbs[trbs - 1].control = (TRB_LINK << 10) | TRB_TOGGLE_CYCLE;
@@ -1022,13 +1020,13 @@ const EventRing = struct {
     /// Starts at dequeue 0, expected cycle 1 — the controller fills slot 0
     /// first with cycle 1 (xHCI §4.9.4).
     fn create(trbs: usize) EventRing {
-        const phys = dmaAlloc(trbs * @sizeOf(trb.Trb));
-        // Same guard as Ring.create, and for a worse reason. With phys == 0 we
-        // would publish a NULL ERDP/ERSTBA to the controller, which then DMAs
-        // every event over physical 0 — the real-mode IVT/BDA. `phys == 0` is the
-        // caller's signal to abort init; `trbs` is left undefined so a missed
-        // check faults loudly rather than reading the IVT as a cycle bit.
-        if (phys == 0) return .{ .trbs = undefined, .phys = 0, .size = trbs, .dequeue = 0, .cycle = 1 };
+        // Same guard as Ring.create, and for a worse reason. With a null alloc
+        // we would publish a NULL ERDP/ERSTBA to the controller, which then
+        // DMAs every event over physical 0 — the real-mode IVT/BDA. `.phys = 0`
+        // is the caller's signal to abort init; `trbs` is left undefined so a
+        // missed check faults loudly rather than reading the IVT as a cycle bit.
+        const phys = dmaAlloc(trbs * @sizeOf(trb.Trb)) orelse
+            return .{ .trbs = undefined, .phys = 0, .size = trbs, .dequeue = 0, .cycle = 1 };
         return .{ .trbs = @ptrFromInt(phys), .phys = phys, .size = trbs, .dequeue = 0, .cycle = 1 };
     }
 
@@ -1202,12 +1200,10 @@ fn allocDeviceBufs(d: *Device) bool {
     }
     d.ep0 = Ring.create(DEVICE_RING_TRBS);
     if (d.ep0.phys == 0) return false;
-    d.input_ctx = dmaAlloc(33 * context_size);
-    if (d.input_ctx == 0) return false;
-    d.dctx = dmaAlloc(32 * context_size);
-    if (d.dctx == 0) return false;
-    d.descbuf = dmaAlloc(DESCBUF_SIZE);
-    return d.descbuf != 0;
+    d.input_ctx = dmaAlloc(33 * context_size) orelse return false;
+    d.dctx = dmaAlloc(32 * context_size) orelse return false;
+    d.descbuf = dmaAlloc(DESCBUF_SIZE) orelse return false;
+    return true;
 }
 
 /// Scrub `d`'s buffer set back to as-allocated state for the next init attempt:
@@ -2231,8 +2227,7 @@ fn setupMsc(d: *Device, pick: msc.EpPick, config_value: u8) HidResult {
         const ir = Ring.create(DEVICE_RING_TRBS);
         const or_ = Ring.create(DEVICE_RING_TRBS);
         if (ir.phys == 0 or or_.phys == 0) return .failed;
-        d.msc_staging = dmaAlloc(1024);
-        if (d.msc_staging == 0) return .failed;
+        d.msc_staging = dmaAlloc(1024) orelse return .failed;
         d.msc_in_ring = ir;
         d.msc_out_ring = or_;
     }
@@ -2483,8 +2478,7 @@ fn configureHidInterface(d: *Device, pick: hid_report.Pick, slot: usize, is_cand
     if (d.hid_rings[slot] == null) {
         const hr = Ring.create(DEVICE_RING_TRBS);
         if (hr.phys == 0) return .failed;
-        const rep = dmaAlloc(HID_REPORT_BUF);
-        if (rep == 0) return .failed;
+        const rep = dmaAlloc(HID_REPORT_BUF) orelse return .failed;
         d.hid_reports[slot] = rep;
         d.hid_rings[slot] = hr;
     }

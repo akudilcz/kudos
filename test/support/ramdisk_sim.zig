@@ -6,11 +6,11 @@ const iramdisk = @import("iramdisk");
 
 pub const RamdiskSim = struct {
     const MAX = 8;
-    /// Bytes one stored file may hold. The REAL ramdisk copies to the heap;
-    /// this fake copies to fixed storage, because storing the CALLER'S slice —
-    /// as an earlier version did — let a caller that reuses its request buffer
-    /// silently corrupt the "stored" file, which the hardware store can never
-    /// do. A fake must fail the same ways the real thing fails, not new ones.
+    /// Bytes one stored file may hold. The real ramdisk copies to the heap; this
+    /// fake copies to fixed storage rather than retaining the caller's slice — a
+    /// caller reusing its request buffer would otherwise corrupt a stored file,
+    /// which the hardware store cannot do. A fake must fail only the ways the
+    /// real thing fails.
     const DATA_MAX = 4096;
     names: [MAX][]const u8 = undefined,
     datas: [MAX][DATA_MAX]u8 = undefined,

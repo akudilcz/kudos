@@ -1,7 +1,9 @@
 //! The App interface: a closed union over the app types. The
 //! desktop hosts a list of these and dispatches window/input/draw generically.
 
+const std = @import("std");
 const kgl = @import("kgl"); // the 2D toolkit the unified GL desktop draws through
+const gles = @import("gles"); // the shared GL context an app returns its objects to
 const Window = @import("../ui/wm/window.zig").Window;
 const framebuffer = @import("../ui/screen/framebuffer.zig");
 const Terminal = @import("terminal.zig").Terminal;
@@ -13,11 +15,12 @@ const VmApp = @import("vm.zig").Vm;
 const BlobWindow = @import("blobwin.zig").BlobWindow;
 
 /// Kinds spawnApp can open directly. The model viewer is NOT here — it needs
-/// a model name, so it has its own spawner (desktop.spawnModel). The list
-/// itself lives in the console contract (console/console.zig `AppKind`) — the
-/// shell commands that spawn these apps sit below this group — re-exported
-/// here so the hosted-app union and the desktop keep their one name for it.
-pub const Kind = @import("../console/console.zig").AppKind;
+/// a model name, so it has its own spawner (desktop.spawnModel). The catalogue
+/// lives in the desktop-control contract (iface/idesk.zig), which the console
+/// commands that spawn these apps also name; this group takes it from there
+/// rather than from the console, so the two peers share a definition without
+/// either importing the other.
+pub const Kind = @import("idesk").AppKind;
 
 pub const App = union(enum) {
     term: *Terminal,
@@ -95,6 +98,23 @@ pub const App = union(enum) {
         return switch (self) {
             inline else => |a| a.onResize(),
         };
+    }
+
+    /// Release everything this app owns and free it — the ONE teardown, so the
+    /// desktop closes every app the same way and knows what none of them own.
+    /// `g` is the shared GL context when one exists (apps holding textures or
+    /// meshes give them back through it); null on a software-rasterised boot.
+    ///
+    /// The caller completes any deferred GPU frame BEFORE this: the GPU may
+    /// still be sampling a texture an app is about to delete. That rule is
+    /// stated once, at the call site, instead of once per textured app.
+    ///
+    /// Adding an app kind that allocates is now impossible to get wrong: the
+    /// union will not compile until its `close` exists.
+    pub fn close(self: App, a: std.mem.Allocator, g: ?*gles.Context) void {
+        switch (self) {
+            inline else => |x| x.close(a, g),
+        }
     }
 
     /// Per-app animation step. Returns true if the app's content changed and a

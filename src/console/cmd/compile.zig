@@ -5,7 +5,7 @@
 //! source goes to the factory named by AI.CFG's `factory=` — the same one the
 //! agent's compile tool uses, and the same request — and what comes back is a
 //! position-independent image the loader verifies, saved as
-//! `/ramdisk/<name>.kudos` and run with `run <name>`.
+//! `/ramdisk/<name>.kudos` and run with `kudos run <name>`.
 //!
 //! It runs on the core-0 command worker, like `net fetch`, because the round
 //! trip blocks and a session task must not be held on the network.
@@ -16,7 +16,7 @@ const agenttools = @import("../agenttools.zig");
 const vfs = @import("vfs");
 
 const USAGE =
-    \\usage: compile PATH [NAME] | compile factory [HOST:PORT]
+    \\usage: kudos compile PATH [NAME] | kudos compile factory [HOST:PORT]
     \\  PATH  a Zig source file (e.g. hello.zig), absolute or relative
     \\  NAME  the module name; default: the file name without its extension
     \\  factory        show which factory compiles are sent to
@@ -53,7 +53,7 @@ pub fn run(c: console.Console, args: []const u8) void {
             c.write(h);
             c.write("\n");
         } else {
-            c.write("compile: no factory set — `compile factory HOST:PORT`, or set\n");
+            c.write("compile: no factory set — `kudos compile factory HOST:PORT`, or set\n");
             c.write("compile: factory=<host:port> in AI.CFG on the USB drive\n");
         }
         return;

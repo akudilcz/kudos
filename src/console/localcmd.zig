@@ -19,12 +19,22 @@ pub const Command = struct {
     run: *const fn (out: Out, args: []const u8) void,
 };
 
+// `shutdown` is a Linux word and stays top-level; the kudos-specific locals
+// (`prime`, `rt`, `run`) are reached through the `kudos` group word like every
+// other kudos command — resolveLine sees through it, so they still run on THIS
+// core. `kudos run <name>` executes a compiled .kudos app here so a fault is
+// contained to this session (spec AGT-008).
 const BASE_COMMANDS = [_]Command{
+    .{ .name = "shutdown", .run = @import("cmd/shutdown.zig").run },
+};
+
+/// The group word everything kudos-specific lives under (cmd/kudos.zig holds
+/// the shell-side table; these are the LOCAL members).
+pub const GROUP = "kudos";
+
+const GROUP_COMMANDS = [_]Command{
     .{ .name = "prime", .run = @import("cmd/prime.zig").run },
     .{ .name = "rt", .run = @import("cmd/rt.zig").run },
-    .{ .name = "shutdown", .run = @import("cmd/shutdown.zig").run },
-    // `run <name>` executes a compiled .kudos app on this core so a fault is
-    // contained to this session (spec AGT-008).
     .{ .name = "run", .run = @import("cmd/run.zig").run },
 };
 
@@ -61,13 +71,35 @@ pub fn lookup(cmd: []const u8) ?Command {
     return null;
 }
 
-/// Whether `args` asks for a redirection (APP-028), which a local command cannot
-/// serve: these run on the terminal's own core and write through `Out`, which
-/// carries no working directory to resolve a path against — redirection is the
-/// shell's facility (shell.zig). Said plainly here because the alternative is
-/// worse than a refusal: `run app > out.txt` would otherwise reach cmd/run.zig as
-/// a request for a module named "app > out.txt", and the error would name a file
-/// nobody asked for.
+/// A resolved local command and the arguments that are its own.
+pub const Resolved = struct { c: Command, args: []const u8 };
+
+/// Resolve a parsed line to a local command, seeing through the `kudos` group
+/// word: `kudos prime 9` is `prime 9` on THIS core, exactly as when prime was a
+/// top-level word. A `kudos` subcommand that is not local returns null and
+/// reaches cmd/kudos.zig through the shell.
+pub fn resolveLine(cmd: []const u8, args: []const u8) ?Resolved {
+    if (std.mem.eql(u8, cmd, GROUP)) {
+        const sp = std.mem.indexOfScalar(u8, args, ' ');
+        const sub = if (sp) |i| args[0..i] else args;
+        const rest = if (sp) |i| std.mem.trim(u8, args[i + 1 ..], " \t") else "";
+        for (GROUP_COMMANDS) |c| {
+            if (std.mem.eql(u8, sub, c.name)) return .{ .c = c, .args = rest };
+        }
+        return null;
+    }
+    if (lookup(cmd)) |c| return .{ .c = c, .args = args };
+    return null;
+}
+
+/// Whether `args` asks for a redirection (APP-028) or a pipe, which a local
+/// command cannot serve: these run on the terminal's own core and write through
+/// `Out`, which carries no working directory and no capture buffer — both are
+/// the shell's facilities (shell.zig). Said plainly because the alternative is
+/// worse than a refusal: `kudos run app > out.txt` would otherwise reach
+/// cmd/run.zig as a request for a module named "app > out.txt".
 pub fn refusesRedirect(args: []const u8) bool {
-    return redirect.parse(args) != null;
+    if (redirect.parse(args) != null) return true;
+    var stages: [redirect.MAX_STAGES][]const u8 = undefined;
+    return redirect.splitPipes(args, &stages) != 1;
 }

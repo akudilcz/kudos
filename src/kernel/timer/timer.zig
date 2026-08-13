@@ -1,6 +1,6 @@
 //! PIT channel 0 timer. Drives a millisecond-ish tick.
 
-const io = @import("../../drivers/io/io.zig");
+const io = @import("../io/io.zig");
 const isr = @import("../interrupts/isr.zig");
 const tsc = @import("../cpu/tsc.zig");
 const cpu = @import("../cpu/cpu.zig");

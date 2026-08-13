@@ -24,7 +24,7 @@ Fails LOUD (non-zero) with the captured trace on any miss.
 
 Two drivers, one loop:
   (default)  a PERSON at the shell — types the source with `echo ... > hello.zig`,
-             then `compile hello.zig hello` and `run hello`.
+             then `kudos compile hello.zig hello` and `kudos run hello`.
   --agent    THE AGENT — the F10 window is asked in English to write the program,
              compile it and run it, and the same three things are asserted. This
              is the whole point of the machine (AGT-001): it needs a service
@@ -309,7 +309,7 @@ def drive_agent(q, nd):
     if not wait_for(nd, r"kudos terminal\. type 'help'", 20, "shell terminal"):
         return fail(nd, "F12 did not open a terminal to check the artifact in")
     time.sleep(1.0)
-    q.type_str(f"run {MODULE}")
+    q.type_str(f"kudos run {MODULE}")
     q.key("ret")
     if not wait_for(nd, r"\[exit 0\]", RUN_BUDGET_S, "shell ran the agent's module"):
         return fail(nd, "the module the agent compiled does not run from the shell")
@@ -344,14 +344,14 @@ def main():
         q = qmp.QMP(QMP_SOCK)
 
         # 1. The network, which `compile` needs and boot leaves down on purpose.
-        if not send(q, nd, "net ip", r"net ip", NET_BUDGET_S, "net ip"):
-            return fail(nd, "the `net ip` line never reached the terminal")
+        if not send(q, nd, "ip", r"inet 10\.0\.2\.", NET_BUDGET_S, "ip addr"):
+            return fail(nd, "the `ip` line never leased an address")
         if not wait_for(nd, r"ip\s+10\.0\.2\.\d+", NET_BUDGET_S, "dhcp lease"):
             return fail(nd, "kudos never leased an address from slirp")
 
         # 2. Point the compiler at this host (AGT: the factory is configurable at
         #    runtime because a guest factory only announces its address at boot).
-        if not send(q, nd, f"compile factory {FACTORY_HOST}", r"compile factory",
+        if not send(q, nd, f"kudos compile factory {FACTORY_HOST}", r"kudos compile factory",
                     NET_BUDGET_S, "compile factory"):
             return fail(nd, "the `compile factory` line never reached the terminal")
         if not wait_for(nd, rf"compile: factory {FACTORY_HOST}".replace(".", r"\."),
@@ -368,7 +368,7 @@ def main():
         # 4. Compile it. ARCH-012: the compile happens off-target. No echo check
         #    here — this command's OWN output is the stronger and immediate proof,
         #    and asking for both only adds a record the capture can lose.
-        q.type_str(f"compile {SOURCE} {MODULE}")
+        q.type_str(f"kudos compile {SOURCE} {MODULE}")
         q.key("ret")
         if not wait_for(nd, rf"compiled {MODULE}\.kudos \(\d+ bytes\)",
                         COMPILE_BUDGET_S, "compiled"):
@@ -380,7 +380,7 @@ def main():
         #    address space, and what the program printed comes back here. Again no
         #    echo check: "run hello" appears in the compile's own advice line, so an
         #    echo search for it would pass without a program having run at all.
-        q.type_str(f"run {MODULE}")
+        q.type_str(f"kudos run {MODULE}")
         q.key("ret")
         if not wait_for(nd, RAN_OUTPUT, RUN_BUDGET_S, "program output"):
             return fail(nd, "the compiled program never printed its line")

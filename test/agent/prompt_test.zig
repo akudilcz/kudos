@@ -21,10 +21,9 @@ test "system prompt states the required entry signature" {
 }
 
 test "every bindable capability, and every call on it, reaches both prompts (MOD-007)" {
-    // A capability the model is never told about is a capability nothing will ever
-    // bind; one whose calls are missing gets bound and then guessed at. Both
-    // prompts carry the list because a feature binds through the same registry an
-    // app does.
+    // An undocumented capability is never bound; one with undocumented calls is
+    // bound and then guessed at. Both prompts carry the list because a feature
+    // binds through the same registry an app does.
     inline for (abi.CAPABILITIES) |cap| {
         inline for (.{ prompt.SYSTEM, prompt.IMPROVE_SYSTEM }) |text| {
             std.testing.expect(std.mem.indexOf(u8, text, @tagName(cap.id)) != null) catch {

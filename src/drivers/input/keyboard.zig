@@ -73,13 +73,23 @@ var ring: Ring(KeyEvent, KEY_RING_DEPTH) = .{};
 /// Returns whether the ring took it. A live keyboard has nowhere to put a
 /// refused press and only counts it; a REMOTE injector does — it can slow down
 /// and send the key again — so the answer travels back to whoever can act on it.
+/// Guards the producer side of the ring across cores (see inject).
+var produce_lock: bool = false;
+
 pub fn inject(ev: KeyEvent) bool {
     // Receipt stamp for the PERF-008 input-latency measurement: the moment the
     // event enters the system, regardless of producer (USB poll, netdebug, agent).
     var stamped = ev;
     stamped.t_tsc = tsc.rdtsc();
+    // IF masking stops THIS core preempting itself mid-push; the lock stops
+    // ANOTHER core doing it. Both are needed now that the agent's text tool
+    // injects from its own task while xhci.poll pushes HID on core 0 — two
+    // producers on an SPSC ring drop a keystroke out of the middle of a typed
+    // command. Masked before acquiring, so the hold can never be preempted.
     const if_was_on = cpu.irqSave();
+    while (@cmpxchgWeak(bool, &produce_lock, false, true, .acq_rel, .acquire) != null) asm volatile ("pause");
     const pushed = ring.push(stamped);
+    @atomicStore(bool, &produce_lock, false, .release);
     cpu.irqRestore(if_was_on);
     if (!pushed) cnt_inject_drops.inc();
     return pushed;

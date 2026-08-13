@@ -28,8 +28,6 @@ test "`>>` appends instead of replacing (APP-029)" {
 }
 
 test "the LAST redirection wins, so a comparison in the text survives (APP-028)" {
-    // The reason the rule is "last": this is a line of Zig source being typed
-    // into a file, and its own text contains a `>` token.
     const r = redirect.parse("echo if (a > b) { >> guard.zig").?;
     try std.testing.expectEqualStrings("echo if (a > b) {", r.command);
     try std.testing.expectEqualStrings("guard.zig", r.path);
@@ -95,4 +93,36 @@ test "the budget is a stated size, not an accident (APP-030)" {
     // A source file typed a line at a time must fit with room to spare; the
     // constant is the contract the shell reports when a redirection overflows.
     try std.testing.expect(redirect.MAX_BYTES >= 4 << 10);
+}
+
+test "a line without a spaced pipe token is one stage" {
+    var s: [redirect.MAX_STAGES][]const u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 1), redirect.splitPipes("ls", &s));
+    try std.testing.expectEqualStrings("ls", s[0]);
+    // Not space-delimited on both sides, so it is text — the same rule that
+    // lets `a>b` be typed.
+    try std.testing.expectEqual(@as(usize, 1), redirect.splitPipes("echo a|b", &s));
+    try std.testing.expectEqual(@as(usize, 1), redirect.splitPipes("echo a ||", &s));
+}
+
+test "spaced pipes split into trimmed stages, left to right" {
+    var s: [redirect.MAX_STAGES][]const u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 3), redirect.splitPipes("ps | grep term | wc", &s));
+    try std.testing.expectEqualStrings("ps", s[0]);
+    try std.testing.expectEqualStrings("grep term", s[1]);
+    try std.testing.expectEqualStrings("wc", s[2]);
+}
+
+test "an empty stage is preserved for the shell to refuse" {
+    var s: [redirect.MAX_STAGES][]const u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 2), redirect.splitPipes("ls | ", &s));
+    try std.testing.expectEqualStrings("", s[1]);
+}
+
+test "past MAX_STAGES the split refuses rather than truncates" {
+    var s: [redirect.MAX_STAGES][]const u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 0), redirect.splitPipes(
+        "a | b | c | d | e | f | g | h | i",
+        &s,
+    ));
 }

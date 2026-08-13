@@ -131,6 +131,28 @@ test "a closed (zero) window persists: nothing is sent until it reopens" {
     try expectEqual(@as(usize, 100), fake.totalBytes());
 }
 
+test "zero window with the update ACK lost: the persist timer probes one byte" {
+    var fake = Fake{};
+    const data = [_]u8{0x77} ** 100;
+    var s = tcp_tx.Sender.init(&data, BASE, 1460, 0); // window closed from the SYN-ACK
+    _ = s.step(0, fake.transport()); // arms the persist timer; sends nothing
+    try expectEqual(@as(usize, 0), fake.n);
+    // No window update ever arrives — it is the one segment TCP never
+    // retransmits. At the persist deadline the sender sends exactly one byte
+    // past the closed window to provoke an ACK.
+    _ = s.step(tcp_tx.RTO_BASE_MS, fake.transport());
+    try expectEqual(@as(usize, 1), fake.n);
+    try expectEqual(@as(usize, 1), fake.segs[0].len);
+    try expectEqual(BASE, fake.segs[0].seq);
+    // The probe provokes a duplicate ACK carrying the peer's real window — the
+    // stream then flows and completes.
+    s.onAck(BASE, BIG_WIN, tcp_tx.RTO_BASE_MS + 1);
+    _ = s.step(tcp_tx.RTO_BASE_MS + 2, fake.transport());
+    try expectEqual(@as(usize, 100), fake.totalBytes());
+    s.onAck(s.endSeq(), BIG_WIN, tcp_tx.RTO_BASE_MS + 3);
+    try expectEqual(tcp_tx.Progress.done, s.step(tcp_tx.RTO_BASE_MS + 3, fake.transport()));
+}
+
 test "no route: the segment is held and sent once the route resolves" {
     var fake = Fake{ .fail_route = true };
     var s = tcp_tx.Sender.init("later", BASE, 1460, BIG_WIN);

@@ -473,6 +473,38 @@ pub fn takeFbDirty(id: Id) bool {
     return true;
 }
 
+// ── the window-closed handshake ──────────────────────────────────────────────
+//
+// A guest's console window closing is a fact the APP learns and the HYPERVISOR
+// must act on: stop the guest (a hidden guest would pin a core) and drop the
+// window's hold on the slot. Those are peer groups that must not import each
+// other, which is what this whole contract exists for — so the app posts the
+// fact here and the hypervisor's service drains it, exactly like a boot
+// request travelling the other way. Before this, the desktop reached around
+// the contract into the hypervisor to call it directly.
+//
+// A BITMASK, not a ring: "this window closed" is idempotent and per-slot, so a
+// double close is naturally one fact, and no queue can overflow.
+var closed_windows: u32 = 0;
+
+/// APP: this VM's console window has gone. Idempotent — closing twice posts
+/// the same one fact.
+pub fn postWindowClosed(id: Id) void {
+    _ = @atomicRmw(u32, &closed_windows, .Or, @as(u32, 1) << @intCast(id), .acq_rel);
+}
+
+/// HYPERVISOR (its service step): take one slot whose window closed, or null.
+/// Drained in a loop, so several closing at once are all delivered.
+pub fn takeWindowClosed() ?Id {
+    while (true) {
+        const m = @atomicLoad(u32, &closed_windows, .acquire);
+        if (m == 0) return null;
+        const id: u5 = @intCast(@ctz(m));
+        if (@cmpxchgWeak(u32, &closed_windows, m, m & ~(@as(u32, 1) << id), .acq_rel, .acquire) == null)
+            return id;
+    }
+}
+
 /// Clear slot `id` entirely — state, stop flag, both serial rings, drop
 /// counters, and the scanout — so the next VM to take this slot starts fresh.
 /// Called by the hypervisor's registry when it hands the slot out, at which

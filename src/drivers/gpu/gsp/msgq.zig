@@ -12,14 +12,14 @@
 //! GSP owns cmdq.readPtr + msgq.writePtr. Each side's RX header lives in the
 //! OTHER region (cmdq.rptr = &msgq.rx.readPtr, msgq.rptr = &cmdq.rx.readPtr).
 
-const shim = @import("../base/shim.zig");
-const gspfw = @import("../base/gspfw.zig");
-const mmio = @import("../base/mmio.zig");
+const shim = @import("../rm/shim.zig");
+const gspfw = @import("../rm/gspfw.zig");
+const mmio = @import("../rm/mmio.zig");
 const falcon = @import("falcon.zig");
 const tsc = @import("../../../kernel/cpu/tsc.zig");
 const spinwait = @import("../../../kernel/debug/spinwait.zig");
 const timer = @import("../../../kernel/timer/timer.zig");
-const log = @import("../base/log.zig").gpu;
+const log = @import("../rm/log.zig").gpu;
 
 const PAGE: u32 = @intCast(gspfw.GSP_PAGE_SIZE); // single source: gspfw.GSP_PAGE_SIZE
 const QUEUE_SIZE: u32 = 0x40000;

@@ -12,6 +12,13 @@
 //! rendering). Desktop mutation from this task is safe for the same reason the
 //! `cmd-worker` task already mutates the desktop: both are cooperative core-0 tasks.
 //!
+//! It lives in `boot/` because of what it reaches: it drives the desktop
+//! (`spawnApp`, `closeTermId`) AND reads the scheduler, the page allocator and
+//! the hypervisor to check what that did. Only the apex may legitimately know
+//! every group at once — filed under `console/` it was a K3 file holding a
+//! typed pointer into the group ABOVE it, which is the one edge the desktop
+//! contract exists to prevent.
+//!
 //! With the flag off (every normal build) none of this is referenced.
 
 const std = @import("std");
@@ -28,10 +35,10 @@ const tsc = @import("../kernel/cpu/tsc.zig");
 const counter = @import("../kernel/debug/counter.zig");
 const pmm = @import("../kernel/memory/pmm.zig");
 const virt = @import("../kernel/virt/virt.zig");
-const localcmd = @import("localcmd.zig");
-const session = @import("session.zig");
+const localcmd = @import("../console/localcmd.zig");
+const session = @import("../console/session.zig");
 const sessionspace = @import("../kernel/memory/sessionspace.zig");
-const rt_cmd = @import("cmd/rt.zig");
+const rt_cmd = @import("../console/cmd/rt.zig");
 const Desktop = @import("../ui/desktop/desktop.zig").Desktop;
 
 // --- tally ------------------------------------------------------------------

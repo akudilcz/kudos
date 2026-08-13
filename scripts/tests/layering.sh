@@ -556,6 +556,262 @@ check "no one-line 'finished() or wasReset() → return 0' EOF collapse" \
     "return a distinct error for wasReset(); only finished() means EOF" \
     grep -rnE '(finished\(\)[[:space:]]*or[[:space:]]+[a-z]+\.wasReset\(\)|wasReset\(\)[[:space:]]*or[[:space:]]+[a-z]+\.finished\(\)).*return 0' src/drivers/net/
 
+
+# ── THE GROUP EDGE TABLE ─────────────────────────────────────────────────────
+#
+# CLAUDE.md promises "layers and allowed edges live in one manifest"; before
+# this, exactly two edges were checked (ui↔drivers) and the tree had drifted in
+# every direction the gate could not see — the kernel importing a driver, the
+# console importing the desktop it sits below, the app catalogue owned by the
+# lowest group that happened to need it.
+#
+# One row per group: who it may reach by RELATIVE import. `boot` is the apex and
+# may know everyone (that is what the apex IS); `kernel` reaches nothing above
+# it; `iface` holds contracts and is checked separately below.
+GROUP_EDGES="
+kernel:iface
+drivers:kernel iface
+console:kernel drivers agent iface
+agent:kernel console iface
+apps:kernel console ui widgets iface
+ui:kernel console apps widgets iface
+widgets:iface
+boot:kernel drivers console agent apps ui widgets iface
+"
+
+# Edges the tree still has and that are NOT yet legal — each one named, with the
+# reason it survives. A row here is a debt, not a blessing: it leaves this list
+# by being fixed. Empty is the goal.
+EDGE_DEBT="
+console/agenttools.zig->drivers:the agent's machine-side tool surface reaches the screenshot and input drivers; it moves behind idesk/the input seam
+ui/desktop/hud.zig->kernel:the heads-up display reads guest state straight from the hypervisor; it wants an ivirt readback
+ui/desktop/lifecycle.zig->kernel:spawnVmWindow asks the hypervisor which core a guest is on; it wants an ivirt slot field
+"
+
+# Every relative cross-group import, as `<file>-><group>` pairs. The import is
+# RESOLVED against the importing file's directory before its group is read: a
+# `../screen/` from ui/desktop lands back inside ui/ and is not an edge at all,
+# while `../../drivers/` from kernel/timer genuinely leaves the group.
+group_edges_found() {
+    python3 - <<'PY'
+import os, re, subprocess
+out = set()
+for root, _, files in os.walk('src'):
+    for fn in files:
+        if not fn.endswith('.zig'):
+            continue
+        path = os.path.join(root, fn)
+        rel = os.path.relpath(path, 'src')
+        frm = rel.split(os.sep)[0]
+        if frm == 'iface' or os.sep not in rel:
+            continue
+        try:
+            text = open(path, encoding='utf-8', errors='replace').read()
+        except OSError:
+            continue
+        for target in re.findall(r'@import\("((?:\.\./)+[^"]+)"\)', text):
+            resolved = os.path.normpath(os.path.join(os.path.dirname(path), target))
+            parts = resolved.split(os.sep)
+            if len(parts) < 2 or parts[0] != 'src':
+                continue
+            to = parts[1]
+            if to != frm:
+                out.add(f"{rel}->{to}")
+for line in sorted(out):
+    print(line)
+PY
+}
+
+# An edge is legal if the from-group declares the to-group, or a debt row names
+# this exact file and target.
+illegal_group_edges() {
+    local pair file from to allowed
+    group_edges_found | sort -u | while IFS= read -r pair; do
+        file="${pair%%->*}"; to="${pair##*->}"
+        from="${file%%/*}"
+        allowed="$(printf '%s\n' "$GROUP_EDGES" | grep "^$from:" | cut -d: -f2)"
+        case " $allowed " in *" $to "*) continue ;; esac
+        printf '%s\n' "$EDGE_DEBT" | grep -q "^$file->$to:" && continue
+        echo "$file imports $to/, which $from/ may not reach (GROUP_EDGES)"
+    done
+}
+check "every cross-group import is a declared edge" \
+    "route it through a contract in src/iface/, move the file to the group that owns it, or declare the edge" \
+    illegal_group_edges
+
+# A debt row that no longer matches a real edge is a rule pretending to be debt.
+stale_edge_debt() {
+    local found; found="$(group_edges_found | sort -u)"
+    printf '%s\n' "$EDGE_DEBT" | grep -v '^[[:space:]]*$' | while IFS=: read -r pair _; do
+        printf '%s\n' "$found" | grep -qx "$pair" || echo "$pair is recorded as debt but no longer exists — delete the row"
+    done
+}
+check "no stale edge debt" "the edge is gone; remove its EDGE_DEBT row" stale_edge_debt
+
+# NO TWO-WAY GROUP EDGES. A cycle means neither group can be understood, built
+# or tested without the other, and it is invisible to a per-edge rule: each
+# direction looks locally reasonable. ui↔apps is the live one — the desktop
+# hosts the apps and the apps draw into the desktop's windows.
+GROUP_CYCLE_DEBT="apps<->ui"
+group_cycles() {
+    local pairs; pairs="$(group_edges_found | sed 's|/[^>]*->|->|' | sort -u)"
+    printf '%s\n' "$pairs" | while IFS= read -r e; do
+        local a b
+        a="${e%%->*}"; b="${e##*->}"
+        [ "$a" \< "$b" ] || continue
+        printf '%s\n' "$pairs" | grep -qx "$b->$a" || continue
+        printf '%s\n' "$GROUP_CYCLE_DEBT" | grep -qx "$a<->$b" && continue
+        echo "$a/ and $b/ import each other — one of them belongs below the other"
+    done
+}
+check "no two-way group dependencies" \
+    "invert one direction through a contract, or declare the cycle as debt" \
+    group_cycles
+
+# ── THE NAMED-MODULE CHANNEL ─────────────────────────────────────────────────
+#
+# build.zig publishes modules by NAME onto the kernel root, so `@import("vfs")`
+# from any file resolves with no relative path for the rules above to see. The
+# contracts belong there — that is what a contract is for — but everything else
+# is a cross-group shortcut that must be a DECLARED decision, not a name someone
+# added. This does not grant per-group access (a bigger change); it closes the
+# channel to newcomers, so adding a backdoor costs a line here and a reason.
+MODULE_CHANNEL="
+abi:the module ABI — a contract in all but its directory
+algn:alignment math, the ONE home (CLAUDE.md 'Duplication')
+job:the cooperative job shape, shared by the runner and its clients
+ring:the SPSC ring every mailbox is built from
+surface:the pixel-buffer type the whole UI stack passes around
+theme:the palette, one home
+rects:pure rectangle math
+sampler:pure timed-series math
+barfill:pure bar geometry
+truetype:the scalable font rasteriser
+gltext:GL text geometry
+glyphcache:the glyph atlas
+typeface:the face the HUD sets its figures in
+panel:HUD widget toolkit
+meter:HUD widget toolkit
+stackbar:HUD widget toolkit
+sparkline:HUD widget toolkit
+statile:HUD widget toolkit
+hudview:the HUD view, host-tested away from the desktop
+hudcontrol:the HUD's control state, host-tested
+gles:the GL ES state machine — the ONE way to draw 3D (ARCH-006)
+kgl:the 2D toolkit the desktop draws through (ARCH-005)
+soft:the software rasteriser, gated to softdisplay.zig by its own rule above
+manifest:the offline-compiled shader table
+overlay_plane:pure overlay-plane geometry
+hostpush:pure pushbuffer encoding
+input_latency:the PERF-008 latch both sides of the accel seam read
+keymap:pure scancode mapping
+vfs:the file-system namespace the whole machine names paths in
+fileproto:the KMR1 wire protocol, pure and host-tested
+modelcache:decoded-asset cache shared by the viewer and the desktop
+"
+undeclared_named_modules() {
+    local n path
+    while IFS= read -r n; do
+        [ -n "$n" ] || continue
+        path="$(grep -oE "\-M$n=[^ ]*" /dev/null 2>/dev/null)"
+        # A contract needs no row: src/iface/<name>.zig is the declaration.
+        [ -f "src/iface/$n.zig" ] && continue
+        printf '%s\n' "$MODULE_CHANNEL" | grep -q "^$n:" ||
+            echo "build.zig publishes '$n' onto every file, and MODULE_CHANNEL does not declare why"
+    done < <(sed -n '/const iface_mods = \[_\]IfaceMod{/,/^    };/p' build.zig |
+        grep -oE '\.name = "[a-z_0-9]+"' | sed 's/.*"\(.*\)"/\1/')
+}
+check "every by-name module is a contract or a declared shortcut" \
+    "declare it in MODULE_CHANNEL with the reason, or wire it per-group instead of onto the root" \
+    undeclared_named_modules
+
+# A MODULE_CHANNEL row for a name build.zig no longer publishes is a stale rule.
+stale_module_channel() {
+    local published; published="$(sed -n '/const iface_mods = \[_\]IfaceMod{/,/^    };/p' build.zig |
+        grep -oE '\.name = "[a-z_0-9]+"' | sed 's/.*"\(.*\)"/\1/')"
+    printf '%s\n' "$MODULE_CHANNEL" | grep -v '^[[:space:]]*$' | while IFS=: read -r n _; do
+        printf '%s\n' "$published" | grep -qx "$n" || echo "MODULE_CHANNEL declares '$n', which build.zig no longer publishes"
+    done
+}
+check "no stale MODULE_CHANNEL rows" "delete the row; the module is gone" stale_module_channel
+
+# ── DIRECTORIES NAME THINGS, NOT ROLES ───────────────────────────────────────
+#
+# The file-level ban on _impl/_utils/_helper/_manager exists because a name that
+# states a ROLE attracts anything that can claim the role. A DIRECTORY so named
+# does it faster: `base/` and `core/` had collected an ABI mirror, an OS shim, a
+# PNG encoder, a logging wrapper and three unrelated pieces of maths between
+# them, none of which the name would ever have argued against.
+role_named_dirs() {
+    find src -type d \( -name base -o -name core -o -name common -o -name misc \
+        -o -name util -o -name utils -o -name helpers -o -name shared \) 2>/dev/null
+}
+check "no role-named directories" \
+    "name the directory for what is IN it (gpu/rm, gpu/engines), not for the role it plays" \
+    role_named_dirs
+
+# ── ONE RING ─────────────────────────────────────────────────────────────────
+#
+# kernel/sync/ring.zig is the SPSC ring, and its release/acquire ordering is the
+# reason a mailbox between two cores works. A hand-rolled `head`/`tail` index
+# pair beside it is that reasoning re-derived by hand, and it has been wrong:
+# fileserv's intake ring let two servicing tasks consume one request and advance
+# the head twice, deafening remote control for a full lap of the ring.
+#
+# Non-atomic rings are legitimate where producer and consumer are provably one
+# thread; they are listed, so each is a decision.
+RING_BY_HAND="
+src/kernel/virt/uart16550.zig:a guest's own serial FIFOs — one vCPU thread produces and consumes
+src/drivers/gpu/present/fps_window.zig:a rolling FPS window sampled and read on the session loop alone
+src/drivers/net/debug/linestore.zig:the trace line store, whose producer/consumer discipline is its own subject
+src/drivers/storage/bootlog.zig:a BYTE ring, not an element mailbox: klog feed memcpys in (possibly from an IRQ), the service step drains whole sectors out
+"
+hand_rolled_rings() {
+    local f
+    while IFS= read -r f; do
+        printf '%s\n' "$RING_BY_HAND" | grep -q "^$f:" && continue
+        grep -qE '^var (head|tail): usize' "$f" 2>/dev/null && echo "$f keeps a bare head/tail index pair"
+    done < <(find src -name '*.zig' -not -path 'src/kernel/sync/*')
+}
+check "no hand-rolled rings outside kernel/sync" \
+    "use kernel/sync/ring.zig, or list the file in RING_BY_HAND with why one thread owns both ends" \
+    hand_rolled_rings
+
+# ── THE SHADER TWIN ──────────────────────────────────────────────────────────
+#
+# The PBR lighting model exists twice by necessity: once in Zig (the software
+# rasteriser, which host tests can run) and once in GLSL (what the 4090 runs).
+# They must agree, and no compiler can check that they do — the two never meet.
+# When they last disagreed, the fix had to land in both and the mismatch was
+# only visible as different pixels on real hardware, costing a verification
+# cycle to find.
+#
+# So the NUMBERS are checked here: the analytic environment and the ACES tone
+# curve, extracted from each file and compared. A change to either side alone
+# fails this, which is the point — it is not asking you to keep them the same
+# forever, it is refusing to let them drift silently.
+shader_twin_drift() {
+    local zig="src/drivers/gl/soft.zig" frag="src/drivers/gl/shaders/f_pbr.frag"
+    [ -f "$zig" ] && [ -f "$frag" ] || { echo "shader twin: $zig or $frag is missing"; return; }
+    local z_env f_env z_aces f_aces
+    # ENV_SKY / ENV_GROUND / ENV_EXPOSURE, as a flat list of numbers.
+    z_env="$(grep -E 'const ENV_(SKY|GROUND|EXPOSURE)' "$zig" | grep -oE '[0-9]+\.[0-9]+' | tr '\n' ' ')"
+    f_env="$(grep -E 'ENV_(SKY|GROUND|EXPOSURE) *=' "$frag" | grep -oE '[0-9]+\.[0-9]+' | tr '\n' ' ')"
+    [ "$z_env" = "$f_env" ] ||
+        echo "analytic environment differs: soft.zig has [$z_env], f_pbr.frag has [$f_env]"
+    # The ACES curve's five coefficients, from the scalar Zig form and the GLSL.
+    # The first FIVE numbers on that line are the curve; GLSL's clamp bounds
+    # (0.0, 1.0) trail it and are not coefficients.
+    z_aces="$(grep -E '2\.51 \* x' "$zig" | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -5 | tr '\n' ' ')"
+    f_aces="$(grep -E '2\.51 \* x' "$frag" | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -5 | tr '\n' ' ')"
+    [ -n "$z_aces" ] || echo "ACES curve not found in soft.zig (did the scalar form move?)"
+    [ "$z_aces" = "$f_aces" ] ||
+        echo "ACES tone curve differs: soft.zig has [$z_aces], f_pbr.frag has [$f_aces]"
+}
+check "the software and GPU PBR twins agree on their constants" \
+    "change BOTH src/drivers/gl/soft.zig and src/drivers/gl/shaders/f_pbr.frag — they are one lighting model in two languages" \
+    shader_twin_drift
+
 if [ "$fail" -ne 0 ]; then
     echo
     echo "layering: FAIL — the rules above are in CLAUDE.md, and they are not decorative."

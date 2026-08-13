@@ -13,9 +13,9 @@
 //! aperture. Slow (one MMIO per dword + a repoint per 64 KiB) but needs no BAR1/VMM
 //! — right for first light. A direct BAR1 WC aperture is the faster follow-up.
 
-const mmio = @import("../base/mmio.zig");
-const fblayout = @import("../base/fblayout.zig");
-const log = @import("../base/log.zig").gpu;
+const mmio = @import("../rm/mmio.zig");
+const fblayout = @import("../rm/fblayout.zig");
+const log = @import("../rm/log.zig").gpu;
 
 /// BAR0 PRAMIN window: `wr32(WIN_SEL, addr>>16)` selects a 64 KiB VRAM window;
 /// access goes through `[WIN_APERTURE + (addr & 0xffff)]` (nouveau nv50.c:398,

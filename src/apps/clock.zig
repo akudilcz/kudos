@@ -6,7 +6,8 @@
 //! over decorative.
 
 const std = @import("std");
-const kgl = @import("kgl"); // the 2D toolkit the unified GL desktop draws through
+const kgl = @import("kgl");
+const gles = @import("gles"); // the 2D toolkit the unified GL desktop draws through
 const Window = @import("../ui/wm/window.zig").Window;
 const theme = @import("theme");
 const timer = @import("../kernel/timer/timer.zig");
@@ -34,6 +35,13 @@ const MINUTE_WIDTH: f32 = 3;
 const SECOND_WIDTH: f32 = 1.5;
 
 pub const Clock = struct {
+    /// Release everything this window owns and free it (App.close). This
+    /// app holds nothing but its own struct — the method exists so the
+    /// desktop closes every app the same way and never has to know that.
+    pub fn close(self: *Clock, a: std.mem.Allocator, _: ?*gles.Context) void {
+        a.destroy(self);
+    }
+
     win: *Window,
     redraw_phase: u64 = 0,
 

@@ -10,12 +10,12 @@
 //! root 0xc770). Submission: write dwords to the pushbuffer, VRAM-flush handshake
 //! (wr 0x070000=1, poll &0x2), then wr32(0x680000, put_dwords<<2). No doorbell.
 
-const log = @import("../base/log.zig").gpu;
+const log = @import("../rm/log.zig").gpu;
 const gsp = @import("../gsp/gsp.zig");
 const rm = @import("../gsp/rm.zig");
-const nvrm = @import("../base/nvrm.zig");
+const nvrm = @import("../rm/nvrm.zig");
 const vram = @import("vram.zig");
-const mmio = @import("../base/mmio.zig");
+const mmio = @import("../rm/mmio.zig");
 const tsc = @import("../../../kernel/cpu/tsc.zig");
 const Push = @import("push.zig").Push;
 

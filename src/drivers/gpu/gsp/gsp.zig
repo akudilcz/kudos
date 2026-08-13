@@ -17,14 +17,14 @@
 //! when a blob is missing — never a silent fake-success.
 
 const std = @import("std");
-const log = @import("../base/log.zig").gpu;
-const shim = @import("../base/shim.zig");
-const mmio = @import("../base/mmio.zig");
+const log = @import("../rm/log.zig").gpu;
+const shim = @import("../rm/shim.zig");
+const mmio = @import("../rm/mmio.zig");
 const pci = @import("../../pci/pci.zig");
 const falcon = @import("falcon.zig");
-const gspfw = @import("../base/gspfw.zig");
+const gspfw = @import("../rm/gspfw.zig");
 const radix3 = @import("radix3.zig");
-const fblayout = @import("../base/fblayout.zig");
+const fblayout = @import("../rm/fblayout.zig");
 const vbios = @import("vbios.zig");
 const fwsec = @import("fwsec.zig");
 const elf = @import("elf.zig");

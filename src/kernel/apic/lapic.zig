@@ -9,7 +9,7 @@
 
 const klog = @import("../debug/klog.zig");
 const cpu = @import("../cpu/cpu.zig");
-const mmio = @import("../../drivers/io/mmio.zig");
+const mmio = @import("../io/mmio.zig");
 const acpi = @import("../acpi/acpi.zig");
 
 // IA32_APIC_BASE MSR.

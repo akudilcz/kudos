@@ -1,7 +1,7 @@
 //! PCI configuration space access + device enumeration.
 //! Legacy CF8/CFC mechanism. Mainly used to find the NIC for networking.
 
-const io = @import("../io/io.zig");
+const io = @import("../../kernel/io/io.zig");
 const klog = @import("../../kernel/debug/klog.zig");
 const ipci = @import("ipci"); // publish the inventory for anything above the driver layer
 const timer = @import("../../kernel/timer/timer.zig");

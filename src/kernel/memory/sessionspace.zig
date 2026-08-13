@@ -24,6 +24,7 @@ const lapic = @import("../apic/lapic.zig");
 const cpu = @import("../cpu/cpu.zig");
 const tsc = @import("../cpu/tsc.zig");
 const counter = @import("../debug/counter.zig");
+const klog = @import("../debug/klog.zig");
 const SpinLock = @import("../sync/spinlock.zig").SpinLock;
 
 /// Vector the TLB-shootdown IPI is delivered on: after a space is reshaped
@@ -60,7 +61,10 @@ var cnt_heal_dropped = counter.Counter{ .mod = .mem, .name = "heal_dropped" };
 /// TLB shootdowns whose remote acknowledgement wait timed out (a target went
 /// offline mid-wait, or worse) — the flush may not have landed everywhere.
 var cnt_shootdown_timeouts = counter.Counter{ .mod = .mem, .name = "shootdown_timeouts" };
-var counters_registered = false;
+/// Shootdowns where a core answered late (past the fast budget, inside the
+/// extended one) — a masked-interrupt window held the invariant wait up but
+/// nothing was breached. Climbing steadily = something sleeps with IRQs off.
+var cnt_shootdown_slow = counter.Counter{ .mod = .mem, .name = "shootdown_slow" };
 
 /// One live session space. `arena` is the private region (frames tagged to this
 /// session — MEM-008's accounting is this length); `pool` holds its page tables.
@@ -93,12 +97,12 @@ var faulted_mask: u64 = 0;
 /// state is unwound). Runs on a kernel-space task (the desktop opening a
 /// terminal), never on a session task.
 pub fn create(id: u32) !*SessionSpace {
-    if (!counters_registered) {
-        counters_registered = true;
-        counter.register(&cnt_space_faults);
-        counter.register(&cnt_heal_dropped);
-        counter.register(&cnt_shootdown_timeouts);
-    }
+    // Registration is idempotent (counter.zig scans its table), so this needs
+    // no first-call flag of its own.
+    counter.register(&cnt_space_faults);
+    counter.register(&cnt_heal_dropped);
+    counter.register(&cnt_shootdown_timeouts);
+    counter.register(&cnt_shootdown_slow);
     // Over-allocate, take the 2 MiB-aligned window, hand back the trim.
     const raw = pmm.allocContiguous(ARENA_FRAMES + ALIGN_SLACK_FRAMES) orelse return error.OutOfMemory;
     const arena_base = std.mem.alignForward(usize, raw, vspace.PAGE_2M);
@@ -314,10 +318,20 @@ pub fn takeFaulted() ?u32 {
 var shootdown_acks: u64 = 0;
 var shootdown_lock: SpinLock = .{};
 
-/// How long a shootdown waits for every remote core to acknowledge before
-/// giving up (counted): far beyond any real IPI latency, short enough that a
-/// core dying mid-wait cannot wedge the sender.
+/// How long a shootdown normally waits for every remote core to acknowledge:
+/// far beyond any real IPI latency. Passing it is counted (a core is late)
+/// but the wait HOLDS — see the extended budget below.
 const SHOOTDOWN_ACK_BUDGET_US: u64 = 5000;
+
+/// The hard ceiling on the ack wait. A fixed-vector IPI is never lost — it
+/// pends in the target's IRR until interrupts unmask — so the only ways to
+/// pass the fast budget are a core sleeping with interrupts masked (timer.zig
+/// latches slept_irqs_off for real ~100 ms cases) or a core that died
+/// mid-wait. The wait this guards is an ISOLATION invariant: returning early
+/// lets a neighbour core keep stale translations into the new session's arena
+/// (MEM-003/004), so the wait extends past the longest legitimate masked
+/// window before it gives up, loudly. Only a dead core costs this much.
+const SHOOTDOWN_ACK_EXTENDED_US: u64 = 250_000;
 
 /// Flush every core's TLB after tables changed: reload CR3 here, IPI every
 /// other online core (the handler in isrDispatch), and WAIT for their
@@ -341,10 +355,21 @@ fn shootdown() void {
         expected += 1;
     }
     if (expected == 0) return;
-    const deadline = tsc.rdtsc() + tsc.usTicks(SHOOTDOWN_ACK_BUDGET_US);
+    const start = tsc.rdtsc();
+    const fast_deadline = start + tsc.usTicks(SHOOTDOWN_ACK_BUDGET_US);
+    const final_deadline = start + tsc.usTicks(SHOOTDOWN_ACK_EXTENDED_US);
+    var slow_counted = false;
     while (@atomicLoad(u64, &shootdown_acks, .acquire) < expected) {
-        if (tsc.rdtsc() >= deadline) {
+        const now = tsc.rdtsc();
+        if (now >= fast_deadline and !slow_counted) {
+            // A core is late (a masked-interrupt window) — counted, but the
+            // wait HOLDS: proceeding here is what breaks the isolation invariant.
+            slow_counted = true;
+            cnt_shootdown_slow.inc();
+        }
+        if (now >= final_deadline) {
             cnt_shootdown_timeouts.inc();
+            klog.puts("sessionspace: TLB shootdown unacked past extended budget — a core is dead or wedged; stale translations possible\n");
             return;
         }
         asm volatile ("pause");

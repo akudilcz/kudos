@@ -20,14 +20,14 @@
 //! The consumer of all of this is opengl.zig, which renders the windows.
 
 const std = @import("std");
-const log = @import("../../gpu/base/log.zig").gpu;
+const log = @import("../../gpu/rm/log.zig").gpu;
 const gsp = @import("../../gpu/gsp/gsp.zig");
 const rm = @import("../../gpu/gsp/rm.zig");
-const nvrm = @import("../../gpu/base/nvrm.zig");
-const vram = @import("../../gpu/core/vram.zig");
-const gmmu = @import("../../gpu/core/gmmu.zig");
-const shim = @import("../../gpu/base/shim.zig");
-const fifo = @import("../../gpu/core/fifo.zig");
+const nvrm = @import("../../gpu/rm/nvrm.zig");
+const vram = @import("../../gpu/engines/vram.zig");
+const gmmu = @import("../../gpu/engines/gmmu.zig");
+const shim = @import("../../gpu/rm/shim.zig");
+const fifo = @import("../../gpu/engines/fifo.zig");
 const hostpush = @import("hostpush");
 const tsc = @import("../../../kernel/cpu/tsc.zig");
 const methods = @import("../ada/methods.zig");

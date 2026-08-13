@@ -132,7 +132,7 @@ fn cmdHelp(c: console.Console) void {
         \\  /model <name>   switch the model
         \\  /clear          clear the screen
         \\  /quit           close the agent window (agent window only)
-        \\Then run a compiled app in a terminal:  run <name>
+        \\Then run a compiled app in a terminal:  kudos run <name>
         \\
     );
 }
@@ -239,9 +239,12 @@ pub fn run(c: console.Console, args: []const u8) void {
 
     // A `/login` with no passphrase asked for one; this line IS the answer, so
     // it is taken verbatim before any parsing — a passphrase may begin with `/`
-    // or look like anything else, and the console must not interpret it.
+    // or look like anything else, and the console must not interpret it. The
+    // echo mask comes off HERE (which also forgets the editor's recall of the
+    // masked line), only now that the answer has arrived.
     if (g_awaiting_passphrase) {
         g_awaiting_passphrase = false;
+        c.setInputMask(false);
         c.write(credential.unlock(std.mem.trim(u8, args, " \t\r\n")));
         return;
     }
@@ -257,9 +260,13 @@ pub fn run(c: console.Console, args: []const u8) void {
             if (pass.len == 0) {
                 // Ask, rather than fail: `/login` on its own is the natural way
                 // to type it, and answering "usage:" to that is a shell being
-                // pedantic at somebody who did the obvious thing.
+                // pedantic at somebody who did the obvious thing. The question
+                // holds the prompt (the next line is the answer, not a command)
+                // and masks the echo until that answer arrives.
                 g_awaiting_passphrase = true;
                 c.write("passphrase: ");
+                c.holdPrompt();
+                c.setInputMask(true);
             } else {
                 c.write(credential.unlock(pass));
             }
@@ -328,6 +335,8 @@ pub fn run(c: console.Console, args: []const u8) void {
                 if (!credential.isUnlocked() and credential.isSealedIntoBuild()) {
                     g_awaiting_passphrase = true;
                     c.write("passphrase: ");
+                    c.holdPrompt();
+                    c.setInputMask(true);
                 }
                 return;
             }

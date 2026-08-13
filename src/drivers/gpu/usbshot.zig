@@ -13,8 +13,8 @@
 
 const std = @import("std");
 const fat = @import("../storage/fat.zig");
-const log = @import("base/log.zig").gpu;
-const shim = @import("base/shim.zig");
+const log = @import("rm/log.zig").gpu;
+const shim = @import("rm/shim.zig");
 
 /// One pumped write slice of the image (see save()): big enough that the FAT/MSC
 /// path stays efficient (many sectors per WRITE(10) burst), small enough that

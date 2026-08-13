@@ -298,7 +298,7 @@ pub fn build(b: *std.Build) void {
     // hostpush.zig: pure GPFIFO method encoder (imports nothing) — shared named
     // module so the gpu driver, the gl 3D layer, and the gl method-stream host
     // tests all use ONE instance (HostPush stays type-identical across the seam).
-    const hostpush_shared = b.createModule(.{ .root_source_file = b.path("src/drivers/gpu/base/hostpush.zig") });
+    const hostpush_shared = b.createModule(.{ .root_source_file = b.path("src/drivers/gpu/rm/hostpush.zig") });
     // iramdisk: the file-system contract (real: storage/ramdisk.zig; fake:
     // test/support/ramdisk_sim.zig). idraw: the 3D-device seam the GL layer lowers onto (impl in
     // src/drivers/gl/). fileproto: netdebug wire codec + server
@@ -726,7 +726,7 @@ pub fn build(b: *std.Build) void {
     pure_buildinfo.addOption([]const u8, "agent_password", agent_password);
     pure_buildinfo.addOption(bool, "verify_script", false);
     for ([_]HostSuite{
-        .{ .n = "calc", .s = "src/drivers/gpu/base/calc.zig" }, // GPU MSI/MTRR + pitch math
+        .{ .n = "calc", .s = "src/drivers/gpu/rm/calc.zig" }, // GPU MSI/MTRR + pitch math
         .{ .n = "cpustat", .s = "src/kernel/sched/cpustat.zig" }, // busy/idle TSC-delta → percent
         .{ .n = "dispatch", .s = "src/kernel/sched/dispatch.zig" }, // which core a runnable task goes to (KRN-009/010/011)
         .{ .n = "runqueue", .s = "src/kernel/sched/runqueue.zig" }, // the run queue's FIFO order + the sleeper list's deadline order
@@ -741,7 +741,7 @@ pub fn build(b: *std.Build) void {
         .{ .n = "igc_desc", .s = "src/drivers/net/nic/igc_desc.zig" }, // I226 advanced-descriptor codec — QEMU runs e1000, so this has NO emulated coverage
         .{ .n = "edid", .s = "src/drivers/gpu/display/edid.zig" }, // VESA E-EDID preferred-mode parse
         .{ .n = "keymap", .s = "src/drivers/input/keymap.zig" }, // PS/2 scancode + USB HID → ASCII
-        .{ .n = "gmmu_fmt", .s = "src/drivers/gpu/base/gmmu_fmt.zig" }, // GP100 PTE/PDE encode + VA-index math
+        .{ .n = "gmmu_fmt", .s = "src/drivers/gpu/rm/gmmu_fmt.zig" }, // GP100 PTE/PDE encode + VA-index math
         .{ .n = "barfill", .s = "src/widgets/barfill.zig" }, // System-monitor usage-bar fill (no underflow/overflow)
         .{ .n = "clockface", .s = "src/widgets/clockface.zig" }, // analog clock-face hand/tick trigonometry
         .{ .n = "plot", .s = "src/widgets/plot.zig" }, // function-plot sampling, auto y-range, nice ticks
@@ -812,11 +812,12 @@ pub fn build(b: *std.Build) void {
         // single layer directory can be their module path.
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/drivers/gpu/display/dp_test.zig" }, // DP link training + watermark math
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/drivers/gpu/display/modeset_test.zig" }, // EVO method-stream goldens
-        .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/drivers/gpu/core/push_test.zig" }, // pushbuffer method-header packing
+        .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/drivers/gpu/engines/push_test.zig" }, // pushbuffer method-header packing
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/drivers/storage/ramdisk_test.zig" }, // in-RAM name→bytes store (shim: ramdisk @embedFiles ui assets)
         .{ .n = "vfs", .s = "src/drivers/storage/vfs.zig" }, // `/` namespace routing + pure path normalization
         .{ .n = "complete", .s = "src/console/complete.zig" }, // Tab filename completion over an injected directory enumeration
-        .{ .n = "redirect", .s = "src/console/redirect.zig" }, // `>`/`>>` grammar + the bounded capture a redirected command writes into
+        .{ .n = "redirect", .s = "src/console/redirect.zig" }, // `>`/`>>`/`|` grammar + the bounded capture a captured stage writes into
+        .{ .n = "glob", .s = "src/console/glob.zig" }, // `*`/`?` filename matching (bash defaults: no match passes the word through)
         .{ .n = "grants", .s = "src/console/grants.zig" }, // the capability grant table: which .kudos module may bind what, at which version
         .{ .n = "editline", .s = "src/console/editline.zig" }, // console line editor core: keystroke → line edits, recall, Tab → completion (shared by both terminal editors)
         .{ .n = "cmdtoken", .s = "src/console/cmdtoken.zig" }, // single-flight command token: consume-on-claim (the double-dispatch GP incident)
@@ -1138,9 +1139,9 @@ pub fn build(b: *std.Build) void {
     // pngenc: the PNG ENCODER round-tripped through the tree's own decoder —
     // what kudos writes (screenshots, R33) its asset pipeline reads back.
     {
-        const pngenc_mod = b.createModule(.{ .root_source_file = b.path("src/drivers/gpu/base/pngenc.zig") });
+        const pngenc_mod = b.createModule(.{ .root_source_file = b.path("src/drivers/gpu/rm/pngenc.zig") });
         const png_mod = b.createModule(.{ .root_source_file = b.path("src/ui/assets/png.zig") });
-        const t = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("test/drivers/gpu/base/pngenc_test.zig"), .target = b.graph.host, .optimize = optimize }) });
+        const t = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("test/drivers/gpu/rm/pngenc_test.zig"), .target = b.graph.host, .optimize = optimize }) });
         t.root_module.addImport("pngenc", pngenc_mod);
         t.root_module.addImport("png", png_mod);
         if (testWired(test_only, t)) test_step.dependOn(&b.addRunArtifact(t).step);

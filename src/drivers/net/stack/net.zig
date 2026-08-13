@@ -11,6 +11,8 @@
 //! the LAN could trigger by sending one malformed frame.
 
 const std = @import("std");
+const inet = @import("inet");
+const idevices = @import("idevices");
 const wire = @import("wire.zig");
 const netown = @import("netown.zig");
 const nic = @import("../nic/nic.zig");
@@ -23,6 +25,7 @@ const tcp = @import("tcp.zig");
 const http = @import("http.zig");
 const dhcp = @import("dhcp.zig");
 const sched = @import("../../../kernel/sched/sched.zig");
+const counter = @import("../../../kernel/debug/counter.zig");
 const http_wire = @import("http_wire.zig");
 const fetchjob = @import("fetchjob.zig");
 const job = @import("job"); // the shared named module (jobs.zig + fetchjob.zig too)
@@ -83,6 +86,39 @@ var ctrlpkt: [FRAME_BUF]u8 = undefined; // control path (ARP/ICMP), so a mid-sen
 // anyway, and a spinning render loop is the thing this exists to prevent.
 var stack_holder: ?*anyopaque = null;
 
+/// Cores currently inside `pump()`, counted BEFORE the holder check so a fresh
+/// claimant can prove the stack quiescent (see claimStack). Nested pumps count
+/// twice, which is fine — the claimant waits for ZERO.
+var pumps_inflight: usize = 0;
+
+/// How long claimStack waits for in-flight pumps to retire before reporting
+/// busy. A normal pump is well under a millisecond; a pump nesting an ARP
+/// resolve can hold the stack for that resolve's full 1 s timeout, and a claim
+/// made during one fails busy rather than waiting it out.
+const CLAIM_QUIESCE_BUDGET_MS: u64 = 10;
+
+/// The one task that may drive the stack UNCLAIMED — the steady session loop.
+/// Latched on the first unclaimed scheduled pump (the session loop by
+/// construction: every other pumping entry claims first). A second unclaimed
+/// task pumping is exactly the NET-018 two-drivers race — counted, not halted,
+/// because the counter is visible on the heartbeat and a false positive here
+/// must not stop a working machine.
+var steady_pumper: ?*anyopaque = null;
+
+/// Claims that won the holder exchange but timed out waiting for in-flight
+/// pumps to retire (the caller saw Busy; nothing was corrupted).
+var cnt_claim_quiesce_timeout = counter.Counter{ .mod = .net, .name = "stack.claim_quiesce_timeout" };
+/// Unclaimed pumps from a task other than the steady session loop — each one is
+/// a caught NET-018 ownership violation that used to be a silent race.
+var cnt_pump_unowned = counter.Counter{ .mod = .net, .name = "stack.pump_unowned" };
+
+/// Register the ownership counters above. Called once at boot by the seam's
+/// publish (netapi.zig) — the counters live here, beside the state they watch.
+pub fn registerCounters() void {
+    counter.register(&cnt_pump_unowned);
+    counter.register(&cnt_claim_quiesce_timeout);
+}
+
 /// How deep we are inside `pump()`. Non-zero above 1 means a send re-entered the
 /// receive path to resolve an address; the tail-of-pump sends run at depth 1
 /// only, so an inner pump can never transmit over a frame an outer one staged.
@@ -104,12 +140,28 @@ fn me() ?*anyopaque {
 
 /// Take the stack for this task, or report that someone else has it. The holder
 /// must `releaseStack` on every path out, including error paths. The policy is
-/// netown's; this adds only the atomic exchange.
+/// netown's; this adds the atomic exchange and the quiesce.
 pub fn claimStack() bool {
     const task = me();
     if (!netown.mayClaim(@atomicLoad(?*anyopaque, &stack_holder, .acquire), task)) return false;
     const t = task orelse return true; // no scheduler: one thread of control
-    return @cmpxchgStrong(?*anyopaque, &stack_holder, null, t, .acq_rel, .acquire) == null;
+    if (@cmpxchgStrong(?*anyopaque, &stack_holder, null, t, .acq_rel, .acquire) != null) return false;
+    // QUIESCE: winning the exchange stops NEW pumps (they see the holder and
+    // skip), but a pump that passed its own check may still be mid-frame on
+    // another core — and "claimed" must mean EXCLUSIVE, or the claimant
+    // inherits the very two-drivers race the claim exists to prevent. Wait,
+    // bounded, for in-flight pumps to retire; on timeout hand the claim back
+    // and report busy rather than proceed on a shared stack.
+    const deadline = timer.millis() + CLAIM_QUIESCE_BUDGET_MS;
+    while (@atomicLoad(usize, &pumps_inflight, .acquire) != 0) {
+        if (timer.millis() >= deadline) {
+            cnt_claim_quiesce_timeout.inc();
+            releaseStack();
+            return false;
+        }
+        sched.waitYield();
+    }
+    return true;
 }
 
 pub fn releaseStack() void {
@@ -135,10 +187,16 @@ pub fn dbgx(s: []const u8, v: u64) void {
     }
 }
 
+/// Why the stack could not come up. The two causes need opposite responses and
+/// must not collapse into one `false`: a machine with no NIC will never have a
+/// network, while a failed lease is a retry (and, on a real I226, usually just
+/// a DISCOVER lost inside the post-link dead zone).
+pub const InitError = error{ NoNic, DhcpFailed };
+
 /// Bring the stack up: claim a NIC, latch our MAC, then acquire an address via
-/// DHCP. Returns false (and marks the stack down) if either step fails — there is
-/// no static fallback, so a later fetch fails loudly rather than on a phantom LAN.
-pub fn init() bool {
+/// DHCP. There is no static fallback — a failed lease marks the stack down so a
+/// later fetch fails loudly rather than on a phantom LAN.
+pub fn init() InitError!void {
     // IDEMPOTENT: if we already hold a lease, change NOTHING.
     //
     // The network is up before the shell exists on any netbooted run — netdebug and KMR1
@@ -146,19 +204,18 @@ pub fn init() bool {
     // guard that resets the NIC and re-runs DHCP underneath the live link. DHCP DISCOVER
     // is a broadcast and can be lost, so a failed second round drops `present`, the
     // address is gone, and the machine is unreachable: no ARP, no ping, no remote reboot.
-    if (present) return true;
+    if (present) return;
 
     present = nic.init();
-    if (!present) return false;
+    if (!present) return error.NoNic;
     cfg.our_mac = nic.macAddr();
     // Learn our address via DHCP before anything tries to send.
     // No static fallback: a failed lease marks the network down so fetch fails loud.
     if (!dhcp.configure()) {
         klog.puts("net: DHCP FAILED -- no address (unreachable: no ARP, no ping, no KMR1)\n");
         present = false;
-        return false;
+        return error.DhcpFailed;
     }
-    return true;
 }
 
 /// Claim the NIC and KICK OFF an async DHCP bind, returning immediately — the lease
@@ -190,6 +247,16 @@ pub fn armDhcp() void {
 /// LEASE, not merely that a NIC was claimed.
 pub fn isUp() bool {
     return dhcp.isBound();
+}
+
+/// How the stack is faring, in the shared vocabulary. The three states are
+/// genuinely different diagnoses and must not collapse into one bool: no NIC
+/// on the bus is a machine that never had a network, a claimed NIC without a
+/// lease is one still binding (or facing a dead DHCP server), and only a
+/// committed lease is usable.
+pub fn status() idevices.Status {
+    if (!present) return .absent;
+    return if (dhcp.isBound()) .ready else .initializing;
 }
 
 /// Called from every blocking network wait (tcp.connect/send/pumpUntil), so a
@@ -726,11 +793,27 @@ fn hostPort(frame: []const u8) HostPort {
 
 /// Read one frame from the NIC (if any) and dispatch it.
 pub fn pump() void {
+    // In-flight accounting FIRST, before the holder check: a claimant that has
+    // just won the stack waits for this count to reach zero, and counting after
+    // the check would leave a window where this pump is neither counted nor
+    // excluded (claimStack's quiesce).
+    _ = @atomicRmw(usize, &pumps_inflight, .Add, 1, .acq_rel);
+    defer _ = @atomicRmw(usize, &pumps_inflight, .Sub, 1, .acq_rel);
     // Another task is mid-request and owns every global this touches — the NIC's
     // staging buffer, the ARP cache, the TCP connection. Skipping is not a lost
     // pump: the holder pumps for both of us, and it is the only one that safely
     // can. Racing it here is what retired the system task's core.
     if (stackHeldByOther()) return;
+    // With no claim held, exactly ONE task may drive the stack unclaimed — the
+    // steady session loop (NET-018). Latch it on first sight; any OTHER task
+    // reaching here unclaimed is the two-drivers race, made visible.
+    if (@atomicLoad(?*anyopaque, &stack_holder, .acquire) == null) {
+        if (me()) |t| {
+            if (@cmpxchgStrong(?*anyopaque, &steady_pumper, null, t, .acq_rel, .acquire)) |owner| {
+                if (owner != t) cnt_pump_unowned.inc();
+            }
+        }
+    }
     // Depth, because a send can legitimately re-enter this: `resolveMac` spins
     // the receive path waiting for an ARP reply, and it MUST make progress there
     // or the address never resolves. What must not happen is the inner pump
@@ -805,165 +888,3 @@ pub fn pump() void {
     dhcp.pump();
 }
 
-// ── inet.INet implementation (the application-facing seam) ───────────────────
-// Apps ask the network four questions — am I up, what is my address, where does this
-// name point, and fetch me this. Answering them means reaching across net/udp/tcp,
-// which is exactly why the seam lives here at the group's top rather than in any one
-// of those files.
-
-const inet = @import("inet");
-
-fn vtBringUp(_: *anyopaque) bool {
-    return init();
-}
-fn vtIsUp(_: *anyopaque) bool {
-    return isUp();
-}
-fn vtLease(_: *anyopaque) inet.Lease {
-    return .{
-        .mac = cfg.our_mac,
-        .ip = cfg.our_ip,
-        .netmask = cfg.netmask,
-        .gateway = cfg.gateway,
-        .dns = cfg.dns_server,
-    };
-}
-fn vtResolve(_: *anyopaque, host: []const u8) ?[4]u8 {
-    return resolveHost(host);
-}
-fn vtPing(_: *anyopaque, dst: [4]u8, timeout_ms: u64) ?u64 {
-    return ping(dst, timeout_ms);
-}
-fn vtFetch(_: *anyopaque, a: std.mem.Allocator, url: []const u8) inet.FetchError![]u8 {
-    // One HTTP client (http.zig) serves both schemes; the URL's scheme selects
-    // plain TCP vs TLS beneath it.
-    if (!claimStack()) return error.Busy;
-    defer releaseStack();
-    return http.request(a, .GET, url, &.{}, "");
-}
-
-// ── backgrounded GET (a job.zig cooperative task) ─────────────────────────────
-// One at a time: there is one TCP connection system-wide, and the command that
-// starts a fetch returns immediately, so the state must outlive it — static, not
-// on the caller's stack. The job runs on the session loop (jobs.pump), stepping
-// the FetchJob over tcp.zig while net.pump grows the receive buffer, so the
-// download advances a chunk per frame and the render never stalls.
-// Background-GET request-head capacity. Smaller than the foreground client's
-// http_wire.MAX_REQUEST_HEAD on purpose: this head is GET + Host only (no
-// caller headers ride the background path), and the buffer is a static that
-// lives for the whole session.
-const BG_REQUEST_HEAD = 1024;
-var bg_busy: bool = false;
-var bg_fj: fetchjob.FetchJob = undefined;
-var bg_req: [BG_REQUEST_HEAD]u8 = undefined;
-var bg_ip: [4]u8 = undefined;
-var bg_port: u16 = 0;
-var bg_a: std.mem.Allocator = undefined;
-var bg_cb: ?inet.FetchDone = null;
-var bg_cb_ctx: *anyopaque = undefined;
-var bg_seam: u8 = 0; // a non-null ctx for the seam fns (they use the statics)
-
-fn bgStart(_: *anyopaque) bool {
-    tcp.beginRecv(bg_a);
-    return tcp.connectStart(bg_ip, bg_port);
-}
-fn bgPoll(_: *anyopaque) fetchjob.ConnState {
-    return switch (tcp.connectState()) {
-        .established => .established,
-        .refused => .failed,
-        .connecting => .connecting,
-    };
-}
-fn bgSend(_: *anyopaque, bytes: []const u8) bool {
-    return tcp.send(bytes);
-}
-fn bgReceived(_: *anyopaque) []const u8 {
-    return tcp.received();
-}
-fn bgReserve(_: *anyopaque, bytes: usize) bool {
-    return tcp.reserveRecv(bytes);
-}
-fn bgClosed(_: *anyopaque) bool {
-    return tcp.finished() or tcp.wasReset();
-}
-fn bgMillis(_: *anyopaque) u64 {
-    return timer.millis();
-}
-
-fn bgFinish(_: *anyopaque, outcome: job.Step) void {
-    const body: ?[]const u8 = if (outcome == .done) bg_fj.body else null;
-    if (bg_cb) |cb| cb(bg_cb_ctx, body); // copies before we free the buffer
-    tcp.close();
-    bg_busy = false;
-}
-
-fn vtFetchBackground(_: *anyopaque, a: std.mem.Allocator, url: []const u8, cb_ctx: *anyopaque, on_done: inet.FetchDone) inet.FetchError!void {
-    if (bg_busy) return error.Busy;
-    if (!isUp()) return error.NoNetwork;
-    const u = http_wire.parseUrl(url) catch return error.BadUrl;
-    if (u.scheme == .https) return error.TlsFailed; // background HTTPS is a follow-on
-    const ip = resolveHost(u.host) orelse return error.DnsFailed;
-    const head = http_wire.buildRequestHead(&bg_req, "GET", u.host, u.path, &.{}, 0) catch return error.UrlTooLong;
-    bg_ip = ip;
-    bg_port = u.port;
-    bg_a = a;
-    bg_cb = on_done;
-    bg_cb_ctx = cb_ctx;
-    bg_fj = .{
-        .t = .{ .ctx = &bg_seam, .start = bgStart, .poll = bgPoll, .send = bgSend, .received = bgReceived, .reserve = bgReserve, .closed = bgClosed },
-        .clock = .{ .ctx = &bg_seam, .millis = bgMillis },
-        .request = head,
-    };
-    if (!jobs.submit(.{ .ctx = &bg_fj, .step = fetchjob.FetchJob.step, .finish = bgFinish })) return error.Busy;
-    bg_busy = true;
-}
-
-fn vtFetchProgress(_: *anyopaque) ?inet.FetchProgress {
-    if (!bg_busy) return null;
-    const p = bg_fj.progress();
-    return .{ .received = p.received, .total = p.total };
-}
-
-fn vtPost(_: *anyopaque, a: std.mem.Allocator, url: []const u8, headers: []const inet.Header, body: []const u8) inet.FetchError![]u8 {
-    // Same single client, POST verb: the caller's headers pass through verbatim
-    // (NET-013); https URLs go over TLS transparently.
-    if (!claimStack()) return error.Busy;
-    defer releaseStack();
-    return http.request(a, .POST, url, headers, body);
-}
-
-fn vtPostStream(_: *anyopaque, a: std.mem.Allocator, url: []const u8, headers: []const inet.Header, body: []const u8, sink: inet.BodySink) inet.FetchError!void {
-    // Same single client, streaming delivery: decoded body bytes reach the
-    // sink as they arrive (NET-014 — server-sent events).
-    //
-    // The claim covers the WHOLE request, handshake to last byte, because every
-    // global the request touches — the connection, the receive buffer, the TX
-    // staging — is shared and none of it is locked. Holding it for the duration
-    // is what lets the render loop skip the stack instead of racing it, so the
-    // desktop keeps drawing while the agent waits on the network (NET-018).
-    if (!claimStack()) return error.Busy;
-    defer releaseStack();
-    return http.requestStream(a, .POST, url, headers, body, sink);
-}
-
-const net_vtable = inet.VTable{
-    .bringUp = vtBringUp,
-    .isUp = vtIsUp,
-    .lease = vtLease,
-    .resolve = vtResolve,
-    .ping = vtPing,
-    .fetch = vtFetch,
-    .post = vtPost,
-    .postStream = vtPostStream,
-    .fetchBackground = vtFetchBackground,
-    .fetchProgress = vtFetchProgress,
-};
-// A stable non-null context: the stack's state is module-global, so the vtable ignores
-// this — but `undefined` would be UB to pass around even unused.
-var net_ctx: u8 = 0;
-
-/// Publish the stack through `iface/inet.zig` so apps can use the network without
-/// naming a driver. Called once at boot, before any app runs.
-pub fn publish() void {
-    inet.instance = .{ .ctx = @ptrCast(&net_ctx), .vt = &net_vtable };
-}

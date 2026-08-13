@@ -32,7 +32,7 @@ const Fixture = struct {
     }
 
     fn deinit(self: *Fixture) void {
-        self.term.destroy(self.a);
+        self.term.close(self.a, null);
         self.a.destroy(self.win);
     }
 };
@@ -53,10 +53,10 @@ test "the AI agent window prompts `ai>`; a shell terminal prompts `#<core>` (AGT
     const shell_term = try Terminal.create(a, win, undefined, 0, null, false);
     try expect(!shell_term.ai_mode);
     try expectEqual(@as(u8, '#'), shell_term.cells[shell_term.cy * terminal.MAX_COLS].ch);
-    shell_term.destroy(a);
+    shell_term.close(a, null);
 
     const ai_term = try Terminal.create(a, win, undefined, 0, null, true);
-    defer ai_term.destroy(a);
+    defer ai_term.close(a, null);
     try expect(ai_term.ai_mode);
     const row = ai_term.cy * terminal.MAX_COLS;
     try expectEqual(@as(u8, 'a'), ai_term.cells[row + 0].ch);
@@ -74,13 +74,13 @@ test "a window that opened AS the agent stays marked as one after leaving it (AG
     // prompt behind it and closes. Only this flag can tell them apart once
     // ai_mode has been turned off, so it must NOT move with ai_mode.
     const ai_term = try Terminal.create(a, win, undefined, 0, null, true);
-    defer ai_term.destroy(a);
+    defer ai_term.close(a, null);
     try expect(ai_term.agent_window);
     ai_term.ai_mode = false; // what leaving the conversation does
     try expect(ai_term.agent_window);
 
     const shell_term = try Terminal.create(a, win, undefined, 0, null, false);
-    defer shell_term.destroy(a);
+    defer shell_term.close(a, null);
     try expect(!shell_term.agent_window);
     shell_term.ai_mode = true; // what `ai` does to a shell terminal
     try expect(!shell_term.agent_window);
@@ -162,4 +162,41 @@ test "content taller than the window: the visible rows can't cover the cursor ro
     // The freshest text is on the cursor row — the row drawGl's bottom-anchored
     // view keeps on screen.
     try expectEqual(@as(u8, 'l'), f.term.cells[cy * terminal.MAX_COLS].ch);
+}
+
+test "the shell prompt is id + cwd closed with bash's $" {
+    var f = try Fixture.init(400, 300);
+    defer f.deinit();
+    // The greeting ended in a newline, so the prompt starts the cursor row.
+    const row = f.term.cy * terminal.MAX_COLS;
+    const want = "#0:/ramdisk$ ";
+    for (want, 0..) |ch, i| try expectEqual(ch, f.term.cells[row + i].ch);
+}
+
+test "masked input echoes as stars, on the grid and in every echo path" {
+    var f = try Fixture.init(400, 300);
+    defer f.deinit();
+    f.term.input_mask = true;
+    f.term.onKey('s');
+    f.term.onKey('3');
+    const row = f.term.cy * terminal.MAX_COLS;
+    const col = f.term.cx;
+    try expectEqual(@as(u8, '*'), f.term.cells[row + col - 1].ch);
+    try expectEqual(@as(u8, '*'), f.term.cells[row + col - 2].ch);
+    // The editor still holds the real characters — masking is display-only.
+    try expect(std.mem.eql(u8, "s3", f.term.ed.text()));
+}
+
+test "a held prompt suppresses exactly one automatic prompt" {
+    var f = try Fixture.init(400, 300);
+    defer f.deinit();
+    // An empty commit normally re-prompts. Held: the row stays bare — the
+    // command that held it owns the next line.
+    f.term.hold_prompt = true;
+    f.term.onKey('\r');
+    try expectEqual(@as(u8, ' '), f.term.cells[f.term.cy * terminal.MAX_COLS].ch);
+    try expectEqual(@as(usize, 0), f.term.cx);
+    // Consumed: the next commit prompts again.
+    f.term.onKey('\r');
+    try expectEqual(@as(u8, '#'), f.term.cells[f.term.cy * terminal.MAX_COLS].ch);
 }

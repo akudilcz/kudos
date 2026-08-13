@@ -17,7 +17,7 @@
 //! 31:24).
 
 const acpi = @import("../acpi/acpi.zig");
-const mmio = @import("../../drivers/io/mmio.zig");
+const mmio = @import("../io/mmio.zig");
 const SpinLock = @import("../sync/spinlock.zig").SpinLock;
 
 /// Vector the IO-APIC delivers the rotating wall-clock tick on. Above the LAPIC

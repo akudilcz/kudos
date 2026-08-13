@@ -12,9 +12,9 @@
 //! Isolation invariant: this is a self-contained mechanism under src/drivers/gpu/; it
 //! reads the BAR0 mapping (mmio.Mapping) but adds nothing to other modules.
 
-const mmio = @import("../base/mmio.zig");
-const log = @import("../base/log.zig").gpu;
-const shim = @import("../base/shim.zig");
+const mmio = @import("../rm/mmio.zig");
+const log = @import("../rm/log.zig").gpu;
+const shim = @import("../rm/shim.zig");
 const falconfw = @import("falconfw.zig");
 const tsc = @import("../../../kernel/cpu/tsc.zig");
 const spinwait = @import("../../../kernel/debug/spinwait.zig");

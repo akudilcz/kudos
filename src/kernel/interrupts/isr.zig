@@ -14,7 +14,6 @@ const crashlog = @import("../debug/crashlog.zig");
 const power = @import("../power/reboot.zig");
 const deadman = @import("../debug/deadman.zig");
 const timer = @import("../timer/timer.zig");
-const netdebug = @import("../../drivers/net/debug/netdebug.zig");
 const counter = @import("../debug/counter.zig");
 
 /// Spurious IRQ7/IRQ15 arrivals absorbed without a handler (see the bail in
@@ -182,7 +181,7 @@ export fn isrDispatch(frame: *Frame) callconv(.c) void {
         smp.containIfAp();
         crashlog.puts(slot, "*** crash held, then reboot (one-shot -> fallback OS)\n");
         crashlog.seal(slot);
-        netdebug.flushNow(); // best-effort: get the crash record onto the LAN
+        klog.flushCrash(); // best-effort: get the crash record onto the LAN
         power.crashReboot();
     }
     if (vec < 48) {

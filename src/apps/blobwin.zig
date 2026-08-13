@@ -57,6 +57,15 @@ pub const BlobWindow = struct {
         }
     }
 
+    /// Release everything this window owns and free it (App.close). Resetting
+    /// the mailbox is how the module — still running on its own core — learns
+    /// its window is gone and returns.
+    pub fn close(self: *BlobWindow, a: std.mem.Allocator, g: ?*gles.Context) void {
+        if (g) |ctx| self.deinitGl(ctx);
+        self.deinit();
+        a.destroy(self);
+    }
+
     /// A keystroke for the module (MOD-013). Focus-scoped by construction: the
     /// desktop routes keys only to the focused app.
     pub fn onKey(self: *BlobWindow, ascii: u8) void {

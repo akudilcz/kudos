@@ -150,7 +150,7 @@ def main():
         time.sleep(1.0)
 
         q = qmp.QMP(QMP_SOCK)
-        q.type_str("vm boot 1")
+        q.type_str("kudos vm boot 1")
         q.key("ret")
         print("  ..   typed: vm boot")
 

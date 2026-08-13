@@ -14,7 +14,8 @@ const session_mod = @import("../console/session.zig");
 const Session = session_mod.Session;
 const editline = @import("../console/editline.zig");
 const LINE_MAX = editline.LINE_MAX;
-const kgl = @import("kgl"); // the 2D toolkit the unified GL desktop draws through
+const kgl = @import("kgl");
+const gles = @import("gles"); // the 2D toolkit the unified GL desktop draws through
 const sched = @import("../kernel/sched/sched.zig");
 const smp = @import("../kernel/smp/smp.zig");
 const buildinfo = @import("buildinfo");
@@ -89,10 +90,21 @@ pub const Terminal = struct {
     dirty: bool = false,
     /// The AI agent window (spec AGT-002): a terminal whose every committed line
     /// is a turn for the on-demand agent rather than a shell command. It prompts
-    /// `ai>` and dispatches each line as `ai <line>` — the same agent
-    /// console the `ai` shell command drives, so there is one agent codebase. A
-    /// normal terminal leaves this false and runs lines as shell commands.
+    /// `ai>` and dispatches each line as `kudos ai <line>` — the same agent
+    /// console the `kudos ai` shell command drives, so there is one agent
+    /// codebase. A normal terminal leaves this false and runs lines as shell
+    /// commands.
     ai_mode: bool = false,
+
+    /// One automatic prompt suppressed (Console.holdPrompt): the running command
+    /// ended by asking an inline question, so the next committed line is ITS
+    /// input and a prompt would print into the question. Consumed by
+    /// promptAfterCommand only — explicit re-prompts always print.
+    hold_prompt: bool = false,
+    /// Echo masking (Console.setInputMask): typed characters show as `*` so a
+    /// passphrase reaches neither the grid nor the test-hooks mirror. Turning it
+    /// OFF forgets the editor's recall of the masked line.
+    input_mask: bool = false,
 
     /// Whether this terminal WAS OPENED as the agent window, as opposed to a
     /// shell terminal the `ai` command later moved into a conversation. Fixed at
@@ -112,19 +124,12 @@ pub const Terminal = struct {
     /// Allocate a terminal: the FIXED max-size cell grid (~0.5 MB; resize never
     /// reallocs it), the visible cols/rows from the window's content area, bind it
     /// to its session id and (SMP) its shared `session`, and print the greeting + first
-    /// prompt. The caller owns freeing `cells` and the struct on close.
-    /// Free everything create() allocated (the cell grid + the struct) — the
-    /// ONE owner of Terminal teardown, so no call site can miss a buffer
-    /// when the Terminal grows another allocation.
-    pub fn destroy(self: *Terminal, a: std.mem.Allocator) void {
-        a.free(self.cells);
-        a.destroy(self);
-    }
-
+    /// prompt. `close` is the symmetric teardown — it frees everything taken here.
     pub fn create(a: std.mem.Allocator, win: *Window, desktop: console_mod.Desktop, id: u32, session: ?*Session, ai_mode: bool) !*Terminal {
         const cols = win.contentW() / font.WIDTH;
         const rows = win.contentH() / font.HEIGHT;
         const cells = try a.alloc(Cell, MAX_COLS * MAX_ROWS);
+        errdefer a.free(cells);
         const t = try a.create(Terminal);
         t.* = .{ .a = a, .win = win, .desktop = desktop, .cols = cols, .rows = rows, .cells = cells, .id = id, .session = session, .ai_mode = ai_mode, .agent_window = ai_mode };
         counter.register(&cnt_key_drops); // idempotent — first terminal wins
@@ -175,7 +180,8 @@ pub const Terminal = struct {
         while (sess.req.pop()) |r| {
             changed = true;
             switch (r.kind) {
-                .echo => self.putChar(r.ch),
+                .echo => self.echoChar(r.ch),
+                .prompt => self.promptAfterCommand(),
                 .backspace => self.backspaceCell(),
                 .run_line => {
                     // Hand the committed line to the command WORKER task (not
@@ -222,7 +228,7 @@ pub const Terminal = struct {
     pub fn runPendingCommand(self: *Terminal) bool {
         const sess = self.session orelse return false;
         self.execLine(sess.ed.text());
-        self.prompt();
+        self.promptAfterCommand();
         // Release this terminal's line editor: it can edit the next line.
         @atomicStore(bool, &sess.busy, false, .release);
         // commitLine block()s on `busy` — wake the editor so it resumes instead
@@ -299,14 +305,23 @@ pub const Terminal = struct {
         }
     }
 
-    /// Full teardown (SMP path): signal close, then return the session slot so the
-    /// next `term` can claim it. Call EXACTLY ONCE, at the moment the Terminal is
-    /// actually freed (not on the deferral path — see signalClose). No-op on the
-    /// single-core build.
-    pub fn shutdown(self: *Terminal) void {
-        if (!buildinfo.smp) return;
-        self.signalClose();
-        if (self.session) |sess| session_mod.release(sess);
+    /// Release everything this terminal owns and free it (App.close): on SMP
+    /// the session slot goes back so the next `term` can claim it, then the
+    /// cell grid and the struct.
+    ///
+    /// The slot release is a ONE-TIME action, which is why it lives here and
+    /// not in `signalClose`: the deferral path signals repeatedly while a
+    /// command unwinds, and a second release could hand the slot to a
+    /// *different* terminal that had already claimed it. Folding it into the
+    /// single teardown makes calling it twice impossible, rather than a rule
+    /// stated in a comment.
+    pub fn close(self: *Terminal, a: std.mem.Allocator, _: ?*gles.Context) void {
+        if (buildinfo.smp) {
+            self.signalClose();
+            if (self.session) |sess| session_mod.release(sess);
+        }
+        a.free(self.cells);
+        a.destroy(self);
     }
 
     /// Mutable pointer to the cell at GRID position (x,y) (row-major, fixed
@@ -433,15 +448,34 @@ pub const Terminal = struct {
 
     /// Print the prompt in the prompt color. The AI agent window prompts a bare
     /// `ai>` (every line is a turn for the agent); a shell terminal prompts
-    /// `#<id>:<cwd>>` so the session id AND working directory stay visible.
+    /// `#<id>:<cwd>$` — session id and working directory, closed with bash's
+    /// `$` marker.
     pub fn prompt(self: *Terminal) void {
         if (self.ai_mode) {
             self.writeColored("ai> ", PROMPT_FG);
             return;
         }
         var buf: [vfs.MAX_PATH + 16]u8 = undefined;
-        const s = std.fmt.bufPrint(&buf, "#{d}:{s}> ", .{ self.id, self.cwd() }) catch "#?> ";
+        const s = std.fmt.bufPrint(&buf, "#{d}:{s}$ ", .{ self.id, self.cwd() }) catch "#?$ ";
         self.writeColored(s, PROMPT_FG);
+    }
+
+    /// The automatic prompt after a command returns — the ONLY consumer of the
+    /// hold (a held prompt skipped anywhere else would leave a terminal with no
+    /// prompt at all).
+    fn promptAfterCommand(self: *Terminal) void {
+        if (self.hold_prompt) {
+            self.hold_prompt = false;
+            return;
+        }
+        self.prompt();
+    }
+
+    /// One line-editor echo. Masked input prints `*` — the mask covers the
+    /// mirror too, since it hangs off putChar. Command output never comes
+    /// through here.
+    fn echoChar(self: *Terminal, ch: u8) void {
+        self.putChar(if (self.input_mask and ch != '\n') '*' else ch);
     }
 
     /// Erase the cell left of the cursor and move the cursor back one column
@@ -462,10 +496,10 @@ pub const Terminal = struct {
         }
     }
 
-    /// editline.Screen echo bound to this grid.
+    /// editline.Screen echo bound to this grid (masked like every echo).
     fn scrEcho(ctx: ?*anyopaque, ch: u8) void {
         const t: *Terminal = @ptrCast(@alignCast(ctx.?));
-        t.putChar(ch);
+        t.echoChar(ch);
     }
     /// editline.Screen erase bound to this grid.
     fn scrErase(ctx: ?*anyopaque) void {
@@ -486,7 +520,7 @@ pub const Terminal = struct {
                 self.putChar('\n');
                 self.runLine();
                 self.ed.len = 0;
-                self.prompt();
+                self.promptAfterCommand();
             },
             .complete => self.completeFor(&self.ed),
             .none, .recalled, .recall_empty => {},
@@ -501,15 +535,15 @@ pub const Terminal = struct {
     fn runLine(self: *Terminal) void {
         if (self.ai_mode) return self.execLine(self.ed.text());
         const parsed = shell.splitCommand(self.ed.text());
-        if (localcmd.lookup(parsed.cmd)) |c| {
+        if (localcmd.resolveLine(parsed.cmd, parsed.args)) |r| {
             const out = self.localOut();
-            if (localcmd.refusesRedirect(parsed.args)) {
+            if (localcmd.refusesRedirect(r.args)) {
                 out.str("error: '");
-                out.str(parsed.cmd);
-                out.str("' runs on this core and cannot redirect to a file\n");
+                out.str(r.c.name);
+                out.str("' runs on this core and cannot pipe or redirect\n");
                 return;
             }
-            c.run(out, parsed.args);
+            r.c.run(out, r.args);
             return;
         }
         shell.execute(self.console(), self.ed.text());
@@ -523,8 +557,8 @@ pub const Terminal = struct {
     /// SMP: called by core 0's command worker; single-core: inline from runLine.
     fn execLine(self: *Terminal, line: []const u8) void {
         if (self.ai_mode) {
-            var buf: [LINE_MAX + 3]u8 = undefined;
-            const full = std.fmt.bufPrint(&buf, "ai {s}", .{line}) catch return;
+            var buf: [LINE_MAX + 9]u8 = undefined;
+            const full = std.fmt.bufPrint(&buf, "kudos ai {s}", .{line}) catch return;
             shell.execute(self.console(), full);
         } else {
             shell.execute(self.console(), line);
@@ -563,6 +597,22 @@ pub const Terminal = struct {
         t.ai_mode = on;
     }
 
+    /// Console holdPromptFn: suppress the one automatic prompt after this command.
+    fn conHoldPrompt(ctx: *anyopaque) void {
+        const t: *Terminal = @ptrCast(@alignCast(ctx));
+        t.hold_prompt = true;
+    }
+
+    /// Console setInputMaskFn. Unmasking forgets the editor recall — Up-arrow
+    /// must not replay onto the screen what the echo hid.
+    fn conSetInputMask(ctx: *anyopaque, on: bool) void {
+        const t: *Terminal = @ptrCast(@alignCast(ctx));
+        t.input_mask = on;
+        if (!on) {
+            if (t.session) |sess| sess.ed.forgetRecall() else t.ed.forgetRecall();
+        }
+    }
+
     /// The console surface over this terminal — what shell.execute hands each
     /// command: the grid half bound to this terminal, plus the desktop half
     /// and window handle this terminal was given at spawn.
@@ -580,6 +630,8 @@ pub const Terminal = struct {
             .ai_mode = self.ai_mode,
             .agent_window = self.agent_window,
             .setAiModeFn = conSetAiMode,
+            .holdPromptFn = conHoldPrompt,
+            .setInputMaskFn = conSetInputMask,
         };
     }
 

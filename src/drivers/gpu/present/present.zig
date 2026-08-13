@@ -41,14 +41,14 @@
 //! serializes them.
 
 const algn = @import("algn"); // alignment: ONE home
-const log = @import("../base/log.zig").gpu;
+const log = @import("../rm/log.zig").gpu;
 const gsp = @import("../gsp/gsp.zig");
-const fifo = @import("../core/fifo.zig");
-const gmmu = @import("../core/gmmu.zig");
-const ce = @import("../core/ce.zig");
-const vram = @import("../core/vram.zig");
+const fifo = @import("../engines/fifo.zig");
+const gmmu = @import("../engines/gmmu.zig");
+const ce = @import("../engines/ce.zig");
+const vram = @import("../engines/vram.zig");
 const disp = @import("../display/disp.zig");
-const shim = @import("../base/shim.zig");
+const shim = @import("../rm/shim.zig");
 const tsc = @import("../../../kernel/cpu/tsc.zig");
 const counter = @import("../../../kernel/debug/counter.zig");
 
@@ -63,11 +63,10 @@ var cnt_frame_drops = counter.Counter{ .mod = .gpu, .name = "frame_drops" };
 /// flip_stats.JITTER_BUDGET_US). Zero over-budget is the runtime proof of PERF-008.
 var cnt_input_present_max_us = counter.Counter{ .mod = .gpu, .name = "input_present_max_us" };
 var cnt_input_present_over_budget = counter.Counter{ .mod = .gpu, .name = "input_present_over_budget" };
-var counters_registered = false;
-const chan = @import("../core/chan.zig");
+const chan = @import("../engines/chan.zig");
 const modeset = @import("../display/modeset.zig");
-const ctxdma = @import("../core/ctxdma.zig");
-const Push = @import("../core/push.zig").Push;
+const ctxdma = @import("../engines/ctxdma.zig");
+const Push = @import("../engines/push.zig").Push;
 const spinlock = @import("../../../kernel/sync/spinlock.zig");
 const surface = @import("surface");
 const iaccel = @import("iaccel"); // the compositor seam: publish our hooks, call theirs
@@ -81,7 +80,7 @@ const flip_stats = @import("flip_stats.zig");
 const input_latency = @import("input_latency"); // named: ONE instance with iaccel's latch
 const buildinfo = @import("buildinfo");
 const idisplay = @import("idisplay");
-const calc = @import("../base/calc.zig"); // alignment has ONE home
+const calc = @import("../rm/calc.zig"); // alignment has ONE home
 
 pub const Error = fifo.Error;
 
@@ -579,12 +578,10 @@ pub fn enableDesktopMirror(g: gsp.Gsp, f: *fifo.Fifo, d: disp.Disp, valloc: *vra
         .last_flip_done_tsc = 0,
         .valloc = valloc,
     };
-    if (!counters_registered) {
-        counters_registered = true;
-        counter.register(&cnt_frame_drops);
-        counter.register(&cnt_input_present_max_us);
-        counter.register(&cnt_input_present_over_budget);
-    }
+    // Registration is idempotent (counter.zig scans its table).
+    counter.register(&cnt_frame_drops);
+    counter.register(&cnt_input_present_max_us);
+    counter.register(&cnt_input_present_over_budget);
     // Wire the real backend now that `state` (and thus backend_ctx) has its final
     // address: the ipresent.IPresent handle carries a pointer to backend_ctx. Register
     // the primary head's flip handles with the backend (keyed by head index 0).

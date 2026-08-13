@@ -93,6 +93,22 @@ fn rxReset(ring: usize, i: usize, buf_phys: u64) void {
 
 const OPS: intel.DescOps = .{ .tx_set = txSet, .tx_done = txDone, .rx_len = rxLen, .rx_reset = rxReset };
 
+/// Roll back a partial bring-up: quiesce both DMA engines FIRST (the receiver
+/// is enabled before the TX allocations, so on a TX failure it is already
+/// live, writing into buffers about to be returned), then free every
+/// ring/buffer taken so far (dmaFree skips never-allocated 0 slots). Returns
+/// false so init's failure paths read as one expression.
+fn initFail() bool {
+    nic.write(RCTL, 0);
+    nic.write(TCTL, 0);
+    intel.dmaFree(nic.rx_ring, N_RX * @sizeOf(RxDesc));
+    intel.dmaFree(nic.rx_buf, N_RX * BUF);
+    intel.dmaFree(nic.tx_ring, N_TX * @sizeOf(TxDesc));
+    intel.dmaFree(nic.tx_buf, N_TX * BUF);
+    nic = .{};
+    return false;
+}
+
 // --- public driver surface -------------------------------------------------
 
 /// nic.Driver.macAddr: this controller's MAC.
@@ -116,6 +132,7 @@ pub fn linkUp() bool {
 pub fn init() bool {
     const dev = pci.findByIds(0x8086, 0x100E) orelse return false;
     nic = .{ .regs = .{ .rdt = RDT, .tdt = TDT, .tdh = TDH }, .ops = OPS };
+    intel.registerCounters();
     // Use bar64 (masks the flag bits internally, same as igc) rather than a
     // 32-bit `bar(0) & ~0xF`: a 64-bit-BAR e1000 variant would otherwise
     // truncate the base. QEMU's 82540 is 32-bit so this was latent, but the
@@ -129,11 +146,10 @@ pub fn init() bool {
     var i: usize = 0;
     while (i < 128) : (i += 1) nic.write(MTA + i * 4, 0); // clear multicast filter
 
-    // RX ring + buffers. A zero return means out of contiguous DMA memory — fail
-    // loudly back to nic.init rather than dereferencing a null ring.
-    nic.rx_ring = intel.dmaAlloc(N_RX * @sizeOf(RxDesc));
-    nic.rx_buf = intel.dmaAlloc(N_RX * BUF);
-    if (nic.rx_ring == 0 or nic.rx_buf == 0) return false;
+    // RX ring + buffers. Out of contiguous DMA memory fails loudly back to
+    // nic.init, unwinding whatever this bring-up already took.
+    nic.rx_ring = intel.dmaAlloc(N_RX * @sizeOf(RxDesc)) orelse return initFail();
+    nic.rx_buf = intel.dmaAlloc(N_RX * BUF) orelse return initFail();
     i = 0;
     while (i < N_RX) : (i += 1) rxAt(nic.rx_ring, i).* = .{ .addr = nic.rx_buf + i * BUF, .length = 0, .checksum = 0, .status = 0, .errors = 0, .special = 0 };
     nic.write(RDBAL, @truncate(nic.rx_ring));
@@ -152,10 +168,10 @@ pub fn init() bool {
     nic.write(RCTL, intel.RCTL_EN | intel.RCTL_UPE | intel.RCTL_MPE | intel.RCTL_BAM | intel.RCTL_SECRC);
     nic.write(RDT, N_RX - 1);
 
-    // TX ring + buffers.
-    nic.tx_ring = intel.dmaAlloc(N_TX * @sizeOf(TxDesc));
-    nic.tx_buf = intel.dmaAlloc(N_TX * BUF);
-    if (nic.tx_ring == 0 or nic.tx_buf == 0) return false;
+    // TX ring + buffers. The receiver is already enabled — a failure here must
+    // unwind through initFail so it is not left DMA-ing into freed buffers.
+    nic.tx_ring = intel.dmaAlloc(N_TX * @sizeOf(TxDesc)) orelse return initFail();
+    nic.tx_buf = intel.dmaAlloc(N_TX * BUF) orelse return initFail();
     i = 0;
     while (i < N_TX) : (i += 1) txAt(nic.tx_ring, i).* = .{ .addr = nic.tx_buf + i * BUF, .length = 0, .cso = 0, .cmd = 0, .status = 1, .css = 0, .special = 0 };
     nic.write(TDBAL, @truncate(nic.tx_ring));

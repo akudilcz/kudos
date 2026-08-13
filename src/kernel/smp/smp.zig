@@ -12,7 +12,7 @@ const acpi = @import("../acpi/acpi.zig");
 const lapic = @import("../apic/lapic.zig");
 const ioapic = @import("../apic/ioapic.zig");
 const cpu = @import("../cpu/cpu.zig");
-const mmio = @import("../../drivers/io/mmio.zig");
+const mmio = @import("../io/mmio.zig");
 const tsc = @import("../cpu/tsc.zig");
 const timer = @import("../timer/timer.zig");
 const heap = @import("../memory/heap.zig");
@@ -83,7 +83,6 @@ var next_cpu_index: u32 = 1;
 var faulted_mask: u64 = 0;
 var faulted_task: [percpu.MAX_CPUS]?*sched.Task = [_]?*sched.Task{null} ** percpu.MAX_CPUS;
 var cnt_session_faults = counter.Counter{ .mod = .smp, .name = "session_faults" };
-var cnt_faults_registered = false;
 
 /// Called ON the faulting core, from the panic/fault handler. Lock-free and
 /// allocation-free — the caller is about to park a broken core.
@@ -164,10 +163,7 @@ pub fn takeFaultedTask() ?*sched.Task {
 
 /// Register the fault counter (core 0, once, at SMP bring-up).
 pub fn registerFaultCounter() void {
-    if (!cnt_faults_registered) {
-        cnt_faults_registered = true;
-        counter.register(&cnt_session_faults);
-    }
+    counter.register(&cnt_session_faults); // idempotent (counter.zig)
 }
 
 /// Number of cores online (BSP + APs that reached long mode). The terminal cap.

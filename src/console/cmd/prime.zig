@@ -31,7 +31,7 @@ fn isPrime(n: u64) bool {
 /// how long it runs.
 pub fn run(out: Out, args: []const u8) void {
     const target = std.fmt.parseInt(u64, args, 10) catch {
-        out.str("usage: prime N   (run until a prime >= N is found)\n");
+        out.str("usage: kudos prime N   (run until a prime >= N is found)\n");
         return;
     };
     // Label the current task's activity so `ps` shows the running search.

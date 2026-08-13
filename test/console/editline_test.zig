@@ -115,3 +115,13 @@ test "Up with nothing committed reports recall_empty and edits nothing" {
     try std.testing.expectEqual(editline.Action.recall_empty, ed.key(keymap.KEY_UP, scr.screen()));
     try std.testing.expectEqualStrings("ab", ed.text());
 }
+
+test "forgetRecall drops the committed line: a masked passphrase cannot be replayed" {
+    var ed = editline.Editor{};
+    var scr = FakeScreen{};
+    try std.testing.expectEqual(editline.Action.commit, play(&ed, &scr, "hunter2\r"));
+    ed.len = 0;
+    ed.forgetRecall();
+    try std.testing.expectEqual(editline.Action.recall_empty, ed.key(keymap.KEY_UP, scr.screen()));
+    try std.testing.expectEqualStrings("", ed.text());
+}

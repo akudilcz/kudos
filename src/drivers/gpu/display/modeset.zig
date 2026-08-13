@@ -27,7 +27,7 @@
 //!   4. windowUpdate → window push, kick
 //!   5. coreUpdate → core push, kick, then poll the core notifier for FINISHED.
 
-pub const Push = @import("../core/push.zig").Push;
+pub const Push = @import("../engines/push.zig").Push;
 pub const Mode = @import("disp.zig").Mode;
 
 // ===========================================================================

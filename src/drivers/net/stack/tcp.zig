@@ -7,6 +7,7 @@ const std = @import("std");
 const net = @import("net.zig");
 const tcp_tx = @import("tcp_tx.zig");
 const timer = @import("../../../kernel/timer/timer.zig");
+const tsc = @import("../../../kernel/cpu/tsc.zig");
 const sched = @import("../../../kernel/sched/sched.zig");
 
 /// An ACK owed to the peer, deferred out of the receive path (spec NET-019).
@@ -84,9 +85,12 @@ const TCP_WINDOW: u16 = 0xFFFF;
 // high base so each connection picks a different, unprivileged local port.
 const EPHEMERAL_PORT_BASE: u16 = 0xD000;
 const EPHEMERAL_PORT_MASK: u16 = 0x0FFF;
-// Fixed initial send sequence number. A constant ISN is acceptable for this
-// single-connection stack (no simultaneous reuse of a 4-tuple to collide with).
-const INITIAL_SEND_SEQ: u32 = 0x00112200;
+// Connections opened this boot — mixed into the ephemeral port so back-to-back
+// connects inside one 10 ms timer tick still pick distinct 4-tuples. The clock
+// alone repeated the port, and the netboot kernel→initramfs fetch pair to one
+// server then reused a 4-tuple the server still held: its challenge-ACK to the
+// new SYN reads as silence here and burns the whole connect timeout.
+var port_salt: u16 = 0;
 // SYN -> SYN-ACK handshake timeout (ms) before connect() gives up.
 const CONNECT_TIMEOUT_MS: u64 = 3000;
 // Backstop for a single send() before it gives up: the retransmit engine itself
@@ -298,8 +302,12 @@ pub const ConnState = enum { connecting, established, refused };
 pub fn connectStart(ip: [4]u8, port: u16) bool {
     remote_ip = ip;
     remote_port = port;
-    local_port = EPHEMERAL_PORT_BASE | @as(u16, @truncate(timer.now() & EPHEMERAL_PORT_MASK));
-    snd_nxt = INITIAL_SEND_SEQ;
+    port_salt +%= 1;
+    local_port = EPHEMERAL_PORT_BASE | ((@as(u16, @truncate(timer.now())) +% port_salt) & EPHEMERAL_PORT_MASK);
+    // The ISN rides the TSC so a reused 4-tuple starts outside the previous
+    // incarnation's window — a fixed ISN sat inside it, and the peer answers an
+    // in-window SYN with a challenge-ACK, not a SYN-ACK (RFC 5961 §4).
+    snd_nxt = @truncate(tsc.rdtsc() >> 6);
     rcv_nxt = 0;
     fin_recv = false;
     reset_recv = false;

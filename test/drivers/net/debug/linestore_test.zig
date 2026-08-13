@@ -10,8 +10,8 @@ const CAP = 4;
 const LINE_CAP = 40;
 const S = linestore.Store(CAP, LINE_CAP);
 
-fn line(s: *const S, pkt: []const u8, i: usize) []const u8 {
-    // The i-th newline-terminated line of a packed datagram.
+/// The i-th newline-terminated line of a packed datagram.
+fn line(pkt: []const u8, i: usize) []const u8 {
     var it = std.mem.splitScalar(u8, pkt, '\n');
     var n: usize = 0;
     while (it.next()) |l| {
@@ -19,7 +19,6 @@ fn line(s: *const S, pkt: []const u8, i: usize) []const u8 {
         if (n == i) return l;
         n += 1;
     }
-    _ = s;
     return "";
 }
 
@@ -40,9 +39,8 @@ test "fill packs multiple lines and does NOT consume them (DIAG-024)" {
     var pkt: [256]u8 = undefined;
     const f = s.fill(&pkt);
     try std.testing.expectEqual(@as(usize, 2), f.lines);
-    // The failed-send path: nothing advanced, so the same two lines pack again —
-    // byte-identical, same sequence numbers. This is the invariant whose absence
-    // was the compile-run gap (lines dequeued before the NIC accepted them).
+    // The failed-send path: nothing advanced, so the same two lines pack again,
+    // byte-identical and with the same sequence numbers.
     try std.testing.expectEqual(@as(usize, 2), s.pending());
     var pkt2: [256]u8 = undefined;
     const f2 = s.fill(&pkt2);
@@ -120,9 +118,9 @@ test "the sequence stamp wraps at its digit budget rather than widening" {
     var pkt: [256]u8 = undefined;
     const f = s.fill(&pkt);
     try std.testing.expectEqual(@as(usize, 2), f.lines);
-    try std.testing.expectEqualStrings("[999999] last", line(&s, pkt[0..f.bytes], 0));
+    try std.testing.expectEqualStrings("[999999] last", line(pkt[0..f.bytes], 0));
     // 10^6 wraps to 0 — the receiver's gap detector treats the drop as a wrap.
-    try std.testing.expectEqualStrings("[000000] wrapped", line(&s, pkt[0..f.bytes], 1));
+    try std.testing.expectEqualStrings("[000000] wrapped", line(pkt[0..f.bytes], 1));
     // Resend across the wrap still finds both.
     s.advance(2);
     var out: [256]u8 = undefined;

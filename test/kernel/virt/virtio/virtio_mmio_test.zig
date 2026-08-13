@@ -10,8 +10,12 @@ const expect = std.testing.expect;
 
 const RAM_LEN = 64 * 1024;
 
-// Register offsets a driver uses, spelled here independently of the module so a
-// transposed offset in the implementation cannot self-verify.
+// THE ORACLE. These offsets are spelled here independently of the module on
+// purpose: a test that imports the constant it is checking would pass just as
+// happily against a transposed offset, because both sides would be wrong
+// together. This is the ONE place that restatement earns its keep — the other
+// virtio suites drive the device through `mmio.REG_*`, so the spec values have
+// exactly one copy and exactly one witness that the copy is right.
 const MAGIC: u64 = 0x000;
 const VERSION: u64 = 0x004;
 const DEVICE_ID: u64 = 0x008;

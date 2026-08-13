@@ -13,7 +13,7 @@
 //! file owns only the port IO under them.
 
 const std = @import("std");
-const io = @import("../../drivers/io/io.zig");
+const io = @import("../io/io.zig");
 const timer = @import("timer.zig");
 const klog = @import("../debug/klog.zig");
 const rtc_decode = @import("rtc_decode.zig");

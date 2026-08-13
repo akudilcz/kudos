@@ -382,20 +382,7 @@ fn setRange(payload: []u8, last: u16) usize {
     return bytes;
 }
 
-/// Scatter one event into the chain's device-writable segments, in order.
-/// Returns the bytes the delivery needed, or 0 when the chain has too little
-/// writable room — the partial copy is harmless, because a used length of 0
-/// tells the driver the buffer holds nothing.
+/// Deliver one input event to the guest.
 fn deliver(q: *const virtq.Virtq, head: u16, event: []const u8) virtq.Error!u32 {
-    var off: usize = 0;
-    var it = virtq.chain(q, head);
-    while (try it.next()) |d| {
-        if (d.flags & virtq.F_WRITE == 0) continue;
-        const seg = try q.segment(d);
-        const n = @min(seg.len, event.len - off);
-        @memcpy(seg[0..n], event[off..][0..n]);
-        off += n;
-        if (off == event.len) return @intCast(event.len);
-    }
-    return 0;
+    return virtq.scatter(q, head, &.{event});
 }

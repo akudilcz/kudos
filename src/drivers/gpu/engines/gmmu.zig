@@ -10,9 +10,9 @@
 //! Bump-style: mappings are created once before the channel runs and never
 //! unmapped; overlap is a loud error.
 
-const log = @import("../base/log.zig").gpu;
+const log = @import("../rm/log.zig").gpu;
 const vram = @import("vram.zig");
-const mmio = @import("../base/mmio.zig");
+const mmio = @import("../rm/mmio.zig");
 const tsc = @import("../../../kernel/cpu/tsc.zig");
 
 pub const Error = error{ GmmuVaOutOfRange, GmmuAlreadyMapped, GmmuUnaligned, GmmuTlbFlushTimeout } || error{VramOutOfMemory};
@@ -101,7 +101,7 @@ const PAGE: u64 = 0x1000;
 
 // The GP100 PTE/PDE bit encoding + VA-index extraction live in the pure, host-
 // tested gmmu_fmt (single source of truth).
-const fmt = @import("../base/gmmu_fmt.zig");
+const fmt = @import("../rm/gmmu_fmt.zig");
 const PDE_APER_VRAM = fmt.PDE_APER_VRAM;
 const PTE_VALID = fmt.PTE_VALID;
 const PTE_APER_HOST = fmt.PTE_APER_HOST;

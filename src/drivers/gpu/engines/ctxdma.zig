@@ -7,8 +7,8 @@
 //! display engine HW reads both directly out of that VRAM block; the GSP-RM is
 //! never involved (nouveau usergv100.c / ramht.c / wndw.c / r535-disp.c).
 
-const log = @import("../base/log.zig").gpu;
-const mmio = @import("../base/mmio.zig");
+const log = @import("../rm/log.zig").gpu;
+const mmio = @import("../rm/mmio.zig");
 const vram = @import("vram.zig");
 
 /// The handle pushed in SET_CONTEXT_DMA_ISO(0): NV50_DISP_HANDLE_WNDW_CTX(kind=0).

@@ -12,6 +12,32 @@
 //! machine with no such device leaves `instance` null, and the reader shows
 //! absence rather than zeroes.
 
+/// How a device or service is faring — the shared lifecycle vocabulary, so
+/// every subsystem answers "how are you" in the same words instead of each
+/// inventing its own booleans. `absent` and `failed` are different answers:
+/// absent is a device this machine does not have, failed is one it has and
+/// could not bring up.
+pub const Status = enum(u8) {
+    absent,
+    initializing,
+    ready,
+    degraded,
+    closing,
+    failed,
+
+    /// The one spelling of each state for traces and status lines.
+    pub fn text(self: Status) []const u8 {
+        return switch (self) {
+            .absent => "absent",
+            .initializing => "initializing",
+            .ready => "ready",
+            .degraded => "degraded",
+            .closing => "closing",
+            .failed => "failed",
+        };
+    }
+};
+
 /// What the USB stack has enumerated, and how much it has carried.
 pub const Usb = struct {
     keyboard: bool = false,

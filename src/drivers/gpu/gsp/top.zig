@@ -7,8 +7,8 @@
 //! grouped into 3-dword records per device (bit31 = "more dwords follow").
 //! Record dword 0: type@[29:24]; dword 1: addr@[23:12], reset@[4:0].
 
-const mmio = @import("../base/mmio.zig");
-const log = @import("../base/log.zig").gpu;
+const mmio = @import("../rm/mmio.zig");
+const log = @import("../rm/log.zig").gpu;
 
 const REG_TOP_SIZE: u64 = 0x0224fc;
 const REG_TOP_BASE: u64 = 0x022800;

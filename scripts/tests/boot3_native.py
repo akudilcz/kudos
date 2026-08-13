@@ -143,7 +143,7 @@ def scoped_on(chan, cmd):
     """This command's own mirrored output on terminal channel `chan`: everything
     after the LAST `> <cmd>` echo (the multi-channel form of b1's core-0 helper)."""
     mirror = cases.mirror_text(read(), core=chan)
-    idx = mirror.rfind(f"> {cmd}")
+    idx = mirror.rfind(f"$ {cmd}")
     if idx == -1:
         return None
     nl = mirror.find("\n", idx)
@@ -299,7 +299,7 @@ def parse_ps(scoped):
 
 
 def mem_free_mib(q):
-    scoped, _ = obs_cmd(q, "mem", ("MiB total",))
+    scoped, _ = obs_cmd(q, "free", ("Mem:",))
     m = _MEM_RE.search(scoped)
     if not m:
         fail(f"`mem` output unparseable: {scoped!r}")
@@ -313,7 +313,7 @@ def sessions_held(q):
     """(session count, MiB held) from `mem` — the per-address-space accounting
     (MEM-008). Free RAM alone cannot tell a leaked session from ordinary churn;
     this is the figure that can."""
-    scoped, _ = obs_cmd(q, "mem", ("MiB total", "sessions "))
+    scoped, _ = obs_cmd(q, "free", ("Mem:", "sessions "))
     m = _HELD_RE.search(scoped)
     if not m:
         fail(f"`mem` reports no per-session accounting (MEM-008): {scoped!r}")
@@ -488,7 +488,7 @@ def phase_load(q, client, ncores, base):
     pegged = []
     for _ in range(npeg):
         wid, chan = open_terminal(q)
-        b1.type_cmd(q, f"prime {target}")
+        b1.type_cmd(q, f"kudos prime {target}")
         pegged.append((wid, chan))
     obs_id, obs_chan = open_terminal(q)
     ok(f"{npeg} pegged terminals + observer opened (wm.nwins {n0} -> {n0 + npeg + 1})")
@@ -559,7 +559,7 @@ def phase_load(q, client, ncores, base):
 
     # KRN-008: a deadline-sleeping task keeps its schedule while every core is
     # contested; the kernel's own rt report is the measurement.
-    scoped, _ = obs_cmd(q, f"rt {RT_LOAD_PERIODS}", ("ns; drift = ",),
+    scoped, _ = obs_cmd(q, f"kudos rt {RT_LOAD_PERIODS}", ("ns; drift = ",),
                         deadline_s=RT_LOAD_PERIODS // 10 + 20)
     good, detail = schedclock.judge_rt(schedclock.parse_rt(scoped), RT_LOAD_PERIODS)
     if not good:
@@ -599,7 +599,7 @@ def phase_guest(q, client, base):
         _record("boot3:   SKIP guest phase — BOOT3_SKIP_GUEST=1")
         return base
     obs_id, obs_chan = open_terminal(q)
-    scoped, _ = obs_cmd(q, "vm", ("vm:",))
+    scoped, _ = obs_cmd(q, "kudos vm", ("vm:",))
     if "VT-x not available" in scoped:
         _record("boot3:   SKIP guest phase — no VT-x on this machine "
                 "(a property of the host, not a regression)")
@@ -609,11 +609,11 @@ def phase_guest(q, client, base):
     ups0 = guest_up_count()
     wins_before = set(b1.wm()["wins"])
 
-    b1.type_cmd(q, "vm boot 1")
+    b1.type_cmd(q, "kudos vm boot 1")
     deadline = time.time() + 10
     resp = ""
     while time.time() < deadline and "vm:" not in resp:
-        resp = scoped_on(obs_chan, "vm boot 1") or ""
+        resp = scoped_on(obs_chan, "kudos vm boot 1") or ""
         time.sleep(0.3)
     if "no guest image staged" in resp:
         _record("boot3:   SKIP guest phase — no guest image staged in this build")
@@ -641,7 +641,7 @@ def phase_guest(q, client, base):
     if ups != ups0 + 1:
         fail(f"one `vm boot 1` produced {ups - ups0} guests — KMR1 exactly-once "
              f"broken under SMP", grep="KUDOS-GUEST-UP")
-    scoped, _ = obs_cmd(q, "vm", ("vm:",))
+    scoped, _ = obs_cmd(q, "kudos vm", ("vm:",))
     rows = vm_rows(scoped)
     if len(rows) != 1:
         fail(f"one `vm boot 1` left {len(rows)} guest slots in use: {rows}",
@@ -655,7 +655,7 @@ def phase_guest(q, client, base):
     ok(f"exactly one guest for one command (vm {gid}, running on core {core})")
 
     time.sleep(GUEST_EXITS_WINDOW_S)
-    scoped, _ = obs_cmd(q, "vm", ("vm:",))
+    scoped, _ = obs_cmd(q, "kudos vm", ("vm:",))
     rows = vm_rows(scoped)
     if not rows or rows[0][3] <= exits0:
         fail(f"guest exits not climbing ({exits0} -> "
@@ -667,10 +667,10 @@ def phase_guest(q, client, base):
         flipstat_pass(q, "guest running")  # PERF-017
 
     # Teardown: the scriptable stop, then the window close that retires the slot.
-    obs_cmd(q, f"vm stop {gid}", ("vm: stop requested",))
+    obs_cmd(q, f"kudos vm stop {gid}", ("vm: stop requested",))
     deadline = time.time() + GUEST_STOP_TIMEOUT_S
     while time.time() < deadline:
-        scoped, _ = obs_cmd(q, "vm", ("vm:",))
+        scoped, _ = obs_cmd(q, "kudos vm", ("vm:",))
         rows = vm_rows(scoped)
         if not rows or rows[0][2] != "running":
             break
@@ -689,7 +689,7 @@ def phase_guest(q, client, base):
     refocus_window(q, vm_wins[0])
     close_window(q, vm_wins[0], "VM console window")
     refocus_window(q, obs_id)
-    scoped, _ = obs_cmd(q, "vm", ("vm:",))
+    scoped, _ = obs_cmd(q, "kudos vm", ("vm:",))
     if vm_rows(scoped):
         fail(f"guest slot still in use after its window closed: {vm_rows(scoped)}",
              grep=f"term.{obs_chan}")
@@ -723,7 +723,7 @@ def phase_churn(q, client, base):
     bg = []
     for _ in range(CHURN_BG_PRIMES):
         wid, chan = open_terminal(q)
-        b1.type_cmd(q, f"prime {target}")
+        b1.type_cmd(q, f"kudos prime {target}")
         bg.append((wid, chan))
 
     for i in range(cycles):
@@ -829,7 +829,7 @@ def phase_wakestorm(q, client, base):
     storms = []
     for _ in range(nterms):
         wid, chan = open_terminal(q)
-        b1.type_cmd(q, f"rt {RT_STORM_PERIODS}")
+        b1.type_cmd(q, f"kudos rt {RT_STORM_PERIODS}")
         storms.append((wid, chan))
 
     # Concurrency receipt: several [rt] activities visible at one instant.
@@ -860,7 +860,7 @@ def phase_wakestorm(q, client, base):
         for _wid, chan in storms:
             if chan in results:
                 continue
-            res = schedclock.parse_rt(scoped_on(chan, f"rt {RT_STORM_PERIODS}") or "")
+            res = schedclock.parse_rt(scoped_on(chan, f"kudos rt {RT_STORM_PERIODS}") or "")
             if res:
                 results[chan] = res
         time.sleep(0.5)

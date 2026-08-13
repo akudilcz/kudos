@@ -1,11 +1,9 @@
-//! The blob-window scene replay, against real pixels (MOD-015): the exact GL
-//! sequence `apps/blobwin.zig` issues for the reference cube
+//! The blob-window scene replay, against real pixels (MOD-015): the GL sequence
+//! `apps/blobwin.zig` issues for the reference cube
 //! (scripts/agent/samples/cube.zig), driven into the software rasteriser. The
-//! cube-run track proves the loop end to end in QEMU; THIS test is where the
-//! drawn geometry itself is judged cheaply — a solid lit cube covers the
-//! viewport centre, its silhouette is convex, and the lit faces shade
-//! differently. When the window shows garbage, this is the test that says
-//! whether the recorder/replay math or the kernel plumbing is lying.
+//! cube-run track proves the loop end to end in QEMU; this test judges the drawn
+//! geometry cheaply — a solid lit cube over the viewport centre, its lit faces
+//! shading apart.
 
 const std = @import("std");
 const gles = @import("gles");
@@ -19,9 +17,9 @@ const H: u32 = 96;
 const NVERTS: u32 = 36;
 
 fn cubeVertex(i: u32) [3]f32 {
-    // The sample's generator, verbatim (one file cannot import the other — the
-    // sample lives outside the module tree — so the pinned duplicate is the
-    // price of testing it; drift shows as this test drawing a different shape).
+    // The sample's generator, duplicated: the sample lives outside the module
+    // tree, so neither file can import the other. Drift shows as this test
+    // drawing a different shape.
     const f = i / 6;
     const corners = [_]u32{ 0, 1, 2, 0, 2, 3 };
     const corner = corners[i % 6];

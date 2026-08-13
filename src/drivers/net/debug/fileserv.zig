@@ -15,6 +15,7 @@
 
 const std = @import("std");
 const net = @import("../stack/net.zig");
+const ring = @import("ring");
 const fileproto = @import("fileproto");
 const iramdisk = @import("iramdisk");
 const keyboard = @import("../../input/keyboard.zig");
@@ -68,12 +69,14 @@ const Req = struct {
 /// Ring depth: the host window (16) doubled, so a full window plus its
 /// retransmitted twins still parks without a drop.
 const REQ_QUEUE_DEPTH: usize = 32;
-var req_ring: [REQ_QUEUE_DEPTH]Req = .{Req{}} ** REQ_QUEUE_DEPTH;
-var req_head: usize = 0; // consume (service)
-var req_tail: usize = 0; // produce (handleUdp); empty when head == tail
-fn ringCount() usize {
-    return (req_tail + REQ_QUEUE_DEPTH - req_head) % REQ_QUEUE_DEPTH;
-}
+/// The intake is the shared release/acquire ring, not bare indices: the
+/// producer runs inside whichever task is pumping the stack, the consumer
+/// inside whichever loop won service()'s try-lock — different CORES whenever a
+/// fetch task drives the stack while the session loop services. Bare head/tail
+/// here let both sides pass the same emptiness check and advance head twice
+/// for one request, wedging the ring a full lap and deafening KMR1 (remote
+/// status and reboot included) for the burst.
+var req_ring: ring.Ring(Req, REQ_QUEUE_DEPTH) = .{};
 
 /// Wire the file-system seam (main_root.zig, once, after ramdisk.init).
 pub fn init(the_fs: iramdisk.IRamdisk) void {
@@ -92,15 +95,12 @@ pub fn init(the_fs: iramdisk.IRamdisk) void {
 /// UDP header.
 pub fn handleUdp(src: [4]u8, p: []const u8) void {
     cnt_reqs.inc();
-    if (ringCount() == REQ_QUEUE_DEPTH - 1 or fs == null) {
-        if (fs != null) cnt_busy_drops.inc(); // ring full: drop; host retries
-        return;
-    }
+    if (fs == null) return;
     if (p.len < net.UDP_HLEN + fileproto.HDR_LEN) return;
     const body = p[net.UDP_HLEN..];
     if (body.len > REQ_CAP) return;
     if (fileproto.parseHeader(body) == null) return;
-    const r = &req_ring[req_tail];
+    var r = Req{};
     @memcpy(r.buf[0..body.len], body);
     r.len = body.len;
     r.src = src;
@@ -109,26 +109,25 @@ pub fn handleUdp(src: [4]u8, p: []const u8) void {
     // Broadcast trace is lossy over wifi (no 802.11 ack/retry): 8% of datagrams vanished
     // during a native test run, taking mirrored terminal lines with them.
     netdebug.collector = src;
-    req_tail = (req_tail + 1) % REQ_QUEUE_DEPTH;
+    if (!req_ring.push(r)) cnt_busy_drops.inc(); // ring full: drop; host retries
 }
 
 /// Screenshot trigger (netdebug SHOT + the boot auto-shot): the GPU session
 /// loop polls this and runs screenshot.dump with its head context. Sticky
-/// until consumed.
+/// until consumed. Armed from the agent's task or a KMR1 pass, consumed on the
+/// GPU session loop — different cores, so the exchange below is atomic.
 var shot_requested: bool = false;
 
-/// Consume a pending SHOT request (GPU session loop).
+/// Consume a pending SHOT request (GPU session loop) — exactly once.
 pub fn takeShotRequest() bool {
-    const r = shot_requested;
-    shot_requested = false;
-    return r;
+    return @atomicRmw(bool, &shot_requested, .Xchg, false, .acq_rel);
 }
 
 /// Arm a screenshot capture from in-kernel callers (the agent's screen-capture
 /// tool, spec AGT-006) — the same sticky flag the KMR1 SHOT sink raises, so the
 /// GPU session loop services them identically.
 pub fn requestShot() void {
-    shot_requested = true;
+    @atomicStore(bool, &shot_requested, true, .release);
 }
 
 /// A one-slot app-spawn request: the agent's application tool (AGT-006) cannot
@@ -138,23 +137,33 @@ pub fn requestShot() void {
 /// the shot flag) and the desktop consumes it on its own core. One deep is
 /// enough: a human-paced agent never queues two spawns a frame apart.
 var spawn_request: [24]u8 = undefined;
-var spawn_request_len: usize = 0;
+var spawn_request_len: usize = 0; // the publish: written LAST (release), read FIRST (acquire)
+/// The consumer's own copy: the desktop loop alone writes and reads it, so the
+/// slice takeSpawnRequest returns cannot be rewritten by the next producer
+/// while the desktop is still comparing names against it.
+var spawn_taken: [24]u8 = undefined;
 
 /// Ask the desktop to open an application window by name (term, system, diag,
 /// clock, calc, web, ai). Names the desktop does not know are ignored
 /// there, loudly. Overwrites any unconsumed prior request.
 pub fn requestSpawn(name: []const u8) void {
     const n = @min(name.len, spawn_request.len);
+    // Retract, write, publish: the consumer sees len 0 or a fully written
+    // name — never the old length over half-new bytes. (Producer-vs-producer
+    // interleaving remains possible; both are human/agent-paced and the
+    // newest intent wins, per the contract above.)
+    @atomicStore(usize, &spawn_request_len, 0, .release);
     @memcpy(spawn_request[0..n], name[0..n]);
-    spawn_request_len = n;
+    @atomicStore(usize, &spawn_request_len, n, .release);
 }
 
 /// Consume a pending app-spawn request (desktop input loop), or null.
 pub fn takeSpawnRequest() ?[]const u8 {
-    if (spawn_request_len == 0) return null;
-    const n = spawn_request_len;
-    spawn_request_len = 0;
-    return spawn_request[0..n];
+    const n = @atomicLoad(usize, &spawn_request_len, .acquire);
+    if (n == 0) return null;
+    @memcpy(spawn_taken[0..n], spawn_request[0..n]);
+    @atomicStore(usize, &spawn_request_len, 0, .release);
+    return spawn_taken[0..n];
 }
 
 /// Longest window-title substring a focus request may name, and the longest
@@ -170,37 +179,41 @@ const FOCUS_TITLE_CAP: usize = 64;
 /// is focused: without it, "type this into the VM window" is a guess, and a
 /// wrong guess types a command into a terminal or a browser at random.
 var focus_request: [FOCUS_TITLE_CAP]u8 = undefined;
-var focus_request_len: usize = 0;
+var focus_request_len: usize = 0; // publish/consume ordering as spawn_request_len
+var focus_taken: [FOCUS_TITLE_CAP]u8 = undefined; // desktop-loop-owned copy, as spawn_taken
 var focused_title: [FOCUS_TITLE_CAP]u8 = undefined;
-var focused_title_len: usize = 0;
+var focused_title_len: usize = 0; // published by the desktop, read from KMR1 passes
 
 /// Ask the desktop to focus the front-most visible window whose title contains
 /// `needle`. Overwrites any unconsumed prior request — the newest intent wins,
 /// and a request the desktop has not yet seen is not one anybody is waiting on.
 pub fn requestFocus(needle: []const u8) void {
     const n = @min(needle.len, focus_request.len);
+    @atomicStore(usize, &focus_request_len, 0, .release);
     @memcpy(focus_request[0..n], needle[0..n]);
-    focus_request_len = n;
+    @atomicStore(usize, &focus_request_len, n, .release);
 }
 
 /// Consume a pending focus request (desktop input loop), or null.
 pub fn takeFocusRequest() ?[]const u8 {
-    if (focus_request_len == 0) return null;
-    const n = focus_request_len;
-    focus_request_len = 0;
-    return focus_request[0..n];
+    const n = @atomicLoad(usize, &focus_request_len, .acquire);
+    if (n == 0) return null;
+    @memcpy(focus_taken[0..n], focus_request[0..n]);
+    @atomicStore(usize, &focus_request_len, 0, .release);
+    return focus_taken[0..n];
 }
 
 /// The desktop: publish the title of the window that now has focus.
 pub fn publishFocus(title: []const u8) void {
     const n = @min(title.len, focused_title.len);
+    @atomicStore(usize, &focused_title_len, 0, .release);
     @memcpy(focused_title[0..n], title[0..n]);
-    focused_title_len = n;
+    @atomicStore(usize, &focused_title_len, n, .release);
 }
 
 /// The title last published by the desktop — empty before it has published any.
 pub fn focusedTitle() []const u8 {
-    return focused_title[0..focused_title_len];
+    return focused_title[0..@atomicLoad(usize, &focused_title_len, .acquire)];
 }
 
 /// Injection dedup state (fileproto.Dedup; recorded on successful dispatch).
@@ -241,7 +254,7 @@ fn sinkMouseAbs(_: *anyopaque, x: i16, y: i16, buttons: u8) void {
     imouse.inject(.{ .dx = 0, .dy = 0, .buttons = buttons, .abs = .{ .x = x, .y = y }, .t_tsc = tsc.rdtsc() });
 }
 fn sinkShot(_: *anyopaque) void {
-    shot_requested = true;
+    requestShot();
 }
 
 /// Park the focus request (if any) and answer with the focus in effect NOW. The
@@ -397,9 +410,22 @@ const sink = fileproto.Inject{ .ctx = &sink_ctx, .vtable = &sink_vtable };
 /// Reply staging: UDP header + protocol header + READ_R framing + max chunk.
 var reply: [net.UDP_HLEN + fileproto.HDR_LEN + 10 + fileproto.MAX_CHUNK + 64]u8 = undefined;
 
-/// Build + send the pending reply, if any. Called from the steady loops
-/// (boot/pump.zig's systemLoop, gpu.zig session loop) right after net.pump().
-pub fn service() void {
+/// A service pass in progress — the try-lock that keeps the two callers of
+/// service() from consuming one request twice (see below).
+var service_busy: bool = false;
+
+/// Build + send the pending reply, if any. A row in the steady loops' service
+/// table (boot/services.zig), stepped right after the network pump — and also
+/// reached from the net wait-hook inside a fetching task's blocking loops, so
+/// a multi-second transfer never leaves KMR1 unanswered.
+pub fn step() void {
+    // ONE servicer at a time: everything below — the intake ring's consumer
+    // side, the reply staging, the dedup record, the armed power action — is
+    // single-consumer state, and the two callers can land on different cores.
+    // A lost race is not a lost service: the winner drains the same ring.
+    // Try, never wait (the netown rule).
+    if (@cmpxchgStrong(bool, &service_busy, false, true, .acq_rel, .acquire) != null) return;
+    defer @atomicStore(bool, &service_busy, false, .release);
     cnt_service.inc();
     // The armed power action is checked on EVERY call, not just when a request is
     // pending — the request that armed it is long since answered, and nothing else
@@ -430,9 +456,12 @@ pub fn service() void {
         }
     }
 
-    if (req_head == req_tail) return; // ring empty
-    const r = &req_ring[req_head];
-    defer req_head = (req_head + 1) % REQ_QUEUE_DEPTH;
+    // peek + deferred drop, not pop: the request is 1.6 KB and the reply is
+    // built straight out of the ring slot — the producer cannot touch an
+    // unconsumed front slot, and the drop retires it on every exit below
+    // (a request that produced no reply is still consumed; the host retries).
+    const r = req_ring.peek() orelse return;
+    defer req_ring.drop();
     const the_fs = fs orelse return;
 
     const n = fileproto.buildReply(the_fs, &dedup, sink, r.buf[0..r.len], reply[net.UDP_HLEN..]);

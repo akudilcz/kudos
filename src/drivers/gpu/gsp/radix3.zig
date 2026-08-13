@@ -13,9 +13,9 @@
 //! Isolation invariant: builds tables from PMM frames via shim.allocPagesPhys
 //! (the os_alloc_pages_node equivalent); adds nothing to other modules.
 
-const shim = @import("../base/shim.zig");
-const gspfw = @import("../base/gspfw.zig");
-const log = @import("../base/log.zig").gpu;
+const shim = @import("../rm/shim.zig");
+const gspfw = @import("../rm/gspfw.zig");
+const log = @import("../rm/log.zig").gpu;
 
 const PAGE = gspfw.GSP_PAGE_SIZE;
 const PTES_PER_PAGE = PAGE / 8; // 512

@@ -4,21 +4,19 @@
 //! ONE implementation of the base `Api` (spec AGT-008), because there are two
 //! callers and they must not drift: `run <name>` typed in a terminal, which
 //! executes the image on that session's own task, and the agent's run_app tool,
-//! which has no terminal behind it — it starts a session of its own for the image
-//! and captures what the image printed as the tool result it then reads.
+//! which has no terminal behind it — it starts a session of its own and captures
+//! what the image printed as the tool result.
 //!
-//! Everything BEYOND the base `Api` — the capabilities a module binds with
-//! `get_interface` — belongs to `capabilities.zig`, which this file only chooses a
-//! grant from. The split is deliberate: this file is about running an image, and a
-//! decision about what untrusted code may reach should not be reachable by editing
-//! the code that happens to start it.
+//! Everything beyond the base `Api` — the capabilities a module binds with
+//! `get_interface` — belongs to `capabilities.zig`; this file only chooses a
+//! grant. What untrusted code may reach must not be editable from the code that
+//! starts it.
 //!
 //! Both run the image in a SESSION ADDRESS SPACE (MOD-006): the image and the
-//! app's arena are carved from that session's private region, so a stray
-//! pointer cannot reach another session (MEM-004) and a fault kills only that
-//! session's task — the core and every other session keep running (MEM-006,
-//! AGT-009, KRN-006). The single-core build has no session spaces, so it runs
-//! no app image at all, by either route.
+//! app's arena are carved from that session's private region, so a stray pointer
+//! cannot reach another session (MEM-004) and a fault kills only that session's
+//! task (MEM-006, AGT-009, KRN-006). The single-core build has no session spaces,
+//! so it runs no app image at all.
 
 const std = @import("std");
 const Out = @import("out.zig").Out;
@@ -354,10 +352,10 @@ pub fn runContained(blob: []const u8, budget_ms: u64) RunError!Result {
 // is right for a program whose OUTPUT is the answer — and wrong for one whose
 // WINDOW is the answer: a visualisation is not "done" in ten seconds, it runs
 // until the person watching closes it. A detached run starts the image on a
-// session task of its own and returns; the window is then the app's lifeline —
-// closing it cancels the run (the mailbox handle dies, `Api.cancelled` and
-// `DrawApi.closed` both go true), and the pump reaps the session once the image
-// returns. One at a time, like the one blob window it exists to open.
+// session task of its own and returns; its windows are then the app's lifeline —
+// closing them cancels the run (`Api.cancelled` and `WindowApi.closed` both go
+// true), and the pump reaps the session once the image returns. ONE detached run
+// at a time (SPAWN_ID), however many windows it holds.
 
 /// Bytes the detached run's image may occupy. Its own copy — the caller's blob
 /// is a ramdisk file a later `compile` may replace under a still-running app.

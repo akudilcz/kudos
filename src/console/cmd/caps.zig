@@ -10,7 +10,7 @@ const capabilities = @import("../capabilities.zig");
 const console = @import("../console.zig");
 
 const USAGE =
-    \\usage: caps
+    \\usage: kudos caps
     \\  what a loaded .kudos module may bind with api.get_interface(id, version)
     \\
 ;

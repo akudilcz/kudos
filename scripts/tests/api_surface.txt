@@ -74,7 +74,7 @@ src/agent/tools.zig: pub const Handler = *const fn (ctx: *anyopaque, args_json: 
 src/agent/tools.zig: pub const Tool = struct
 src/agent/tools.zig: pub const DispatchError = error{UnknownTool} || anyerror;
 src/agent/tools.zig: pub const Registry = struct
-src/apps/app.zig: pub const Kind = @import("../console/console.zig").AppKind;
+src/apps/app.zig: pub const Kind = @import("idesk").AppKind;
 src/apps/app.zig: pub const App = union(enum)
 src/apps/blobwin.zig: pub const BlobWindow = struct
 src/apps/calchistory.zig: pub const ROWS: usize = 8;
@@ -119,6 +119,13 @@ src/boot/pump.zig: pub fn systemLoop() noreturn
 src/boot/pump.zig: pub fn orderlyFlush() void
 src/boot/pump.zig: pub fn pollInputOnly() void
 src/boot/pump.zig: pub fn desktopPump(force_full_present: bool) void
+src/boot/services.zig: pub const Phase = enum { service, slice };
+src/boot/services.zig: pub fn stepAll(comptime phase: Phase) void
+src/boot/services.zig: pub fn serviceHook(after_render: bool) void
+src/boot/services.zig: pub fn flushAll() void
+src/boot/services.zig: pub fn traceStatus() void
+src/boot/verifyscript.zig: pub fn spawn(desktop: *Desktop) void
+src/boot/virtboot.zig: pub fn step() void
 src/console/agenttools.zig: pub const CFG_PATH = "/ramdisk/AI.CFG";
 src/console/agenttools.zig: pub fn setToken(tok: []const u8) void
 src/console/agenttools.zig: pub fn setMcpServer(url: []const u8) void
@@ -156,7 +163,7 @@ src/console/capabilities.zig: pub fn feature(_: *anyopaque, id: u32, version: u3
 src/console/capabilities.zig: pub const Entry = struct
 src/console/capabilities.zig: pub fn count() usize
 src/console/capabilities.zig: pub fn at(i: usize) Entry
-src/console/capabilities.zig: pub fn service() void
+src/console/capabilities.zig: pub fn step() void
 src/console/cmd/ai.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/background.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/calc.zig: pub fn run(c: console.Console, _: []const u8) void
@@ -203,7 +210,7 @@ src/console/complete.zig: pub const Each = struct
 src/console/complete.zig: pub const Result = struct
 src/console/complete.zig: pub fn line(buf: []u8, len: usize, cwd: []const u8, dirs: Dirs, cmds: []const []const u8) Result
 src/console/complete.zig: pub fn eachMatch(text: []const u8, cwd: []const u8, dirs: Dirs, cmds: []const []const u8, each: Each) void
-src/console/console.zig: pub const AppKind = enum { term, system, clock, calc, vm };
+src/console/console.zig: pub const AppKind = idesk.AppKind;
 src/console/console.zig: pub const Desktop = struct
 src/console/console.zig: pub const Console = struct
 src/console/editline.zig: pub const complete = @import("complete.zig");
@@ -252,7 +259,6 @@ src/console/session.zig: pub fn cancelTask(sess: *Session) void
 src/console/shell.zig: pub const NAMES: [COMMANDS.len][]const u8 = blk:
 src/console/shell.zig: pub fn splitCommand(line: []const u8) struct { cmd: []const u8, args: []const u8 }
 src/console/shell.zig: pub fn execute(c: console.Console, line_in: []const u8) void
-src/console/verifyscript.zig: pub fn spawn(desktop: *Desktop) void
 src/drivers/devices.zig: pub fn publish() void
 src/drivers/gl/ada/ctx_init_full.zig: pub const hostpush = @import("hostpush");
 src/drivers/gl/ada/ctx_init_full.zig: pub const SUBCH_3D: u32 = 0;
@@ -1537,249 +1543,6 @@ src/drivers/gl/soft.zig: pub const MAX_TEX = 32;
 src/drivers/gl/soft.zig: pub const MAX_BUF = 32;
 src/drivers/gl/soft.zig: pub const SoftCtx = struct
 src/drivers/gl/soft.zig: pub const Soft = struct
-src/drivers/gpu/base/calc.zig: pub fn msiAddress(apic_id: u32) u32
-src/drivers/gpu/base/calc.zig: pub fn msiData(vector: u8) u16
-src/drivers/gpu/base/calc.zig: pub fn mtrrSize(span: u64) u64
-src/drivers/gpu/base/calc.zig: pub fn mtrrPhysBase(phys: u64, size: u64, mem_type: u8) u64
-src/drivers/gpu/base/calc.zig: pub fn mtrrPhysMask(size: u64, phys_addr_bits: u6) u64
-src/drivers/gpu/base/fblayout.zig: pub const WPR2_LO_REG: u64 = 0x1fa824;
-src/drivers/gpu/base/fblayout.zig: pub const WPR2_HI_REG: u64 = 0x1fa828;
-src/drivers/gpu/base/fblayout.zig: pub const Region = struct { addr: u64, size: u64 };
-src/drivers/gpu/base/fblayout.zig: pub const FbLayout = struct
-src/drivers/gpu/base/fblayout.zig: pub fn vidmemSize(regs: mmio.Mapping) u64
-src/drivers/gpu/base/fblayout.zig: pub fn compute(regs: mmio.Mapping, elf_size: u64, boot_size: u64) FbLayout
-src/drivers/gpu/base/gmmu_fmt.zig: pub const PDE_APER_VRAM: u64 = 1 << 1;
-src/drivers/gpu/base/gmmu_fmt.zig: pub const PTE_VALID: u64 = 1 << 0;
-src/drivers/gpu/base/gmmu_fmt.zig: pub const PTE_APER_HOST: u64 = 2 << 1;
-src/drivers/gpu/base/gmmu_fmt.zig: pub const PTE_VOL: u64 = 1 << 3;
-src/drivers/gpu/base/gmmu_fmt.zig: pub const PTE_SYSMEM: u64 = PTE_VALID | PTE_APER_HOST | PTE_VOL;
-src/drivers/gpu/base/gmmu_fmt.zig: pub const PTE_VRAM: u64 = PTE_VALID;
-src/drivers/gpu/base/gmmu_fmt.zig: pub const Index = struct { l2: u64, pd0: u64, spt: u64 };
-src/drivers/gpu/base/gmmu_fmt.zig: pub fn indices(va: u64) Index
-src/drivers/gpu/base/gmmu_fmt.zig: pub fn vaOutOfRange(va: u64, pd0_len: u64) bool
-src/drivers/gpu/base/gmmu_fmt.zig: pub fn encodePte(phys: u64, type_bits: u64) u64
-src/drivers/gpu/base/gmmu_fmt.zig: pub fn encodePde(child_phys: u64) u64
-src/drivers/gpu/base/gmmu_fmt.zig: pub fn decodePde(lo: u32, hi: u32) u64
-src/drivers/gpu/base/gmmu_fmt.zig: pub fn pteValid(lo: u32) bool
-src/drivers/gpu/base/gspfw.zig: pub const GSP_PAGE_SHIFT: u6 = 12;
-src/drivers/gpu/base/gspfw.zig: pub const GSP_PAGE_SIZE: u64 = 1 << GSP_PAGE_SHIFT; // 0x1000
-src/drivers/gpu/base/gspfw.zig: pub const GSP_FW_WPR_META_MAGIC: u64 = 0xdc3aae21371a60b3;
-src/drivers/gpu/base/gspfw.zig: pub const GSP_FW_WPR_META_REVISION: u64 = 1;
-src/drivers/gpu/base/gspfw.zig: pub const GSP_FW_WPR_META_VERIFIED: u64 = 0xa0a0a0a0a0a0a0a0;
-src/drivers/gpu/base/gspfw.zig: pub const GspFwWprMeta = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const MsgqTxHeader = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const MsgqRxHeader = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const MessageQueueInitArguments = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const GspSrInitArguments = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const GspArgumentsCached = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const LibosMemoryRegionInitArgument = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const LIBOS_REGION_KIND_CONTIGUOUS: u8 = 1; // LIBOS_MEMORY_REGION_CONTIGUOUS
-src/drivers/gpu/base/gspfw.zig: pub const LIBOS_REGION_LOC_SYSMEM: u8 = 1; // LIBOS_MEMORY_REGION_LOC_SYSMEM
-src/drivers/gpu/base/gspfw.zig: pub fn libosId8(name: []const u8) u64
-src/drivers/gpu/base/gspfw.zig: pub const GSP_SET_SYSTEM_INFO: u32 = 72;
-src/drivers/gpu/base/gspfw.zig: pub const SET_REGISTRY: u32 = 73;
-src/drivers/gpu/base/gspfw.zig: pub const BusInfo = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const DodMethodData = extern struct { status: u32, acpiIdListLen: u32, acpiIdList: [16]u32 };
-src/drivers/gpu/base/gspfw.zig: pub const JtMethodData = extern struct { status: u32, jtCaps: u32, jtRevId: u16, bSBIOSCaps: u8 };
-src/drivers/gpu/base/gspfw.zig: pub const MuxElement = extern struct { acpiId: u32, mode: u32, status: u32 };
-src/drivers/gpu/base/gspfw.zig: pub const MuxMethodData = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const CapsMethodData = extern struct { status: u32, optimusCaps: u32 };
-src/drivers/gpu/base/gspfw.zig: pub const AcpiMethodData = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const GspVfInfo = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const GspPcieConfigReg = extern struct { linkCap: u32 };
-src/drivers/gpu/base/gspfw.zig: pub const GspSystemInfo = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const PackedRegistryTable = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const RpcMessageHeader = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const GspMsgQueueElement = extern struct
-src/drivers/gpu/base/gspfw.zig: pub const GSP_MSG_HDR_SIZE: u32 = 48;
-src/drivers/gpu/base/gspfw.zig: pub const MsgEvent = enum(u32)
-src/drivers/gpu/base/hostpush.zig: pub const SUBCH_HOST: u32 = 0; // NVC36F
-src/drivers/gpu/base/hostpush.zig: pub const SUBCH_CE: u32 = 4; // NVA0B5
-src/drivers/gpu/base/hostpush.zig: pub const WFI: u32 = 0x0078;
-src/drivers/gpu/base/hostpush.zig: pub const HostPush = struct
-src/drivers/gpu/base/log.zig: pub fn print(mod: gate.Mod, comptime fmt: []const u8, args: anytype) void
-src/drivers/gpu/base/log.zig: pub fn gpu(comptime fmt: []const u8, args: anytype) void
-src/drivers/gpu/base/mmio.zig: pub const CacheType = enum { uc, wc, cached };
-src/drivers/gpu/base/mmio.zig: pub var ktrace_on: bool = false;
-src/drivers/gpu/base/mmio.zig: pub const Mapping = struct
-src/drivers/gpu/base/mmio.zig: pub fn map(phys: u64, size: u64, cache: CacheType) Mapping
-src/drivers/gpu/base/nvrm.zig: pub const FUNCTION_GSP_RM_ALLOC: u32 = 103;
-src/drivers/gpu/base/nvrm.zig: pub const FUNCTION_GSP_RM_CONTROL: u32 = 76;
-src/drivers/gpu/base/nvrm.zig: pub const FUNCTION_FREE: u32 = 10;
-src/drivers/gpu/base/nvrm.zig: pub const RM_CLIENT0: u32 = 0xc1d00000;
-src/drivers/gpu/base/nvrm.zig: pub const RM_DEVICE: u32 = 0xde1d0000;
-src/drivers/gpu/base/nvrm.zig: pub const RM_SUBDEVICE: u32 = 0x5d1d0000;
-src/drivers/gpu/base/nvrm.zig: pub const RM_DISP: u32 = 0x00730000;
-src/drivers/gpu/base/nvrm.zig: pub const NV01_ROOT: u32 = 0x0;
-src/drivers/gpu/base/nvrm.zig: pub const NV01_DEVICE_0: u32 = 0x0080;
-src/drivers/gpu/base/nvrm.zig: pub const NV20_SUBDEVICE_0: u32 = 0x2080;
-src/drivers/gpu/base/nvrm.zig: pub const NV04_DISPLAY_COMMON: u32 = 0x0073;
-src/drivers/gpu/base/nvrm.zig: pub const AD102_DISP: u32 = 0xc770; // disp root
-src/drivers/gpu/base/nvrm.zig: pub const AD102_DISP_CORE_CHANNEL_DMA: u32 = 0xc77d;
-src/drivers/gpu/base/nvrm.zig: pub const GA102_DISP_WINDOW_CHANNEL_DMA: u32 = 0xc67e; // AD102 window
-src/drivers/gpu/base/nvrm.zig: pub const GA102_DISP_WINDOW_IMM_CHANNEL_DMA: u32 = 0xc67b;
-src/drivers/gpu/base/nvrm.zig: pub const GA102_DISP_CURSOR: u32 = 0xc67a;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_INTERNAL_DISPLAY_WRITE_INST_MEM: u32 = 0x20800a49;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_INTERNAL_DISPLAY_GET_STATIC_INFO: u32 = 0x20800a01;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_INTERNAL_DISPLAY_CHANNEL_PUSHBUFFER: u32 = 0x20800a58;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_SYSTEM_GET_SUPPORTED: u32 = 0x730107; // r570
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_SYSTEM_GET_CONNECT_STATE: u32 = 0x730108; // r570
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_SYSTEM_GET_NUM_HEADS: u32 = 0x730102;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_SPECIFIC_GET_CONNECTOR_DATA: u32 = 0x730250;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_SPECIFIC_GET_EDID_V2: u32 = 0x730245;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_DFP_ASSIGN_SOR: u32 = 0x731152;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_DP_CTRL: u32 = 0x731343;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_SPECIFIC_SET_HDMI_ENABLE: u32 = 0x730273;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_SPECIFIC_OR_GET_INFO: u32 = 0x73028b;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_DP_GET_CAPS: u32 = 0x731369;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_DP_CONFIG_STREAM: u32 = 0x731362;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_DP_SET_MANUAL_DISPLAYPORT: u32 = 0x731365;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_SPECIFIC_GET_ALL_HEAD_MASK: u32 = 0x730287;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_DP_AUXCH_CTRL: u32 = 0x731341;
-src/drivers/gpu/base/nvrm.zig: pub const ADDR_SYSMEM: u32 = 1;
-src/drivers/gpu/base/nvrm.zig: pub const ADDR_FBMEM: u32 = 2;
-src/drivers/gpu/base/nvrm.zig: pub const MEMORY_WRITECOMBINED: u32 = 2;
-src/drivers/gpu/base/nvrm.zig: pub const PBTARGET_PHYS_NVM: u32 = 1;
-src/drivers/gpu/base/nvrm.zig: pub const RpcRmAlloc = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const RpcRmControl = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const NV_PROC_NAME_MAX_LENGTH: usize = 100;
-src/drivers/gpu/base/nvrm.zig: pub const Nv0000AllocParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const Nv0080AllocParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const Nv2080AllocParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const WriteInstMemParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const SystemGetSupportedParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const SystemGetConnectStateParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const EDID_MAX_BYTES: usize = 2048;
-src/drivers/gpu/base/nvrm.zig: pub const SpecificGetEdidV2Params = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const DISP_CHANNEL_PB_SIZE_4KB: u32 = 0;
-src/drivers/gpu/base/nvrm.zig: pub const DISP_SUBDEVICE_ID_BIT0: u32 = 1;
-src/drivers/gpu/base/nvrm.zig: pub const ChannelPushbufferParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const ChannelDmaAllocParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const ChannelPioAllocParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const FERMI_VASPACE_A: u32 = 0x90f1;
-src/drivers/gpu/base/nvrm.zig: pub const AMPERE_CHANNEL_GPFIFO_A: u32 = 0xc56f;
-src/drivers/gpu/base/nvrm.zig: pub const AMPERE_DMA_COPY_B: u32 = 0xc7b5;
-src/drivers/gpu/base/nvrm.zig: pub const NV2080_ENGINE_TYPE_COPY0: u32 = 0x09;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_GPFIFO_BIND: u32 = 0xa06f0104;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_GPFIFO_SCHEDULE: u32 = 0xa06f0103;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_CE_GET_FAULT_METHOD_BUFFER_SIZE: u32 = 0x20802a08;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_VASPACE_COPY_SERVER_RESERVED_PDES: u32 = 0x90f10106;
-src/drivers/gpu/base/nvrm.zig: pub const ADDR_SPACE_SYSMEM: u32 = 1;
-src/drivers/gpu/base/nvrm.zig: pub const ADDR_SPACE_VIDMEM: u32 = 2;
-src/drivers/gpu/base/nvrm.zig: pub const SPLIT_VAS_SERVER_VA_START: u64 = 0x1_0000_0000;
-src/drivers/gpu/base/nvrm.zig: pub const SPLIT_VAS_SERVER_VA_SIZE: u64 = 0x2000_0000;
-src/drivers/gpu/base/nvrm.zig: pub const VaspaceAllocParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const MemoryDescParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const ChannelGpfifoAllocParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const Cb5AllocParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const GpfifoBindParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const GpfifoScheduleParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const CopyServerReservedPdesParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const ADA_A: u32 = 0xc997;
-src/drivers/gpu/base/nvrm.zig: pub const NV2080_ENGINE_TYPE_GR0: u32 = 0x01;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_KGR_GET_CONTEXT_BUFFERS_INFO: u32 = 0x20800a32;
-src/drivers/gpu/base/nvrm.zig: pub const CTRL_GPU_PROMOTE_CTX: u32 = 0x2080012b;
-src/drivers/gpu/base/nvrm.zig: pub const GR_CTXBUF_COUNT: u32 = 0x1a; // r570 ENGINE_ID_COUNT (r535 was 0x19)
-src/drivers/gpu/base/nvrm.zig: pub const GrBufferId = struct
-src/drivers/gpu/base/nvrm.zig: pub const GrCtxBuffersInfoParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const PromoteCtxEntry = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const PromoteCtxParams = extern struct
-src/drivers/gpu/base/nvrm.zig: pub const RpcFreeParams = extern struct
-src/drivers/gpu/base/pngenc.zig: pub const Error = std.mem.Allocator.Error;
-src/drivers/gpu/base/pngenc.zig: pub fn encode(a: std.mem.Allocator, w: u32, h: u32, px: []const u32, stride_px: usize) Error![]u8
-src/drivers/gpu/base/shim.zig: pub const Status = enum(i32)
-src/drivers/gpu/base/shim.zig: pub fn allocMem(size: u64) ?[*]u8
-src/drivers/gpu/base/shim.zig: pub fn allocPagesPhys(count: u32) ?u64
-src/drivers/gpu/base/shim.zig: pub fn freePagesPhys(phys: u64, count: u32) void
-src/drivers/gpu/base/shim.zig: pub const DmaTracker = struct
-src/drivers/gpu/base/shim.zig: pub fn mapKernelSpace(phys: u64, size: u64, cache: mmio.CacheType) mmio.Mapping
-src/drivers/gpu/base/shim.zig: pub fn pciReadDword(handle: pci.Device, offset: u8) u32
-src/drivers/gpu/base/shim.zig: pub fn pciWriteDword(handle: pci.Device, offset: u8, value: u32) void
-src/drivers/gpu/base/shim.zig: pub fn acquireSpinlock(lock: *SpinLock) bool
-src/drivers/gpu/base/shim.zig: pub fn releaseSpinlock(lock: *SpinLock, if_was: bool) void
-src/drivers/gpu/base/shim.zig: pub fn monotonicTimeNs() u64
-src/drivers/gpu/base/shim.zig: pub fn delayUs(us: u32) void
-src/drivers/gpu/base/shim.zig: pub var keepalive_hook: *const fn () void = &keepaliveTrio;
-src/drivers/gpu/base/shim.zig: pub fn netKeepalive() void
-src/drivers/gpu/base/shim.zig: pub fn flushDmaBuffers() void
-src/drivers/gpu/base/shim.zig: pub fn invalidateLine(addr: u64) void
-src/drivers/gpu/base/shim.zig: pub fn flushRange(addr: u64, len: u64) void
-src/drivers/gpu/base/shim.zig: pub fn notSupported(comptime name: []const u8) Status
-src/drivers/gpu/core/ce.zig: pub fn bind(p: *hostpush.HostPush) void
-src/drivers/gpu/core/ce.zig: pub fn copyPitch(p: *hostpush.HostPush, dst_va: u64, dst_pitch: u32, src_va: u64, src_pitch: u32, line_bytes: u32, lines: u32, sem_va: u64, payload: u32) void
-src/drivers/gpu/core/ce.zig: pub fn semRelease(p: *hostpush.HostPush, sem_va: u64, payload: u32) void
-src/drivers/gpu/core/ce.zig: pub fn copyBlToPitch(p: *hostpush.HostPush, dst_va: u64, dst_pitch: u32, src_va: u64, src_row_bytes: u32, src_h: u32, src_bh_log2: u5, line_bytes: u32, lines: u32, sem_va: u64, payload: u32) void
-src/drivers/gpu/core/chan.zig: pub const CORE_USER_BASE: u64 = 0x680000; // core (size 0x10000)
-src/drivers/gpu/core/chan.zig: pub const WNDW_USER_BASE: u64 = 0x690000; // window w: +w*USER_STRIDE
-src/drivers/gpu/core/chan.zig: pub const Error = error{
-src/drivers/gpu/core/chan.zig: pub const CoreChan = struct
-src/drivers/gpu/core/chan.zig: pub fn coreChannelInit(g: gsp.Gsp, valloc: *vram.Allocator, dispRoot: u32, subdevice: u32) Error!CoreChan
-src/drivers/gpu/core/chan.zig: pub fn windowChannelInit(g: gsp.Gsp, valloc: *vram.Allocator, dispRoot: u32, subdevice: u32, window: u32) Error!CoreChan
-src/drivers/gpu/core/chan.zig: pub const WIMM_USER_BASE: u64 = 0x6b0000;
-src/drivers/gpu/core/chan.zig: pub const CURS_USER_BASE: u64 = 0x6d8000;
-src/drivers/gpu/core/chan.zig: pub fn cursorChannelInit(g: gsp.Gsp, dispRoot: u32, subdevice: u32, head: u32) Error!u64
-src/drivers/gpu/core/chan.zig: pub fn cursorMove(regs: mmio.Mapping, user_base: u64, x: i32, y: i32) void
-src/drivers/gpu/core/chan.zig: pub fn wimmChannelInit(g: gsp.Gsp, valloc: *vram.Allocator, dispRoot: u32, subdevice: u32, window: u32) Error!CoreChan
-src/drivers/gpu/core/chan.zig: pub fn submit(self: *CoreChan, regs: mmio.Mapping, push: Push) Error!void
-src/drivers/gpu/core/ctxdma.zig: pub const WNDW_CTX_HANDLE: u32 = 0xfb000000;
-src/drivers/gpu/core/ctxdma.zig: pub fn createScanout(regs: mmio.Mapping, inst_phys: u64, vram_size: u64, client: u32, window: u32) error{RamhtFull}!u32
-src/drivers/gpu/core/ctxdma.zig: pub const CORE_NTFY_HANDLE: u32 = 0xfa000000;
-src/drivers/gpu/core/ctxdma.zig: pub fn createNotifier(regs: mmio.Mapping, inst_phys: u64, notifier: u64, client: u32) error{RamhtFull}!u32
-src/drivers/gpu/core/ctxdma.zig: pub const CORE_OLUT_HANDLE: u32 = 0xfc000000;
-src/drivers/gpu/core/ctxdma.zig: pub fn createOlut(regs: mmio.Mapping, inst_phys: u64, vram_size: u64, client: u32) error{RamhtFull}!u32
-src/drivers/gpu/core/ctxdma.zig: pub const CORE_CURS_HANDLE: u32 = 0xfd000000;
-src/drivers/gpu/core/ctxdma.zig: pub fn createCursor(regs: mmio.Mapping, inst_phys: u64, vram_size: u64, client: u32) error{RamhtFull}!u32
-src/drivers/gpu/core/ctxdma.zig: pub const WNDW_NTFY_HANDLE: u32 = 0xf9000000;
-src/drivers/gpu/core/ctxdma.zig: pub fn createWindowNotifier(regs: mmio.Mapping, inst_phys: u64, notifier: u64, client: u32, window: u32) error{RamhtFull}!u32
-src/drivers/gpu/core/fifo.zig: pub const Error = error{ FifoSysmemAlloc, FifoBadMthdbufSize, FifoNoCopyEngine, FifoSemTimeout, FifoRingStuck } || rm.Error || gmmu.Error || error{VramOutOfMemory};
-src/drivers/gpu/core/fifo.zig: pub const Fifo = struct
-src/drivers/gpu/core/fifo.zig: pub fn kickChannel(g: gsp.Gsp, userd_phys: u64, ring_phys: u64, push_va: u64, push_phys: u64, push_bytes: u32, gp_put: *u32, runlist: u32, chid: u32) Error!void
-src/drivers/gpu/core/fifo.zig: pub fn pollSem(g: gsp.Gsp, userd_phys: u64, gp_put: u32, sem_phys: u64, want: u32) Error!u64
-src/drivers/gpu/core/fifo.zig: pub fn init(g: *gsp.Gsp, valloc: *vram.Allocator, objs: rm.RmObjects) Error!Fifo
-src/drivers/gpu/core/fifo.zig: pub fn engineRunlist(g: gsp.Gsp, subdevice: u32, engine_type: u32) Error!u32
-src/drivers/gpu/core/gmmu.zig: pub const Error = error{ GmmuVaOutOfRange, GmmuAlreadyMapped, GmmuUnaligned, GmmuTlbFlushTimeout } || error{VramOutOfMemory};
-src/drivers/gpu/core/gmmu.zig: pub const VA_SEM: u64 = 0x0100_0000; // 1 page: CE semaphore/fence word
-src/drivers/gpu/core/gmmu.zig: pub const VA_RING: u64 = 0x0180_0000; // 1 page: GPFIFO ring
-src/drivers/gpu/core/gmmu.zig: pub const VA_PUSH: u64 = 0x01c0_0000; // 1 page: pushbuffer
-src/drivers/gpu/core/gmmu.zig: pub const VA_SYSMEM: u64 = 0x0200_0000; // 96 MiB: sysmem staging window
-src/drivers/gpu/core/gmmu.zig: pub const VA_VRAM: u64 = 0x0800_0000; // 288 MiB: VRAM scanout window — 9 slots
-src/drivers/gpu/core/gmmu.zig: pub const VA_WMIRROR: u64 = 0x2000_0000; // 1 GiB: VRAM window pixel mirrors
-src/drivers/gpu/core/gmmu.zig: pub const VA_WSYSMEM: u64 = 0x6000_0000; // 1 GiB: window sysmem surfaces (upload src)
-src/drivers/gpu/core/gmmu.zig: pub const VA_GR_SEM: u64 = 0x0120_0000; // 1 page: GR fence word
-src/drivers/gpu/core/gmmu.zig: pub const VA_GR_RING: u64 = 0x0128_0000; // 1 page: GR GPFIFO ring
-src/drivers/gpu/core/gmmu.zig: pub const VA_GR_PUSH: u64 = 0x0130_0000; // 1 page: GR pushbuffer
-src/drivers/gpu/core/gmmu.zig: pub const VA_GR_ZERO: u64 = 0x0138_0000; // 1 page, all-zero: vertex-stream substitute
-src/drivers/gpu/core/gmmu.zig: pub const VA_GR_SHADERS: u64 = 0x0140_0000; // shader program images (SPH+code, 0x80-aligned)
-src/drivers/gpu/core/gmmu.zig: pub const VA_GL_CTX0: u64 = 0xc000_0000;
-src/drivers/gpu/core/gmmu.zig: pub const VA_GL_CTX_STRIDE: u64 = 0x0200_0000; // 32 MiB per context slot
-src/drivers/gpu/core/gmmu.zig: pub const GL_CTX_RT_OFF: u64 = 0x0000_0000; // block-linear 1x color RT (panel-sized)
-src/drivers/gpu/core/gmmu.zig: pub const GL_CTX_CB_OFF: u64 = 0x0180_0000; // cb0 page (desc cbufs at +0x800/+0x900)
-src/drivers/gpu/core/gmmu.zig: pub const GL_CTX_GRPUSH_OFF: u64 = 0x0184_0000; // private GR pushbuffer page (sysmem)
-src/drivers/gpu/core/gmmu.zig: pub const GL_CTX_GRSEM_OFF: u64 = 0x0188_0000; // private GR fence word (sysmem)
-src/drivers/gpu/core/gmmu.zig: pub const GL_CTX_CEPUSH_OFF: u64 = 0x018c_0000; // private CE pushbuffer page (sysmem)
-src/drivers/gpu/core/gmmu.zig: pub const GL_CTX_CESEM_OFF: u64 = 0x018e_0000; // private CE fence word (sysmem)
-src/drivers/gpu/core/gmmu.zig: pub const VA_GL_MSAA_RT: u64 = 0xd800_0000; // 8x MSAA block-linear color
-src/drivers/gpu/core/gmmu.zig: pub const VA_GL_MSAA_ZT: u64 = 0xe800_0000; // 8x MSAA block-linear Z32F
-src/drivers/gpu/core/gmmu.zig: pub const VA_GL_TEX: u64 = 0xd400_0000; // built-in white default texture
-src/drivers/gpu/core/gmmu.zig: pub const VA_GL_TICPOOL: u64 = 0xd440_0000; // TIC pool page (TSC at +0x400)
-src/drivers/gpu/core/gmmu.zig: pub const VA_GL_MESH: u64 = 0x1a00_0000;
-src/drivers/gpu/core/gmmu.zig: pub const VA_GL_MESH_SIZE: u64 = 0x0600_0000; // 96 MiB, ends at VA_WMIRROR
-src/drivers/gpu/core/gmmu.zig: pub const VA_GL_TEXWIN: u64 = 0xf400_0000; // texture bump window (128 MiB)
-src/drivers/gpu/core/gmmu.zig: pub const VA_GL_TEXWIN_SIZE: u64 = 0x0800_0000;
-src/drivers/gpu/core/gmmu.zig: pub const VA_GRCTX: u64 = 0xa000_0000; // 512 MiB: GR context buffers
-src/drivers/gpu/core/gmmu.zig: pub const GRCTX_SIZE: u64 = 0x2000_0000;
-src/drivers/gpu/core/gmmu.zig: pub const WREGION_SIZE: u64 = 0x4000_0000; // 1 GiB — size of each window VA region
-src/drivers/gpu/core/gmmu.zig: pub const Gmmu = struct
-src/drivers/gpu/core/msi.zig: pub const IsrFn = *const fn () bool;
-src/drivers/gpu/core/msi.zig: pub const Msi = struct
-src/drivers/gpu/core/msi.zig: pub fn setup(dev: pci.Device, vector: u8, handler: IsrFn) Msi
-src/drivers/gpu/core/push.zig: pub const Push = struct
-src/drivers/gpu/core/vram.zig: pub const Allocator = struct
-src/drivers/gpu/core/vram.zig: pub fn write32(regs: mmio.Mapping, phys: u64, data: u32) void
-src/drivers/gpu/core/vram.zig: pub fn read32(regs: mmio.Mapping, phys: u64) u32
-src/drivers/gpu/core/vram.zig: pub fn fill(regs: mmio.Mapping, phys: u64, len: u64, value: u32) void
-src/drivers/gpu/core/vram.zig: pub fn writeBytes(regs: mmio.Mapping, phys: u64, data: []const u8) void
-src/drivers/gpu/core/vram.zig: pub const Writer = struct
 src/drivers/gpu/display/disp.zig: pub const RG_VLINE_REG: u64 = 0x616330;
 src/drivers/gpu/display/disp.zig: pub const RG_HEAD_STRIDE: u64 = 0x800;
 src/drivers/gpu/display/disp.zig: pub const RG_VLINE_MASK: u32 = 0xffff;
@@ -1807,7 +1570,7 @@ src/drivers/gpu/display/edid.zig: pub const HEADER = [8]u8{ 0x00, 0xFF, 0xFF, 0x
 src/drivers/gpu/display/edid.zig: pub fn headerValid(edid: []const u8) bool
 src/drivers/gpu/display/edid.zig: pub fn parsePreferredMode(edid: []const u8) Mode
 src/drivers/gpu/display/edid.zig: pub fn edid1080p() [128]u8
-src/drivers/gpu/display/modeset.zig: pub const Push = @import("../core/push.zig").Push;
+src/drivers/gpu/display/modeset.zig: pub const Push = @import("../engines/push.zig").Push;
 src/drivers/gpu/display/modeset.zig: pub const Mode = @import("disp.zig").Mode;
 src/drivers/gpu/display/modeset.zig: pub const SOR_PROTOCOL_DP_A: u32 = 0x8; // clc37d.h:220
 src/drivers/gpu/display/modeset.zig: pub const SOR_PROTOCOL_DP_B: u32 = 0x9; // clc37d.h:221
@@ -1832,7 +1595,82 @@ src/drivers/gpu/display/modeset.zig: pub fn coreUpdate(push: *Push, wndw_interlo
 src/drivers/gpu/display/modeset.zig: pub const NOTIFIER_STATUS_FINISHED: u32 = 2; // NV_DISP_NOTIFIER__0_STATUS_FINISHED (31:30)
 src/drivers/gpu/display/modeset.zig: pub fn buildWindowOwner(push: *Push, window: u32, head: u32) void
 src/drivers/gpu/display/modeset.zig: pub fn buildCoreInit(push: *Push, notifier: u32) void
-src/drivers/gpu/gpu.zig: pub fn init(info_addr: u64) void
+src/drivers/gpu/engines/ce.zig: pub fn bind(p: *hostpush.HostPush) void
+src/drivers/gpu/engines/ce.zig: pub fn copyPitch(p: *hostpush.HostPush, dst_va: u64, dst_pitch: u32, src_va: u64, src_pitch: u32, line_bytes: u32, lines: u32, sem_va: u64, payload: u32) void
+src/drivers/gpu/engines/ce.zig: pub fn semRelease(p: *hostpush.HostPush, sem_va: u64, payload: u32) void
+src/drivers/gpu/engines/ce.zig: pub fn copyBlToPitch(p: *hostpush.HostPush, dst_va: u64, dst_pitch: u32, src_va: u64, src_row_bytes: u32, src_h: u32, src_bh_log2: u5, line_bytes: u32, lines: u32, sem_va: u64, payload: u32) void
+src/drivers/gpu/engines/chan.zig: pub const CORE_USER_BASE: u64 = 0x680000; // core (size 0x10000)
+src/drivers/gpu/engines/chan.zig: pub const WNDW_USER_BASE: u64 = 0x690000; // window w: +w*USER_STRIDE
+src/drivers/gpu/engines/chan.zig: pub const Error = error{
+src/drivers/gpu/engines/chan.zig: pub const CoreChan = struct
+src/drivers/gpu/engines/chan.zig: pub fn coreChannelInit(g: gsp.Gsp, valloc: *vram.Allocator, dispRoot: u32, subdevice: u32) Error!CoreChan
+src/drivers/gpu/engines/chan.zig: pub fn windowChannelInit(g: gsp.Gsp, valloc: *vram.Allocator, dispRoot: u32, subdevice: u32, window: u32) Error!CoreChan
+src/drivers/gpu/engines/chan.zig: pub const WIMM_USER_BASE: u64 = 0x6b0000;
+src/drivers/gpu/engines/chan.zig: pub const CURS_USER_BASE: u64 = 0x6d8000;
+src/drivers/gpu/engines/chan.zig: pub fn cursorChannelInit(g: gsp.Gsp, dispRoot: u32, subdevice: u32, head: u32) Error!u64
+src/drivers/gpu/engines/chan.zig: pub fn cursorMove(regs: mmio.Mapping, user_base: u64, x: i32, y: i32) void
+src/drivers/gpu/engines/chan.zig: pub fn wimmChannelInit(g: gsp.Gsp, valloc: *vram.Allocator, dispRoot: u32, subdevice: u32, window: u32) Error!CoreChan
+src/drivers/gpu/engines/chan.zig: pub fn submit(self: *CoreChan, regs: mmio.Mapping, push: Push) Error!void
+src/drivers/gpu/engines/ctxdma.zig: pub const WNDW_CTX_HANDLE: u32 = 0xfb000000;
+src/drivers/gpu/engines/ctxdma.zig: pub fn createScanout(regs: mmio.Mapping, inst_phys: u64, vram_size: u64, client: u32, window: u32) error{RamhtFull}!u32
+src/drivers/gpu/engines/ctxdma.zig: pub const CORE_NTFY_HANDLE: u32 = 0xfa000000;
+src/drivers/gpu/engines/ctxdma.zig: pub fn createNotifier(regs: mmio.Mapping, inst_phys: u64, notifier: u64, client: u32) error{RamhtFull}!u32
+src/drivers/gpu/engines/ctxdma.zig: pub const CORE_OLUT_HANDLE: u32 = 0xfc000000;
+src/drivers/gpu/engines/ctxdma.zig: pub fn createOlut(regs: mmio.Mapping, inst_phys: u64, vram_size: u64, client: u32) error{RamhtFull}!u32
+src/drivers/gpu/engines/ctxdma.zig: pub const CORE_CURS_HANDLE: u32 = 0xfd000000;
+src/drivers/gpu/engines/ctxdma.zig: pub fn createCursor(regs: mmio.Mapping, inst_phys: u64, vram_size: u64, client: u32) error{RamhtFull}!u32
+src/drivers/gpu/engines/ctxdma.zig: pub const WNDW_NTFY_HANDLE: u32 = 0xf9000000;
+src/drivers/gpu/engines/ctxdma.zig: pub fn createWindowNotifier(regs: mmio.Mapping, inst_phys: u64, notifier: u64, client: u32, window: u32) error{RamhtFull}!u32
+src/drivers/gpu/engines/fifo.zig: pub const Error = error{ FifoSysmemAlloc, FifoBadMthdbufSize, FifoNoCopyEngine, FifoSemTimeout, FifoRingStuck } || rm.Error || gmmu.Error || error{VramOutOfMemory};
+src/drivers/gpu/engines/fifo.zig: pub const Fifo = struct
+src/drivers/gpu/engines/fifo.zig: pub fn kickChannel(g: gsp.Gsp, userd_phys: u64, ring_phys: u64, push_va: u64, push_phys: u64, push_bytes: u32, gp_put: *u32, runlist: u32, chid: u32) Error!void
+src/drivers/gpu/engines/fifo.zig: pub fn pollSem(g: gsp.Gsp, userd_phys: u64, gp_put: u32, sem_phys: u64, want: u32) Error!u64
+src/drivers/gpu/engines/fifo.zig: pub fn init(g: *gsp.Gsp, valloc: *vram.Allocator, objs: rm.RmObjects) Error!Fifo
+src/drivers/gpu/engines/fifo.zig: pub fn engineRunlist(g: gsp.Gsp, subdevice: u32, engine_type: u32) Error!u32
+src/drivers/gpu/engines/gmmu.zig: pub const Error = error{ GmmuVaOutOfRange, GmmuAlreadyMapped, GmmuUnaligned, GmmuTlbFlushTimeout } || error{VramOutOfMemory};
+src/drivers/gpu/engines/gmmu.zig: pub const VA_SEM: u64 = 0x0100_0000; // 1 page: CE semaphore/fence word
+src/drivers/gpu/engines/gmmu.zig: pub const VA_RING: u64 = 0x0180_0000; // 1 page: GPFIFO ring
+src/drivers/gpu/engines/gmmu.zig: pub const VA_PUSH: u64 = 0x01c0_0000; // 1 page: pushbuffer
+src/drivers/gpu/engines/gmmu.zig: pub const VA_SYSMEM: u64 = 0x0200_0000; // 96 MiB: sysmem staging window
+src/drivers/gpu/engines/gmmu.zig: pub const VA_VRAM: u64 = 0x0800_0000; // 288 MiB: VRAM scanout window — 9 slots
+src/drivers/gpu/engines/gmmu.zig: pub const VA_WMIRROR: u64 = 0x2000_0000; // 1 GiB: VRAM window pixel mirrors
+src/drivers/gpu/engines/gmmu.zig: pub const VA_WSYSMEM: u64 = 0x6000_0000; // 1 GiB: window sysmem surfaces (upload src)
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GR_SEM: u64 = 0x0120_0000; // 1 page: GR fence word
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GR_RING: u64 = 0x0128_0000; // 1 page: GR GPFIFO ring
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GR_PUSH: u64 = 0x0130_0000; // 1 page: GR pushbuffer
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GR_ZERO: u64 = 0x0138_0000; // 1 page, all-zero: vertex-stream substitute
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GR_SHADERS: u64 = 0x0140_0000; // shader program images (SPH+code, 0x80-aligned)
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GL_CTX0: u64 = 0xc000_0000;
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GL_CTX_STRIDE: u64 = 0x0200_0000; // 32 MiB per context slot
+src/drivers/gpu/engines/gmmu.zig: pub const GL_CTX_RT_OFF: u64 = 0x0000_0000; // block-linear 1x color RT (panel-sized)
+src/drivers/gpu/engines/gmmu.zig: pub const GL_CTX_CB_OFF: u64 = 0x0180_0000; // cb0 page (desc cbufs at +0x800/+0x900)
+src/drivers/gpu/engines/gmmu.zig: pub const GL_CTX_GRPUSH_OFF: u64 = 0x0184_0000; // private GR pushbuffer page (sysmem)
+src/drivers/gpu/engines/gmmu.zig: pub const GL_CTX_GRSEM_OFF: u64 = 0x0188_0000; // private GR fence word (sysmem)
+src/drivers/gpu/engines/gmmu.zig: pub const GL_CTX_CEPUSH_OFF: u64 = 0x018c_0000; // private CE pushbuffer page (sysmem)
+src/drivers/gpu/engines/gmmu.zig: pub const GL_CTX_CESEM_OFF: u64 = 0x018e_0000; // private CE fence word (sysmem)
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GL_MSAA_RT: u64 = 0xd800_0000; // 8x MSAA block-linear color
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GL_MSAA_ZT: u64 = 0xe800_0000; // 8x MSAA block-linear Z32F
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GL_TEX: u64 = 0xd400_0000; // built-in white default texture
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GL_TICPOOL: u64 = 0xd440_0000; // TIC pool page (TSC at +0x400)
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GL_MESH: u64 = 0x1a00_0000;
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GL_MESH_SIZE: u64 = 0x0600_0000; // 96 MiB, ends at VA_WMIRROR
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GL_TEXWIN: u64 = 0xf400_0000; // texture bump window (128 MiB)
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GL_TEXWIN_SIZE: u64 = 0x0800_0000;
+src/drivers/gpu/engines/gmmu.zig: pub const VA_GRCTX: u64 = 0xa000_0000; // 512 MiB: GR context buffers
+src/drivers/gpu/engines/gmmu.zig: pub const GRCTX_SIZE: u64 = 0x2000_0000;
+src/drivers/gpu/engines/gmmu.zig: pub const WREGION_SIZE: u64 = 0x4000_0000; // 1 GiB — size of each window VA region
+src/drivers/gpu/engines/gmmu.zig: pub const Gmmu = struct
+src/drivers/gpu/engines/msi.zig: pub const IsrFn = *const fn () bool;
+src/drivers/gpu/engines/msi.zig: pub const Msi = struct
+src/drivers/gpu/engines/msi.zig: pub fn setup(dev: pci.Device, vector: u8, handler: IsrFn) Msi
+src/drivers/gpu/engines/push.zig: pub const Push = struct
+src/drivers/gpu/engines/vram.zig: pub const Allocator = struct
+src/drivers/gpu/engines/vram.zig: pub fn write32(regs: mmio.Mapping, phys: u64, data: u32) void
+src/drivers/gpu/engines/vram.zig: pub fn read32(regs: mmio.Mapping, phys: u64) u32
+src/drivers/gpu/engines/vram.zig: pub fn fill(regs: mmio.Mapping, phys: u64, len: u64, value: u32) void
+src/drivers/gpu/engines/vram.zig: pub fn writeBytes(regs: mmio.Mapping, phys: u64, data: []const u8) void
+src/drivers/gpu/engines/vram.zig: pub const Writer = struct
+src/drivers/gpu/gpu.zig: pub fn configure(info_addr: u64) void
 src/drivers/gpu/gpu.zig: pub fn willBoot() bool
 src/drivers/gpu/gpu.zig: pub fn bootAtInit(native: bool) void
 src/drivers/gpu/gpu.zig: pub fn firmwareSet() gsp.Firmware
@@ -1973,6 +1811,174 @@ src/drivers/gpu/prof.zig: pub inline fn addSpan(s: Section, ticks: u64) void
 src/drivers/gpu/prof.zig: pub inline fn frameBegin() void
 src/drivers/gpu/prof.zig: pub inline fn section(s: Section) void
 src/drivers/gpu/prof.zig: pub inline fn frameEnd() void
+src/drivers/gpu/rm/calc.zig: pub fn msiAddress(apic_id: u32) u32
+src/drivers/gpu/rm/calc.zig: pub fn msiData(vector: u8) u16
+src/drivers/gpu/rm/calc.zig: pub fn mtrrSize(span: u64) u64
+src/drivers/gpu/rm/calc.zig: pub fn mtrrPhysBase(phys: u64, size: u64, mem_type: u8) u64
+src/drivers/gpu/rm/calc.zig: pub fn mtrrPhysMask(size: u64, phys_addr_bits: u6) u64
+src/drivers/gpu/rm/fblayout.zig: pub const WPR2_LO_REG: u64 = 0x1fa824;
+src/drivers/gpu/rm/fblayout.zig: pub const WPR2_HI_REG: u64 = 0x1fa828;
+src/drivers/gpu/rm/fblayout.zig: pub const Region = struct { addr: u64, size: u64 };
+src/drivers/gpu/rm/fblayout.zig: pub const FbLayout = struct
+src/drivers/gpu/rm/fblayout.zig: pub fn vidmemSize(regs: mmio.Mapping) u64
+src/drivers/gpu/rm/fblayout.zig: pub fn compute(regs: mmio.Mapping, elf_size: u64, boot_size: u64) FbLayout
+src/drivers/gpu/rm/gmmu_fmt.zig: pub const PDE_APER_VRAM: u64 = 1 << 1;
+src/drivers/gpu/rm/gmmu_fmt.zig: pub const PTE_VALID: u64 = 1 << 0;
+src/drivers/gpu/rm/gmmu_fmt.zig: pub const PTE_APER_HOST: u64 = 2 << 1;
+src/drivers/gpu/rm/gmmu_fmt.zig: pub const PTE_VOL: u64 = 1 << 3;
+src/drivers/gpu/rm/gmmu_fmt.zig: pub const PTE_SYSMEM: u64 = PTE_VALID | PTE_APER_HOST | PTE_VOL;
+src/drivers/gpu/rm/gmmu_fmt.zig: pub const PTE_VRAM: u64 = PTE_VALID;
+src/drivers/gpu/rm/gmmu_fmt.zig: pub const Index = struct { l2: u64, pd0: u64, spt: u64 };
+src/drivers/gpu/rm/gmmu_fmt.zig: pub fn indices(va: u64) Index
+src/drivers/gpu/rm/gmmu_fmt.zig: pub fn vaOutOfRange(va: u64, pd0_len: u64) bool
+src/drivers/gpu/rm/gmmu_fmt.zig: pub fn encodePte(phys: u64, type_bits: u64) u64
+src/drivers/gpu/rm/gmmu_fmt.zig: pub fn encodePde(child_phys: u64) u64
+src/drivers/gpu/rm/gmmu_fmt.zig: pub fn decodePde(lo: u32, hi: u32) u64
+src/drivers/gpu/rm/gmmu_fmt.zig: pub fn pteValid(lo: u32) bool
+src/drivers/gpu/rm/gspfw.zig: pub const GSP_PAGE_SHIFT: u6 = 12;
+src/drivers/gpu/rm/gspfw.zig: pub const GSP_PAGE_SIZE: u64 = 1 << GSP_PAGE_SHIFT; // 0x1000
+src/drivers/gpu/rm/gspfw.zig: pub const GSP_FW_WPR_META_MAGIC: u64 = 0xdc3aae21371a60b3;
+src/drivers/gpu/rm/gspfw.zig: pub const GSP_FW_WPR_META_REVISION: u64 = 1;
+src/drivers/gpu/rm/gspfw.zig: pub const GSP_FW_WPR_META_VERIFIED: u64 = 0xa0a0a0a0a0a0a0a0;
+src/drivers/gpu/rm/gspfw.zig: pub const GspFwWprMeta = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const MsgqTxHeader = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const MsgqRxHeader = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const MessageQueueInitArguments = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const GspSrInitArguments = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const GspArgumentsCached = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const LibosMemoryRegionInitArgument = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const LIBOS_REGION_KIND_CONTIGUOUS: u8 = 1; // LIBOS_MEMORY_REGION_CONTIGUOUS
+src/drivers/gpu/rm/gspfw.zig: pub const LIBOS_REGION_LOC_SYSMEM: u8 = 1; // LIBOS_MEMORY_REGION_LOC_SYSMEM
+src/drivers/gpu/rm/gspfw.zig: pub fn libosId8(name: []const u8) u64
+src/drivers/gpu/rm/gspfw.zig: pub const GSP_SET_SYSTEM_INFO: u32 = 72;
+src/drivers/gpu/rm/gspfw.zig: pub const SET_REGISTRY: u32 = 73;
+src/drivers/gpu/rm/gspfw.zig: pub const BusInfo = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const DodMethodData = extern struct { status: u32, acpiIdListLen: u32, acpiIdList: [16]u32 };
+src/drivers/gpu/rm/gspfw.zig: pub const JtMethodData = extern struct { status: u32, jtCaps: u32, jtRevId: u16, bSBIOSCaps: u8 };
+src/drivers/gpu/rm/gspfw.zig: pub const MuxElement = extern struct { acpiId: u32, mode: u32, status: u32 };
+src/drivers/gpu/rm/gspfw.zig: pub const MuxMethodData = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const CapsMethodData = extern struct { status: u32, optimusCaps: u32 };
+src/drivers/gpu/rm/gspfw.zig: pub const AcpiMethodData = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const GspVfInfo = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const GspPcieConfigReg = extern struct { linkCap: u32 };
+src/drivers/gpu/rm/gspfw.zig: pub const GspSystemInfo = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const PackedRegistryTable = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const RpcMessageHeader = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const GspMsgQueueElement = extern struct
+src/drivers/gpu/rm/gspfw.zig: pub const GSP_MSG_HDR_SIZE: u32 = 48;
+src/drivers/gpu/rm/gspfw.zig: pub const MsgEvent = enum(u32)
+src/drivers/gpu/rm/hostpush.zig: pub const SUBCH_HOST: u32 = 0; // NVC36F
+src/drivers/gpu/rm/hostpush.zig: pub const SUBCH_CE: u32 = 4; // NVA0B5
+src/drivers/gpu/rm/hostpush.zig: pub const WFI: u32 = 0x0078;
+src/drivers/gpu/rm/hostpush.zig: pub const HostPush = struct
+src/drivers/gpu/rm/log.zig: pub fn print(mod: gate.Mod, comptime fmt: []const u8, args: anytype) void
+src/drivers/gpu/rm/log.zig: pub fn gpu(comptime fmt: []const u8, args: anytype) void
+src/drivers/gpu/rm/mmio.zig: pub const CacheType = enum { uc, wc, cached };
+src/drivers/gpu/rm/mmio.zig: pub var ktrace_on: bool = false;
+src/drivers/gpu/rm/mmio.zig: pub const Mapping = struct
+src/drivers/gpu/rm/mmio.zig: pub fn map(phys: u64, size: u64, cache: CacheType) Mapping
+src/drivers/gpu/rm/nvrm.zig: pub const FUNCTION_GSP_RM_ALLOC: u32 = 103;
+src/drivers/gpu/rm/nvrm.zig: pub const FUNCTION_GSP_RM_CONTROL: u32 = 76;
+src/drivers/gpu/rm/nvrm.zig: pub const FUNCTION_FREE: u32 = 10;
+src/drivers/gpu/rm/nvrm.zig: pub const RM_CLIENT0: u32 = 0xc1d00000;
+src/drivers/gpu/rm/nvrm.zig: pub const RM_DEVICE: u32 = 0xde1d0000;
+src/drivers/gpu/rm/nvrm.zig: pub const RM_SUBDEVICE: u32 = 0x5d1d0000;
+src/drivers/gpu/rm/nvrm.zig: pub const RM_DISP: u32 = 0x00730000;
+src/drivers/gpu/rm/nvrm.zig: pub const NV01_ROOT: u32 = 0x0;
+src/drivers/gpu/rm/nvrm.zig: pub const NV01_DEVICE_0: u32 = 0x0080;
+src/drivers/gpu/rm/nvrm.zig: pub const NV20_SUBDEVICE_0: u32 = 0x2080;
+src/drivers/gpu/rm/nvrm.zig: pub const NV04_DISPLAY_COMMON: u32 = 0x0073;
+src/drivers/gpu/rm/nvrm.zig: pub const AD102_DISP: u32 = 0xc770; // disp root
+src/drivers/gpu/rm/nvrm.zig: pub const AD102_DISP_CORE_CHANNEL_DMA: u32 = 0xc77d;
+src/drivers/gpu/rm/nvrm.zig: pub const GA102_DISP_WINDOW_CHANNEL_DMA: u32 = 0xc67e; // AD102 window
+src/drivers/gpu/rm/nvrm.zig: pub const GA102_DISP_WINDOW_IMM_CHANNEL_DMA: u32 = 0xc67b;
+src/drivers/gpu/rm/nvrm.zig: pub const GA102_DISP_CURSOR: u32 = 0xc67a;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_INTERNAL_DISPLAY_WRITE_INST_MEM: u32 = 0x20800a49;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_INTERNAL_DISPLAY_GET_STATIC_INFO: u32 = 0x20800a01;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_INTERNAL_DISPLAY_CHANNEL_PUSHBUFFER: u32 = 0x20800a58;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_SYSTEM_GET_SUPPORTED: u32 = 0x730107; // r570
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_SYSTEM_GET_CONNECT_STATE: u32 = 0x730108; // r570
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_SYSTEM_GET_NUM_HEADS: u32 = 0x730102;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_SPECIFIC_GET_CONNECTOR_DATA: u32 = 0x730250;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_SPECIFIC_GET_EDID_V2: u32 = 0x730245;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_DFP_ASSIGN_SOR: u32 = 0x731152;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_DP_CTRL: u32 = 0x731343;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_SPECIFIC_SET_HDMI_ENABLE: u32 = 0x730273;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_SPECIFIC_OR_GET_INFO: u32 = 0x73028b;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_DP_GET_CAPS: u32 = 0x731369;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_DP_CONFIG_STREAM: u32 = 0x731362;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_DP_SET_MANUAL_DISPLAYPORT: u32 = 0x731365;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_SPECIFIC_GET_ALL_HEAD_MASK: u32 = 0x730287;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_DP_AUXCH_CTRL: u32 = 0x731341;
+src/drivers/gpu/rm/nvrm.zig: pub const ADDR_SYSMEM: u32 = 1;
+src/drivers/gpu/rm/nvrm.zig: pub const ADDR_FBMEM: u32 = 2;
+src/drivers/gpu/rm/nvrm.zig: pub const MEMORY_WRITECOMBINED: u32 = 2;
+src/drivers/gpu/rm/nvrm.zig: pub const PBTARGET_PHYS_NVM: u32 = 1;
+src/drivers/gpu/rm/nvrm.zig: pub const RpcRmAlloc = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const RpcRmControl = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const NV_PROC_NAME_MAX_LENGTH: usize = 100;
+src/drivers/gpu/rm/nvrm.zig: pub const Nv0000AllocParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const Nv0080AllocParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const Nv2080AllocParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const WriteInstMemParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const SystemGetSupportedParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const SystemGetConnectStateParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const EDID_MAX_BYTES: usize = 2048;
+src/drivers/gpu/rm/nvrm.zig: pub const SpecificGetEdidV2Params = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const DISP_CHANNEL_PB_SIZE_4KB: u32 = 0;
+src/drivers/gpu/rm/nvrm.zig: pub const DISP_SUBDEVICE_ID_BIT0: u32 = 1;
+src/drivers/gpu/rm/nvrm.zig: pub const ChannelPushbufferParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const ChannelDmaAllocParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const ChannelPioAllocParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const FERMI_VASPACE_A: u32 = 0x90f1;
+src/drivers/gpu/rm/nvrm.zig: pub const AMPERE_CHANNEL_GPFIFO_A: u32 = 0xc56f;
+src/drivers/gpu/rm/nvrm.zig: pub const AMPERE_DMA_COPY_B: u32 = 0xc7b5;
+src/drivers/gpu/rm/nvrm.zig: pub const NV2080_ENGINE_TYPE_COPY0: u32 = 0x09;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_GPFIFO_BIND: u32 = 0xa06f0104;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_GPFIFO_SCHEDULE: u32 = 0xa06f0103;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_CE_GET_FAULT_METHOD_BUFFER_SIZE: u32 = 0x20802a08;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_VASPACE_COPY_SERVER_RESERVED_PDES: u32 = 0x90f10106;
+src/drivers/gpu/rm/nvrm.zig: pub const ADDR_SPACE_SYSMEM: u32 = 1;
+src/drivers/gpu/rm/nvrm.zig: pub const ADDR_SPACE_VIDMEM: u32 = 2;
+src/drivers/gpu/rm/nvrm.zig: pub const SPLIT_VAS_SERVER_VA_START: u64 = 0x1_0000_0000;
+src/drivers/gpu/rm/nvrm.zig: pub const SPLIT_VAS_SERVER_VA_SIZE: u64 = 0x2000_0000;
+src/drivers/gpu/rm/nvrm.zig: pub const VaspaceAllocParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const MemoryDescParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const ChannelGpfifoAllocParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const Cb5AllocParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const GpfifoBindParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const GpfifoScheduleParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const CopyServerReservedPdesParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const ADA_A: u32 = 0xc997;
+src/drivers/gpu/rm/nvrm.zig: pub const NV2080_ENGINE_TYPE_GR0: u32 = 0x01;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_KGR_GET_CONTEXT_BUFFERS_INFO: u32 = 0x20800a32;
+src/drivers/gpu/rm/nvrm.zig: pub const CTRL_GPU_PROMOTE_CTX: u32 = 0x2080012b;
+src/drivers/gpu/rm/nvrm.zig: pub const GR_CTXBUF_COUNT: u32 = 0x1a; // r570 ENGINE_ID_COUNT (r535 was 0x19)
+src/drivers/gpu/rm/nvrm.zig: pub const GrBufferId = struct
+src/drivers/gpu/rm/nvrm.zig: pub const GrCtxBuffersInfoParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const PromoteCtxEntry = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const PromoteCtxParams = extern struct
+src/drivers/gpu/rm/nvrm.zig: pub const RpcFreeParams = extern struct
+src/drivers/gpu/rm/pngenc.zig: pub const Error = std.mem.Allocator.Error;
+src/drivers/gpu/rm/pngenc.zig: pub fn encode(a: std.mem.Allocator, w: u32, h: u32, px: []const u32, stride_px: usize) Error![]u8
+src/drivers/gpu/rm/shim.zig: pub const Status = enum(i32)
+src/drivers/gpu/rm/shim.zig: pub fn allocMem(size: u64) ?[*]u8
+src/drivers/gpu/rm/shim.zig: pub fn allocPagesPhys(count: u32) ?u64
+src/drivers/gpu/rm/shim.zig: pub fn freePagesPhys(phys: u64, count: u32) void
+src/drivers/gpu/rm/shim.zig: pub const DmaTracker = struct
+src/drivers/gpu/rm/shim.zig: pub fn mapKernelSpace(phys: u64, size: u64, cache: mmio.CacheType) mmio.Mapping
+src/drivers/gpu/rm/shim.zig: pub fn pciReadDword(handle: pci.Device, offset: u8) u32
+src/drivers/gpu/rm/shim.zig: pub fn pciWriteDword(handle: pci.Device, offset: u8, value: u32) void
+src/drivers/gpu/rm/shim.zig: pub fn acquireSpinlock(lock: *SpinLock) bool
+src/drivers/gpu/rm/shim.zig: pub fn releaseSpinlock(lock: *SpinLock, if_was: bool) void
+src/drivers/gpu/rm/shim.zig: pub fn monotonicTimeNs() u64
+src/drivers/gpu/rm/shim.zig: pub fn delayUs(us: u32) void
+src/drivers/gpu/rm/shim.zig: pub var keepalive_hook: *const fn () void = &keepaliveTrio;
+src/drivers/gpu/rm/shim.zig: pub fn netKeepalive() void
+src/drivers/gpu/rm/shim.zig: pub fn flushDmaBuffers() void
+src/drivers/gpu/rm/shim.zig: pub fn invalidateLine(addr: u64) void
+src/drivers/gpu/rm/shim.zig: pub fn flushRange(addr: u64, len: u64) void
+src/drivers/gpu/rm/shim.zig: pub fn notSupported(comptime name: []const u8) Status
 src/drivers/gpu/screenshot.zig: pub const Error = error{ ScreenshotAlloc, ScreenshotCapacity, ScreenshotNoPresent } || fifo.Error;
 src/drivers/gpu/screenshot.zig: pub fn dump(g: gsp.Gsp, f: *fifo.Fifo) Error!void
 src/drivers/gpu/usbshot.zig: pub fn init(v: *fat.Volume) bool
@@ -1998,23 +2004,6 @@ src/drivers/input/keymap.zig: pub fn hidToAscii(usage: u8, shift: bool) u8
 src/drivers/input/keymap.zig: pub fn hidToEvdev(usage: u8) u16
 src/drivers/input/keymap.zig: pub const MOD_USAGE_FIRST: u8 = 0xE0;
 src/drivers/input/keymap.zig: pub const MOD_USAGE_LAST: u8 = 0xE7;
-src/drivers/io/io.zig: pub fn outb(port: u16, val: u8) void
-src/drivers/io/io.zig: pub fn inb(port: u16) u8
-src/drivers/io/io.zig: pub fn outw(port: u16, val: u16) void
-src/drivers/io/io.zig: pub fn inw(port: u16) u16
-src/drivers/io/io.zig: pub fn outl(port: u16, val: u32) void
-src/drivers/io/io.zig: pub fn inl(port: u16) u32
-src/drivers/io/io.zig: pub fn wait() void
-src/drivers/io/mmio.zig: pub inline fn read32(addr: usize) u32
-src/drivers/io/mmio.zig: pub inline fn write32(addr: usize, val: u32) void
-src/drivers/io/mmio.zig: pub inline fn write64(addr: usize, val: u64) void
-src/drivers/io/ps2.zig: pub const DATA: u16 = 0x60; // 8042 data port (unused for input; kept for completeness)
-src/drivers/io/ps2.zig: pub const STATUS: u16 = 0x64; // read controller status register
-src/drivers/io/ps2.zig: pub const COMMAND: u16 = 0x64; // write controller commands (same port as STATUS)
-src/drivers/io/ps2.zig: pub fn inputEmpty() bool
-src/drivers/io/wait.zig: pub fn until(
-src/drivers/io/wait.zig: pub fn poll(ctx: anytype, comptime cond: anytype, max_spins: u32) bool
-src/drivers/io/wait.zig: pub fn noop(ctx: anytype) void
 src/drivers/net/debug/fileproto.zig: pub const MAGIC: u32 = 0x31524d4b; // 'KMR1'
 src/drivers/net/debug/fileproto.zig: pub const PORT: u16 = 9515;
 src/drivers/net/debug/fileproto.zig: pub const MAX_CHUNK: u16 = 1200; // one reply always fits one MTU
@@ -2109,7 +2098,7 @@ src/drivers/net/debug/fileserv.zig: pub fn focusedTitle() []const u8
 src/drivers/net/debug/fileserv.zig: pub var mcp_handler: ?*const fn (body: []const u8) void = null;
 src/drivers/net/debug/fileserv.zig: pub fn setMcpHandler(h: *const fn (body: []const u8) void) void
 src/drivers/net/debug/fileserv.zig: pub fn pingCount() u64
-src/drivers/net/debug/fileserv.zig: pub fn service() void
+src/drivers/net/debug/fileserv.zig: pub fn step() void
 src/drivers/net/debug/lineasm.zig: pub fn Assembler(comptime CAP: usize) type
 src/drivers/net/debug/linestore.zig: pub const SEQ_DIGITS = 6;
 src/drivers/net/debug/linestore.zig: pub const SEQ_PREFIX_LEN = SEQ_DIGITS + 3;
@@ -2168,7 +2157,9 @@ src/drivers/net/nic/intel.zig: pub const RCTL_SECRC: u32 = 1 << 26; // strip the
 src/drivers/net/nic/intel.zig: pub const RegMap = struct
 src/drivers/net/nic/intel.zig: pub const DescOps = struct
 src/drivers/net/nic/intel.zig: pub const Nic = struct
-src/drivers/net/nic/intel.zig: pub fn dmaAlloc(bytes: usize) usize
+src/drivers/net/nic/intel.zig: pub fn registerCounters() void
+src/drivers/net/nic/intel.zig: pub fn dmaAlloc(bytes: usize) ?usize
+src/drivers/net/nic/intel.zig: pub fn dmaFree(addr: usize, bytes: usize) void
 src/drivers/net/nic/intel.zig: pub fn macFromRegs(ral: u32, rah: u32) [6]u8
 src/drivers/net/nic/intel.zig: pub const Driver = struct
 src/drivers/net/nic/intel.zig: pub const STATUS_LU: u32 = 1 << 1;
@@ -2243,6 +2234,7 @@ src/drivers/net/stack/http_wire.zig: pub const StreamingBody = struct
 src/drivers/net/stack/http.zig: pub const Method = enum
 src/drivers/net/stack/http.zig: pub fn request(
 src/drivers/net/stack/http.zig: pub fn requestStream(
+src/drivers/net/stack/netapi.zig: pub fn publish() void
 src/drivers/net/stack/netown.zig: pub const Holder = ?*anyopaque;
 src/drivers/net/stack/netown.zig: pub fn mayClaim(held: Holder, caller: Holder) bool
 src/drivers/net/stack/netown.zig: pub fn mustSkip(held: Holder, caller: Holder) bool
@@ -2256,15 +2248,18 @@ src/drivers/net/stack/net.zig: pub const UDP_HLEN = wire.UDP_HLEN;
 src/drivers/net/stack/net.zig: pub const ETH_HLEN = inet.ETHER_HEADER_BYTES;
 src/drivers/net/stack/net.zig: pub const TCP_HLEN = 20; // TCP header with no options
 src/drivers/net/stack/net.zig: pub const ETH_IP_HLEN = ETH_HLEN + IP_HLEN; // start of the transport payload (34)
+src/drivers/net/stack/net.zig: pub fn registerCounters() void
 src/drivers/net/stack/net.zig: pub fn claimStack() bool
 src/drivers/net/stack/net.zig: pub fn releaseStack() void
 src/drivers/net/stack/net.zig: pub fn stackHeldByOther() bool
 src/drivers/net/stack/net.zig: pub fn dbg(s: []const u8) void
 src/drivers/net/stack/net.zig: pub fn dbgx(s: []const u8, v: u64) void
-src/drivers/net/stack/net.zig: pub fn init() bool
+src/drivers/net/stack/net.zig: pub const InitError = error{ NoNic, DhcpFailed };
+src/drivers/net/stack/net.zig: pub fn init() InitError!void
 src/drivers/net/stack/net.zig: pub fn startAsync() bool
 src/drivers/net/stack/net.zig: pub fn armDhcp() void
 src/drivers/net/stack/net.zig: pub fn isUp() bool
+src/drivers/net/stack/net.zig: pub fn status() idevices.Status
 src/drivers/net/stack/net.zig: pub var wait_hook: ?*const fn () void = null;
 src/drivers/net/stack/net.zig: pub inline fn serviceDuringWait() void
 src/drivers/net/stack/net.zig: pub fn logConfig() void
@@ -2291,7 +2286,6 @@ src/drivers/net/stack/net.zig: pub const MAX_BRIDGE_FRAME = inet.ETHER_FRAME_MAX
 src/drivers/net/stack/net.zig: pub fn connectBridge(b: Bridge) void
 src/drivers/net/stack/net.zig: pub fn listenUdp(port: u16, handler: UdpHandler) void
 src/drivers/net/stack/net.zig: pub fn pump() void
-src/drivers/net/stack/net.zig: pub fn publish() void
 src/drivers/net/stack/roots.zig: pub const CLOCK_VALIDITY_FLOOR_EPOCH_S: i64 = 1_735_689_600;
 src/drivers/net/stack/roots.zig: pub fn clockEstablishesValidity(now_sec: ?i64) bool
 src/drivers/net/stack/roots.zig: pub const LoadStats = struct { loaded: usize, skipped: usize };
@@ -2377,7 +2371,10 @@ src/drivers/pci/pci.zig: pub fn findClass(class: u8, subclass: u8, prog_if: u8) 
 src/drivers/pci/pci.zig: pub fn bar64(self: Device, n: u2) u64
 src/drivers/storage/bootlog.zig: pub const PATH = "/bootlog.txt"; // volume-relative (the /usbdisk mount root)
 src/drivers/storage/bootlog.zig: pub fn init(vol: *fat.Volume, build_number: u32) bool
-src/drivers/storage/bootlog.zig: pub fn service() void
+src/drivers/storage/bootlog.zig: pub fn setHoldOff(hold: bool) void
+src/drivers/storage/bootlog.zig: pub fn step() void
+src/drivers/storage/bootlog.zig: pub fn status() idevices.Status
+src/drivers/storage/bootlog.zig: pub fn drain() void
 src/drivers/storage/bootlog.zig: pub fn flushNow() void
 src/drivers/storage/crc32.zig: pub fn crc32(data: []const u8) u32
 src/drivers/storage/fat.zig: pub const Error = error{
@@ -2589,6 +2586,7 @@ src/iface/iaccel.zig: pub var input_latch: input_latency.Latch = .{};
 src/iface/iblockdev.zig: pub const SECTOR: usize = 512;
 src/iface/iblockdev.zig: pub const Error = error{
 src/iface/iblockdev.zig: pub const IBlockDev = struct
+src/iface/idesk.zig: pub const AppKind = enum
 src/iface/idesk.zig: pub const Action = enum(u8)
 src/iface/idesk.zig: pub const MAX_NAME: usize = 48;
 src/iface/idesk.zig: pub const MAX_WINDOWS_TEXT: usize = 1024;
@@ -2601,6 +2599,7 @@ src/iface/idesk.zig: pub fn windows() []const u8
 src/iface/idesk.zig: pub fn publishDashboard(text: []const u8) void
 src/iface/idesk.zig: pub fn dashboard() []const u8
 src/iface/idesk.zig: pub fn reset() void
+src/iface/idevices.zig: pub const Status = enum(u8)
 src/iface/idevices.zig: pub const Usb = struct
 src/iface/idevices.zig: pub const Devices = struct
 src/iface/idevices.zig: pub var instance: Devices = .{};
@@ -2793,6 +2792,8 @@ src/iface/ivirt.zig: pub fn fb(id: Id) ?Fb
 src/iface/ivirt.zig: pub fn markFbDirty(id: Id) void
 src/iface/ivirt.zig: pub fn fbDirty(id: Id) bool
 src/iface/ivirt.zig: pub fn takeFbDirty(id: Id) bool
+src/iface/ivirt.zig: pub fn postWindowClosed(id: Id) void
+src/iface/ivirt.zig: pub fn takeWindowClosed() ?Id
 src/iface/ivirt.zig: pub fn reset(id: Id) void
 src/iface/iwindow.zig: pub const MAX_WINDOWS: usize = abi.WINDOW_MAX_COUNT;
 src/iface/iwindow.zig: pub const KEY_RING_CAP = 128;
@@ -2988,10 +2989,11 @@ src/kernel/debug/klog.zig: pub fn diagBuf() []const u8
 src/kernel/debug/klog.zig: pub fn diagStart() usize
 src/kernel/debug/klog.zig: pub fn diagCount() usize
 src/kernel/debug/klog.zig: pub fn addSink(sink: *const fn ([]const u8) void) void
+src/kernel/debug/klog.zig: pub fn setCrashFlush(f: *const fn () void) void
+src/kernel/debug/klog.zig: pub fn flushCrash() void
 src/kernel/debug/klog.zig: pub fn putc(c: u8) void
 src/kernel/debug/klog.zig: pub fn puts(s: []const u8) void
 src/kernel/debug/klog.zig: pub fn putsRecord(s: []const u8) void
-src/kernel/debug/klog.zig: pub fn init() void {}
 src/kernel/debug/klog.zig: pub fn installLogSink() void
 src/kernel/debug/klog.zig: pub fn putHex(value: u64) void
 src/kernel/debug/spinwait.zig: pub var pump: ?*const fn () void = null;
@@ -3021,6 +3023,23 @@ src/kernel/interrupts/pic.zig: pub fn eoi(irq: u8) void
 src/kernel/interrupts/pic.zig: pub fn spurious(irq: u8) bool
 src/kernel/interrupts/pic.zig: pub fn setMask(irq: u8) void
 src/kernel/interrupts/pic.zig: pub fn clearMask(irq: u8) void
+src/kernel/io/io.zig: pub fn outb(port: u16, val: u8) void
+src/kernel/io/io.zig: pub fn inb(port: u16) u8
+src/kernel/io/io.zig: pub fn outw(port: u16, val: u16) void
+src/kernel/io/io.zig: pub fn inw(port: u16) u16
+src/kernel/io/io.zig: pub fn outl(port: u16, val: u32) void
+src/kernel/io/io.zig: pub fn inl(port: u16) u32
+src/kernel/io/io.zig: pub fn wait() void
+src/kernel/io/mmio.zig: pub inline fn read32(addr: usize) u32
+src/kernel/io/mmio.zig: pub inline fn write32(addr: usize, val: u32) void
+src/kernel/io/mmio.zig: pub inline fn write64(addr: usize, val: u64) void
+src/kernel/io/ps2.zig: pub const DATA: u16 = 0x60; // 8042 data port (unused for input; kept for completeness)
+src/kernel/io/ps2.zig: pub const STATUS: u16 = 0x64; // read controller status register
+src/kernel/io/ps2.zig: pub const COMMAND: u16 = 0x64; // write controller commands (same port as STATUS)
+src/kernel/io/ps2.zig: pub fn inputEmpty() bool
+src/kernel/io/wait.zig: pub fn until(
+src/kernel/io/wait.zig: pub fn poll(ctx: anytype, comptime cond: anytype, max_spins: u32) bool
+src/kernel/io/wait.zig: pub fn noop(ctx: anytype) void
 src/kernel/loader/abi.zig: pub const ABI_MAGIC: u32 = 0x534f_444b;
 src/kernel/loader/abi.zig: pub const ABI_VERSION: u32 = 2;
 src/kernel/loader/abi.zig: pub const Kind = enum(u32)
@@ -3179,7 +3198,7 @@ src/kernel/sched/dispatch.zig: pub fn handoff(self_core: u32, others_waiting: bo
 src/kernel/sched/jobs.zig: pub const Job = job.Job;
 src/kernel/sched/jobs.zig: pub const Step = job.Step;
 src/kernel/sched/jobs.zig: pub fn submit(j: job.Job) bool
-src/kernel/sched/jobs.zig: pub fn pump() void
+src/kernel/sched/jobs.zig: pub fn step() void
 src/kernel/sched/jobs.zig: pub fn active() usize
 src/kernel/sched/job.zig: pub const Step = enum { working, done, failed };
 src/kernel/sched/job.zig: pub const Job = struct
@@ -3495,6 +3514,35 @@ src/kernel/virt/virtio/inputdev.zig: pub const ABS_MAX: u32 = ivirt.ABS_RANGE;
 src/kernel/virt/virtio/inputdev.zig: pub const InputDev = struct
 src/kernel/virt/virtio/inputdev.zig: pub fn fillConfig(kind: Kind, select: u8, subsel: u8, out: *[CONFIG_SIZE]u8) void
 src/kernel/virt/virtio/mmio.zig: pub const virtq = @import("virtq.zig");
+src/kernel/virt/virtio/mmio.zig: pub const REG_MAGIC_VALUE: u64 = 0x000;
+src/kernel/virt/virtio/mmio.zig: pub const REG_VERSION: u64 = 0x004;
+src/kernel/virt/virtio/mmio.zig: pub const REG_DEVICE_ID: u64 = 0x008;
+src/kernel/virt/virtio/mmio.zig: pub const REG_VENDOR_ID: u64 = 0x00c;
+src/kernel/virt/virtio/mmio.zig: pub const REG_DEVICE_FEATURES: u64 = 0x010;
+src/kernel/virt/virtio/mmio.zig: pub const REG_DEVICE_FEATURES_SEL: u64 = 0x014;
+src/kernel/virt/virtio/mmio.zig: pub const REG_DRIVER_FEATURES: u64 = 0x020;
+src/kernel/virt/virtio/mmio.zig: pub const REG_DRIVER_FEATURES_SEL: u64 = 0x024;
+src/kernel/virt/virtio/mmio.zig: pub const REG_QUEUE_SEL: u64 = 0x030;
+src/kernel/virt/virtio/mmio.zig: pub const REG_QUEUE_NUM_MAX: u64 = 0x034;
+src/kernel/virt/virtio/mmio.zig: pub const REG_QUEUE_NUM: u64 = 0x038;
+src/kernel/virt/virtio/mmio.zig: pub const REG_QUEUE_READY: u64 = 0x044;
+src/kernel/virt/virtio/mmio.zig: pub const REG_QUEUE_NOTIFY: u64 = 0x050;
+src/kernel/virt/virtio/mmio.zig: pub const REG_INTERRUPT_STATUS: u64 = 0x060;
+src/kernel/virt/virtio/mmio.zig: pub const REG_INTERRUPT_ACK: u64 = 0x064;
+src/kernel/virt/virtio/mmio.zig: pub const REG_STATUS: u64 = 0x070;
+src/kernel/virt/virtio/mmio.zig: pub const REG_QUEUE_DESC_LOW: u64 = 0x080;
+src/kernel/virt/virtio/mmio.zig: pub const REG_QUEUE_DESC_HIGH: u64 = 0x084;
+src/kernel/virt/virtio/mmio.zig: pub const REG_QUEUE_DRIVER_LOW: u64 = 0x090;
+src/kernel/virt/virtio/mmio.zig: pub const REG_QUEUE_DRIVER_HIGH: u64 = 0x094;
+src/kernel/virt/virtio/mmio.zig: pub const REG_QUEUE_DEVICE_LOW: u64 = 0x0a0;
+src/kernel/virt/virtio/mmio.zig: pub const REG_QUEUE_DEVICE_HIGH: u64 = 0x0a4;
+src/kernel/virt/virtio/mmio.zig: pub const REG_SHM_SEL: u64 = 0x0ac;
+src/kernel/virt/virtio/mmio.zig: pub const REG_SHM_LEN_LOW: u64 = 0x0b0;
+src/kernel/virt/virtio/mmio.zig: pub const REG_SHM_LEN_HIGH: u64 = 0x0b4;
+src/kernel/virt/virtio/mmio.zig: pub const REG_SHM_BASE_LOW: u64 = 0x0b8;
+src/kernel/virt/virtio/mmio.zig: pub const REG_SHM_BASE_HIGH: u64 = 0x0bc;
+src/kernel/virt/virtio/mmio.zig: pub const REG_CONFIG_GENERATION: u64 = 0x0fc;
+src/kernel/virt/virtio/mmio.zig: pub const REG_CONFIG: u64 = 0x100;
 src/kernel/virt/virtio/mmio.zig: pub const INT_USED_RING: u32 = 1 << 0;
 src/kernel/virt/virtio/mmio.zig: pub const INT_CONFIG: u32 = 1 << 1;
 src/kernel/virt/virtio/mmio.zig: pub const STATUS_DEVICE_NEEDS_RESET: u32 = 64;
@@ -3518,6 +3566,7 @@ src/kernel/virt/virtio/virtq.zig: pub const Error = error{ AddrOutOfBounds, Chai
 src/kernel/virt/virtio/virtq.zig: pub const Virtq = struct
 src/kernel/virt/virtio/virtq.zig: pub const ChainIter = struct
 src/kernel/virt/virtio/virtq.zig: pub fn chain(q: *const Virtq, head: u16) ChainIter
+src/kernel/virt/virtio/virtq.zig: pub fn scatter(q: *const Virtq, head: u16, parts: []const []const u8) Error!u32
 src/kernel/virt/virt.zig: pub const STAGED_CMDLINE = if (buildinfo.guest_cmdline.len == 0)
 src/kernel/virt/virt.zig: pub fn init() void
 src/kernel/virt/virt.zig: pub fn available() bool

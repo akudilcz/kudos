@@ -3,7 +3,7 @@
 //! network devices without naming a controller.
 //!
 //! One file per side of a seam is the pattern the network stack already uses
-//! (`net.publish`). It lives in the driver group because it is the only place
+//! (`netapi.publish`). It lives in the driver group because it is the only place
 //! that may see both a controller and the contract it fills.
 
 const idevices = @import("idevices");

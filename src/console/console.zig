@@ -8,12 +8,12 @@
 
 const std = @import("std");
 const png = @import("modelcache").png;
+const idesk = @import("idesk"); // the desktop-control contract: the app catalogue lives there
 
-/// The application kinds the desktop can open directly — the vocabulary of
-/// `spawnApp`. This is the one home of the list; the apps group re-exports it
-/// as `app.Kind` (apps/app.zig), so the union of hosted apps and the commands
-/// that spawn them share exactly one definition.
-pub const AppKind = enum { term, system, clock, calc, vm };
+/// The application kinds a shell command can ask the desktop to open. The list
+/// itself belongs to the contract (iface/idesk.zig) — the apps group names the
+/// same set for its hosted union, and neither group may import the other.
+pub const AppKind = idesk.AppKind;
 
 /// The hosting desktop's window/app services, as a console sees them —
 /// implemented by ui/desktop/desktop.zig, which constructs one of these per
@@ -55,9 +55,22 @@ pub const Console = struct {
     /// Print the shell prompt — a backgrounded command re-prompts when its
     /// completion lands after the synchronous part already returned.
     promptFn: *const fn (ctx: *anyopaque) void,
+    /// Suppress the ONE automatic prompt the terminal prints when this command
+    /// returns. For a command that ends by asking an inline question
+    /// (`passphrase: `) or whose answer arrives later (`curl`): the next
+    /// committed line is input to it, or its completion re-prompts itself.
+    holdPromptFn: *const fn (ctx: *anyopaque) void,
+    /// Mask the line editor's echo (each typed character shows as `*`) until
+    /// turned off. Turning it OFF also forgets the editor's recall of the
+    /// masked line, so Up-arrow cannot replay a passphrase.
+    setInputMaskFn: *const fn (ctx: *anyopaque, on: bool) void,
     /// The hosting desktop's services and this console's window within it.
     desktop: Desktop,
     win: *anyopaque,
+    /// What a pipe fed this command: the previous stage's captured output, or
+    /// empty at the head of a line. A plain value — the shell sets it per
+    /// stage; consumers (`grep`, `wc`, `head`) read it when no file is named.
+    stdin: []const u8 = "",
     /// The desktop's allocator: pixels handed over via `setBackground` and
     /// buffers a backgrounded fetch retains are owned by it.
     a: std.mem.Allocator,
@@ -99,6 +112,14 @@ pub const Console = struct {
     /// Print the shell prompt (backgrounded-completion path).
     pub fn prompt(self: Console) void {
         self.promptFn(self.ctx);
+    }
+    /// Suppress the one automatic prompt after this command returns.
+    pub fn holdPrompt(self: Console) void {
+        self.holdPromptFn(self.ctx);
+    }
+    /// Mask (or unmask) the line editor's echo; unmasking forgets the recall.
+    pub fn setInputMask(self: Console, on: bool) void {
+        self.setInputMaskFn(self.ctx, on);
     }
     /// Open a new app window of `kind` (see Desktop.spawnAppFn).
     pub fn spawnApp(self: Console, kind: AppKind) anyerror!void {

@@ -21,6 +21,34 @@
 
 const std = @import("std");
 
+/// The application kinds the desktop can open directly — the vocabulary of
+/// `spawnApp` and of the shell/agent commands that ask for one.
+///
+/// It lives HERE, in the contract, rather than in either group that uses it:
+/// the console's Desktop contract names it (a shell command spawns a window)
+/// and the apps group's hosted union names it (an app instance IS one of
+/// these), and neither group may import the other. Anything else makes the
+/// catalogue of what this machine can open the property of whichever group
+/// happened to need it first.
+pub const AppKind = enum {
+    term,
+    system,
+    clock,
+    calc,
+    vm,
+
+    /// The kind a person or an agent named, or null if this machine has no
+    /// such application. ONE home for the spelling of these names, so the
+    /// shell, the agent tool and the remote-request inbox cannot drift over
+    /// what `calc` is called.
+    pub fn fromName(name: []const u8) ?AppKind {
+        inline for (@typeInfo(AppKind).@"enum".fields) |f| {
+            if (std.mem.eql(u8, name, f.name)) return @field(AppKind, f.name);
+        }
+        return null;
+    }
+};
+
 /// What can be asked of one window. The set is exactly what a person can do to
 /// a window with the mouse and the hotkeys, which is the whole point: a
 /// capability the user has and the agent does not is a capability the agent

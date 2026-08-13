@@ -49,7 +49,7 @@ const localcmd = @import("localcmd.zig");
 /// grid. The editor never touches the grid itself; every mutation is a message.
 /// `complete` additionally asks the system task to Tab-complete the line
 /// (against the terminal's cwd and the live VFS) while the editor is parked.
-pub const ReqKind = enum(u8) { echo, backspace, run_line, complete };
+pub const ReqKind = enum(u8) { echo, backspace, run_line, complete, prompt };
 pub const Request = struct {
     kind: ReqKind,
     /// For .echo: the typed character. For .run_line/.complete: unused (the
@@ -158,7 +158,6 @@ const RELEASE_WAIT_BUDGET_MS: u64 = 1000;
 /// reaped (its core died) — the arena cannot be freed under a stack of unknown
 /// state, and a leaked 24 MiB beats freeing memory a corpse may still name.
 var cnt_leaked_sessions = counter.Counter{ .mod = .ui, .name = "sess.leaked" };
-var cnt_leaked_registered = false;
 
 /// Return a session's slot once its task has exited: wait (bounded) for the
 /// reaper's retirement signal, tear down the session's address space and arena
@@ -171,10 +170,7 @@ pub fn release(sess: *Session) void {
     const deadline = timer.millis() + RELEASE_WAIT_BUDGET_MS;
     while (!@atomicLoad(bool, &sess.retired, .acquire)) {
         if (timer.millis() >= deadline) {
-            if (!cnt_leaked_registered) {
-                cnt_leaked_registered = true;
-                counter.register(&cnt_leaked_sessions);
-            }
+            counter.register(&cnt_leaked_sessions); // idempotent (counter.zig)
             cnt_leaked_sessions.inc();
             klog.puts("session: task never reaped (core dead?) — slot + arena leaked\n");
             return; // in_use stays set: the slot is never reissued
@@ -448,7 +444,7 @@ fn requestComplete(sess: *Session) void {
 fn commitLine(sess: *Session) void {
     cnt_commits.inc();
     const parsed = shell.splitCommand(sess.ed.text());
-    if (localcmd.lookup(parsed.cmd)) |c| {
+    if (localcmd.resolveLine(parsed.cmd, parsed.args)) |r| {
         // A local command runs inline on THIS task, output via the req ring.
         // Exact-match only (no prefix matching, so `primer` is not `prime`);
         // single source of truth shared with the single-core terminal. out_ctx
@@ -459,12 +455,12 @@ fn commitLine(sess: *Session) void {
         defer @atomicStore(bool, &sess.local_running, false, .release);
         emit(sess, '\n');
         const out = sessionOut(&out_ctx, sess);
-        if (localcmd.refusesRedirect(parsed.args)) {
+        if (localcmd.refusesRedirect(r.args)) {
             out.str("error: '");
-            out.str(parsed.cmd);
-            out.str("' runs on this core and cannot redirect to a file\n");
+            out.str(r.c.name);
+            out.str("' runs on this core and cannot pipe or redirect\n");
         } else {
-            c.run(out, parsed.args);
+            r.c.run(out, r.args);
         }
         sess.ed.len = 0;
         emitPrompt(sess);
@@ -568,8 +564,9 @@ fn emit(sess: *Session, ch: u8) void {
 }
 
 /// Emit the shell prompt `#<id>> ` for this session through the req ring.
+/// Ask the hosting terminal to print its prompt: the terminal owns the one
+/// prompt format (id + cwd + `$`), and printing a second, cwd-less one here is
+/// exactly how `#0>` used to appear where it did not belong.
 fn emitPrompt(sess: *Session) void {
-    var buf: [16]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "#{d}> ", .{sess.id}) catch "#?> ";
-    for (s) |c| emit(sess, c);
+    if (!sess.req.push(.{ .kind = .prompt })) cnt_req_drops.inc();
 }

@@ -18,7 +18,7 @@
 //!   prof.frameEnd();       // closes the last span, bumps frame count, maybe dumps
 
 const tsc = @import("../../kernel/cpu/tsc.zig");
-const log = @import("base/log.zig").gpu;
+const log = @import("rm/log.zig").gpu;
 
 /// Master switch. OFF in a shipped image (zero cost). Flip on for a watched pacing
 /// run, exactly like present.zig FLIP_TIMING — the two are independent so you can run

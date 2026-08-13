@@ -123,20 +123,16 @@ pub const Api = extern struct {
 /// identity; each interface carries its own version so a v1 binary keeps working
 /// against a kernel that also offers v2. Grows append-only.
 ///
-/// An id here is a NAME, not a promise. The kernel publishes a capability only
-/// once someone has judged its vtable fit for the kind of module asking, and that
-/// judgement lives in ONE place — `src/console/capabilities.zig`, which is also
-/// the only file that can widen it. So a module ALWAYS handles null: the same id
-/// can be published to a feature and refused to an app, published to a run with a
-/// terminal behind it and refused to one without, or refused on a machine that
-/// has no desktop to draw on. `caps` at the shell prints what a running kudos
-/// publishes right now.
+/// An id here is a NAME, not a promise: what is actually published to a given run
+/// is decided by the grant table, `src/console/grants.zig`. So a module ALWAYS
+/// handles null — the same id can be published to a feature and refused to an app,
+/// or refused on a machine with no desktop to draw on. `caps` at the shell prints
+/// what a running kudos publishes now.
 ///
-/// Each id below names the kudos interface contract (`src/iface/`) it fronts.
-/// That mapping is not decoration: those contracts are Zig-typed — slices, error
-/// unions, tagged unions — so none of them can cross the C ABI a module binds
-/// through. What is published is a narrow C-ABI MIRROR of a contract, never the
-/// contract itself, and the mirror is where the bounds and the copies live.
+/// Each id names the kudos interface contract (`src/iface/`) it fronts. Those
+/// contracts are Zig-typed — slices, error unions, tagged unions — so none can
+/// cross the C ABI a module binds through: what is published is a narrow C-ABI
+/// MIRROR, and the mirror is where the bounds and the copies live.
 pub const Interface = enum(u32) {
     /// The module's own windows: create, close, blit, size, focus (`WindowApi`).
     window = 1,
@@ -177,14 +173,14 @@ pub const Interface = enum(u32) {
 //   is parked and polled (see `NetApi`).
 
 /// Every capability this ABI DEFINES, paired with the vtable a binder gets back.
-/// Comptime-only, and the one place an id is tied to its struct — documentation
+/// Comptime-only, and the one place an id is tied to its struct: documentation
 /// generated from this list (the agent's system prompt, `src/agent/prompt.zig`)
-/// therefore cannot drift from what a module actually binds, and a capability
-/// added without a vtable fails to compile here rather than shipping undocumented.
+/// cannot drift from what a module binds, and a capability added without a vtable
+/// fails to compile here rather than shipping undocumented.
 ///
 /// Defined is not published: an `Interface` id may be reserved with no row here
-/// yet (its adapter is unwritten), and a row here is still subject to the grant
-/// table in `src/console/capabilities.zig`.
+/// yet, and a row here is still subject to the grant table in
+/// `src/console/grants.zig`.
 pub const CAPABILITIES = [_]struct { id: Interface, version: u32, vtable: type }{
     .{ .id = .window, .version = 1, .vtable = WindowApi },
     .{ .id = .vfs, .version = 1, .vtable = VfsApi },

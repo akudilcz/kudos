@@ -1,6 +1,6 @@
 //! 8259 PIC remap + EOI + masking.
 
-const io = @import("../../drivers/io/io.zig");
+const io = @import("../io/io.zig");
 
 const PIC1_CMD: u16 = 0x20;
 const PIC1_DATA: u16 = 0x21;

@@ -126,6 +126,32 @@ pub fn addSink(sink: *const fn ([]const u8) void) void {
     nsinks += 1;
 }
 
+/// Push every queued byte out of whichever sink can still carry it, RIGHT NOW,
+/// bypassing that sink's normal pacing. The one caller that matters is the CPU
+/// fault handler: the machine is about to reset, so the metered drain that
+/// would normally ship the crash record will never run again, and this is the
+/// record's only chance to leave the box.
+///
+/// A HOOK, not an import, and that is the whole point. The fault handler is K1
+/// — the bottom of the machine — and the transport that carries the record out
+/// is a network driver sitting two layers above it. A K1 file naming a K2
+/// driver is the dependency arrow pointing backwards; the transport installs
+/// itself here at bring-up instead, exactly as the boot-log sink does above.
+/// Null on a machine with no such transport, which is simply a machine whose
+/// crash record stays in RAM.
+var crash_flush: ?*const fn () void = null;
+
+/// Install the crash-path flush (the transport, at its own bring-up).
+pub fn setCrashFlush(f: *const fn () void) void {
+    crash_flush = f;
+}
+
+/// Run the crash-path flush if a transport installed one. Best-effort by
+/// contract: the caller is on its way to a reset either way.
+pub fn flushCrash() void {
+    if (crash_flush) |f| f();
+}
+
 /// Emit one byte onto the trace bus: into the in-memory diag ring, then to every
 /// registered sink (netdebug, the boot-log recorder).
 /// There is no UART — this is the whole output path.
@@ -160,7 +186,6 @@ pub fn putsRecord(s: []const u8) void {
 }
 
 /// No-op: klog has no device to initialise. Kept so boot order reads the same.
-pub fn init() void {}
 
 // ── iface/ilog.zig sink ──────────────────────────────────────────────────────
 // Leaf UI modules (e.g. src/ui/wm/window.zig) log through iface/ilog.zig, not this

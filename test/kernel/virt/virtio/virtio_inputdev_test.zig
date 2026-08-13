@@ -9,6 +9,7 @@
 const std = @import("std");
 const inputdev = @import("testroot").kernel.virtio_inputdev;
 const virtq = inputdev.virtq;
+const mmio = inputdev.mmio; // the register map, from the module that owns it
 const expectEqual = std.testing.expectEqual;
 const expect = std.testing.expect;
 const expectEqualSlices = std.testing.expectEqualSlices;
@@ -28,34 +29,16 @@ const ST_BUF_GPA: u64 = 0x2000;
 
 // Register offsets, spelled independently of the transport so a transposed
 // offset there cannot self-verify (virtio 1.1 §4.2.2).
-const MAGIC: u64 = 0x000;
-const VERSION: u64 = 0x004;
-const DEVICE_ID: u64 = 0x008;
-const DEVICE_FEATURES: u64 = 0x010;
-const DEVICE_FEATURES_SEL: u64 = 0x014;
-const DRIVER_FEATURES: u64 = 0x020;
-const DRIVER_FEATURES_SEL: u64 = 0x024;
-const QUEUE_SEL: u64 = 0x030;
-const QUEUE_NUM: u64 = 0x038;
-const QUEUE_READY: u64 = 0x044;
-const QUEUE_NOTIFY: u64 = 0x050;
-const INT_STATUS: u64 = 0x060;
-const INT_ACK: u64 = 0x064;
-const STATUS: u64 = 0x070;
-const QUEUE_DESC_LOW: u64 = 0x080;
-const QUEUE_DRIVER_LOW: u64 = 0x090;
-const QUEUE_DEVICE_LOW: u64 = 0x0a0;
-const CONFIG: u64 = 0x100;
 
 // Wire facts spelled independently of the device model, so a model that drifted
 // from the virtio spec cannot self-verify: the input device type (§5.8), the
 // config-space field offsets (§5.8.5), and the 8-byte virtio_input_event
 // (§5.8.6).
 const INPUT_DEVICE_ID: u32 = 18;
-const CFG_SELECT: u64 = CONFIG + 0;
-const CFG_SUBSEL: u64 = CONFIG + 1;
-const CFG_SIZE: u64 = CONFIG + 2;
-const CFG_PAYLOAD: u64 = CONFIG + 8;
+const CFG_SELECT: u64 = mmio.REG_CONFIG + 0;
+const CFG_SUBSEL: u64 = mmio.REG_CONFIG + 1;
+const CFG_SIZE: u64 = mmio.REG_CONFIG + 2;
+const CFG_PAYLOAD: u64 = mmio.REG_CONFIG + 8;
 const EVENT_BYTES: u32 = 8;
 
 // §5.8.5 selectors.
@@ -91,34 +74,34 @@ const Fx = struct {
     }
 
     fn programQueue(self: *Fx, sel: u32, desc: u64, avail: u64, used: u64) void {
-        self.dev.write(QUEUE_SEL, 4, sel);
-        self.dev.write(QUEUE_NUM, 4, QSIZE);
-        self.dev.write(QUEUE_DESC_LOW, 4, @intCast(desc));
-        self.dev.write(QUEUE_DRIVER_LOW, 4, @intCast(avail));
-        self.dev.write(QUEUE_DEVICE_LOW, 4, @intCast(used));
-        self.dev.write(QUEUE_READY, 4, 1);
+        self.dev.write(mmio.REG_QUEUE_SEL, 4, sel);
+        self.dev.write(mmio.REG_QUEUE_NUM, 4, QSIZE);
+        self.dev.write(mmio.REG_QUEUE_DESC_LOW, 4, @intCast(desc));
+        self.dev.write(mmio.REG_QUEUE_DRIVER_LOW, 4, @intCast(avail));
+        self.dev.write(mmio.REG_QUEUE_DEVICE_LOW, 4, @intCast(used));
+        self.dev.write(mmio.REG_QUEUE_READY, 4, 1);
     }
 
     /// Everything a Linux virtio-input driver does before events flow: probe,
     /// negotiate features, program both queues, DRIVER_OK.
     fn bringUp(self: *Fx) !void {
-        try expectEqual(@as(u32, 0x74726976), self.dev.read(MAGIC, 4)); // "virt"
-        try expectEqual(@as(u32, 2), self.dev.read(VERSION, 4));
-        try expectEqual(INPUT_DEVICE_ID, self.dev.read(DEVICE_ID, 4));
+        try expectEqual(@as(u32, 0x74726976), self.dev.read(mmio.REG_MAGIC_VALUE, 4)); // "virt"
+        try expectEqual(@as(u32, 2), self.dev.read(mmio.REG_VERSION, 4));
+        try expectEqual(INPUT_DEVICE_ID, self.dev.read(mmio.REG_DEVICE_ID, 4));
 
-        self.dev.write(STATUS, 4, STATUS_ACKNOWLEDGE);
-        self.dev.write(STATUS, 4, STATUS_ACKNOWLEDGE | STATUS_DRIVER);
-        self.dev.write(DEVICE_FEATURES_SEL, 4, 0);
-        self.dev.write(DRIVER_FEATURES_SEL, 4, 0);
-        self.dev.write(DRIVER_FEATURES, 4, self.dev.read(DEVICE_FEATURES, 4));
-        self.dev.write(DEVICE_FEATURES_SEL, 4, 1);
-        self.dev.write(DRIVER_FEATURES_SEL, 4, 1);
-        self.dev.write(DRIVER_FEATURES, 4, self.dev.read(DEVICE_FEATURES, 4));
-        self.dev.write(STATUS, 4, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
+        self.dev.write(mmio.REG_STATUS, 4, STATUS_ACKNOWLEDGE);
+        self.dev.write(mmio.REG_STATUS, 4, STATUS_ACKNOWLEDGE | STATUS_DRIVER);
+        self.dev.write(mmio.REG_DEVICE_FEATURES_SEL, 4, 0);
+        self.dev.write(mmio.REG_DRIVER_FEATURES_SEL, 4, 0);
+        self.dev.write(mmio.REG_DRIVER_FEATURES, 4, self.dev.read(mmio.REG_DEVICE_FEATURES, 4));
+        self.dev.write(mmio.REG_DEVICE_FEATURES_SEL, 4, 1);
+        self.dev.write(mmio.REG_DRIVER_FEATURES_SEL, 4, 1);
+        self.dev.write(mmio.REG_DRIVER_FEATURES, 4, self.dev.read(mmio.REG_DEVICE_FEATURES, 4));
+        self.dev.write(mmio.REG_STATUS, 4, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
 
         self.programQueue(EVQ, EV_DESC_GPA, EV_AVAIL_GPA, EV_USED_GPA);
         self.programQueue(STQ, ST_DESC_GPA, ST_AVAIL_GPA, ST_USED_GPA);
-        self.dev.write(STATUS, 4, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
+        self.dev.write(mmio.REG_STATUS, 4, STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
     }
 
     fn setDesc(self: *Fx, desc_gpa: u64, i: u16, addr: u64, len: u32, flags: u16, next: u16) void {
@@ -181,8 +164,8 @@ const Fx = struct {
 
 test "an unbound device answers as absent hardware" {
     var dev = inputdev.InputDev{};
-    try expectEqual(@as(u32, 0), dev.read(MAGIC, 4));
-    dev.write(STATUS, 4, STATUS_ACKNOWLEDGE); // must not fault
+    try expectEqual(@as(u32, 0), dev.read(mmio.REG_MAGIC_VALUE, 4));
+    dev.write(mmio.REG_STATUS, 4, STATUS_ACKNOWLEDGE); // must not fault
     try expect(!dev.irqLevel());
     dev.key(30, true); // dropped, not faulted
     try expect(dev.dropped > 0);
@@ -193,7 +176,7 @@ test "the guest is presented a keyboard and a pointing device (VIRT-022, VIRT-02
     for ([_]inputdev.Kind{ .keyboard, .tablet }) |kind| {
         f.init(kind);
         try f.bringUp();
-        try expectEqual(@as(u32, 0), f.dev.read(STATUS, 4) & STATUS_NEEDS_RESET);
+        try expectEqual(@as(u32, 0), f.dev.read(mmio.REG_STATUS, 4) & STATUS_NEEDS_RESET);
     }
 }
 
@@ -374,8 +357,8 @@ test "the device interrupts the guest once its events are readable" {
 
     f.dev.key(30, true);
     try expect(f.dev.irqLevel());
-    try expectEqual(@as(u32, 1), f.dev.read(INT_STATUS, 4)); // used-ring bit
-    f.dev.write(INT_ACK, 4, 1);
+    try expectEqual(@as(u32, 1), f.dev.read(mmio.REG_INTERRUPT_STATUS, 4)); // used-ring bit
+    f.dev.write(mmio.REG_INTERRUPT_ACK, 4, 1);
     try expect(!f.dev.irqLevel());
 }
 
@@ -432,7 +415,7 @@ test "a descriptor pointing outside guest RAM stops the queue and asks for reset
     f.pushAvail(EVQ, EV_AVAIL_GPA, 0);
 
     f.dev.key(30, true);
-    try expect(f.dev.read(STATUS, 4) & STATUS_NEEDS_RESET != 0);
+    try expect(f.dev.read(mmio.REG_STATUS, 4) & STATUS_NEEDS_RESET != 0);
     try expect(f.dev.dropped > 0);
 }
 
@@ -444,7 +427,7 @@ test "status chains are retired, so a driver's status queue never stalls" {
     try f.bringUp();
     f.setDesc(ST_DESC_GPA, 0, ST_BUF_GPA, EVENT_BYTES, 0, 0);
     f.pushAvail(STQ, ST_AVAIL_GPA, 0);
-    f.dev.write(QUEUE_NOTIFY, 4, STQ);
+    f.dev.write(mmio.REG_QUEUE_NOTIFY, 4, STQ);
     try expectEqual(@as(u16, 1), f.usedIdx(ST_USED_GPA));
 }
 
@@ -459,7 +442,7 @@ test "a reset clears the selector but keeps the drop count" {
     const dropped = f.dev.dropped;
     try expect(dropped > 0);
 
-    f.dev.write(STATUS, 4, 0);
+    f.dev.write(mmio.REG_STATUS, 4, 0);
     // A re-probing driver starts from an unset selector rather than inheriting
     // the previous driver's answer…
     try expectEqual(@as(u32, 0), f.dev.read(CFG_SIZE, 1));

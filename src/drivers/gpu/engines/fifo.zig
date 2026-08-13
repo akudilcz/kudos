@@ -7,13 +7,13 @@
 //! purely via CPU writes (GPFIFO entry, USERD GP_PUT, BAR0 doorbell).
 
 const std = @import("std");
-const log = @import("../base/log.zig").gpu;
+const log = @import("../rm/log.zig").gpu;
 const gsp = @import("../gsp/gsp.zig");
 const rm = @import("../gsp/rm.zig");
-const nvrm = @import("../base/nvrm.zig");
+const nvrm = @import("../rm/nvrm.zig");
 const vram = @import("vram.zig");
 const gmmu = @import("gmmu.zig");
-const shim = @import("../base/shim.zig");
+const shim = @import("../rm/shim.zig");
 const tsc = @import("../../../kernel/cpu/tsc.zig");
 const hostpush = @import("hostpush");
 const ce = @import("ce.zig");

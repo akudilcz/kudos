@@ -355,8 +355,10 @@ echo
 echo "▸ mutation gate (regression tests must be able to fail)"
 scripts/tests/mutcheck.sh
 
-# ── 4. The remaining stamped tracks, cheapest first.
-for t in gltf-validate agent-pipeline compile-run stackframes; do
+# ── 4. The remaining stamped tracks, cheapest first. cube-run follows compile-run
+#       so the two ISO tracks are adjacent: it is the only one built -Dsoft-display,
+#       and the QEMU suite below rebuilds its own image regardless.
+for t in gltf-validate agent-pipeline compile-run cube-run stackframes; do
     echo
     echo "▸ $t"
     if fresh_pass "$t"; then

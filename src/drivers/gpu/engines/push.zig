@@ -11,7 +11,7 @@
 //! for methods 4 bytes apart.
 
 const vram = @import("vram.zig");
-const mmio = @import("../base/mmio.zig");
+const mmio = @import("../rm/mmio.zig");
 
 const OPCODE_METHOD: u32 = 0; // 31:29 = 0
 const OPCODE_NONINC: u32 = 2 << 29;

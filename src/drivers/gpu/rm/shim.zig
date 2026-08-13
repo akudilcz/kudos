@@ -163,7 +163,7 @@ pub var keepalive_hook: *const fn () void = &keepaliveTrio;
 fn keepaliveTrio() void {
     netdebug.drain();
     net.pump();
-    fileserv.service();
+    fileserv.step();
 }
 
 /// Run the wait-time network keepalive. The GPU group's long paths (delayUs

@@ -33,9 +33,9 @@ Rules encoded here:
   - Window-opening commands run on BOTH tracks (the window + WM records exist
     without a GPU; only the rendered pixels need the 4090) — pixel-level and
     present-timing assertions stay passthrough-only.
-  - `net` beyond argument-validation is emulated-loose/passthrough-real: the
-    QEMU user NIC answers DHCP so `net ip` reports up, but DNS/ping reach the
-    outside world, so only their usage lines are asserted unconditionally.
+  - network commands beyond argument-validation are emulated-loose/passthrough-
+    real: the QEMU user NIC answers DHCP so `ip` reports up, but host/ping reach
+    the outside world, so only their usage lines are asserted unconditionally.
 """
 
 from collections import namedtuple
@@ -48,25 +48,45 @@ CASES = [
         "help            this list",
         "clear           clear the screen",
         "echo TEXT       print TEXT",
+        "pwd             print the working directory",
         "cd [PATH]",
-        "ls [PATH]",
-        "cat PATH        print a file",
+        "ls [PATH...]",
+        "cat FILE...     print files",
+        "grep PAT",
+        "wc [FILE...]",
+        "head [-n N]",
+        "cp SRC... DEST  copy files",
+        "mv SRC... DEST  move files",
+        "mkdir DIR...",
         "lspci           list pci devices",
-        "net SUBCOMMAND  network: ip | dns NAME | ping HOST | fetch URL [NAME]",
-        "mem             free / total RAM",
+        "ip [addr|route]",
+        "ping HOST       four ICMP echo requests",
+        "host NAME       resolve a hostname",
+        "curl [-o F] URL",
+        "free            physical RAM",
         "ps              list cores",
-        "prime N         load THIS core",
-        "rt N            real-time task on THIS core",
-        "term            open a new terminal app",
-        "system          open the system monitor app",
-        "show PATH [max] open a spinning 3D model window",
-        "ai [PROMPT]     talk to the AI agent",
-        "compile SRC [N] compile a .zig file",
+        "uname [-a]",
+        "uptime          time since boot",
+        "kudos SUB       everything kudos-specific",
+        "CMD | CMD",
         "F12             open a new terminal",
-        "flipstat        re-arm the present-cadence sample",
         "exit            close this terminal window",
         "reboot          restart the machine",
     ), "both"),
+
+    # ── the kudos group: its own usage lists every subcommand ───────────
+    Case("kudos", (
+        "usage: kudos SUBCOMMAND",
+        "kudos ai",
+        "kudos compile",
+        "kudos vm",
+        "kudos show",
+        "kudos flipstat",
+        "kudos run NAME",
+        "kudos prime N",
+        "kudos rt N",
+    ), "both"),
+    Case("kudos bogus", ("kudos: 'bogus' is not a kudos command",), "both"),
 
     # ── echo ────────────────────────────────────────────────────────────
     Case("echo integration-ok", ("integration-ok",), "both"),
@@ -88,10 +108,27 @@ CASES = [
     # The refusals: no file named, and a local command that cannot redirect
     # (it runs on the terminal's own core, with no cwd to resolve a path against).
     Case("echo nowhere >", ("'>' needs a file to write to",), "both"),
-    Case("prime 2 > out.txt", ("cannot redirect to a file",), "both"),
+    Case("kudos prime 2 > out.txt", ("cannot pipe or redirect",), "both"),
+
+    # ── pipes: stage output feeds the next stage's stdin ────────────────
+    Case("echo pipe-source | grep pipe", ("pipe-source",), "both"),
+    Case("echo pipe-source | grep absent-needle | wc", ("      0       0       0",), "both"),
+    Case("help | head -n 1", ("commands:",), "both"),
+    Case("ls | ", ("syntax error near '|'",), "both"),
+    Case("grep needle", ("grep: no input",), "both"),
+
+    # ── globs: file arguments expand, text stays text ───────────────────
+    Case("echo glob-content > globbed.txt", (), "both"),
+    Case("cat glob*.txt", ("glob-content",), "both"),
+    Case("ls *.txt", ("globbed.txt",), "both"),
+    # No match passes the word through, so the error names what was typed.
+    Case("cat zz*qq", ("cat: no such file",), "both"),
 
     # ── memory ──────────────────────────────────────────────────────────
-    Case("mem", ("free ", "MiB / ", "MiB total"), "both"),
+    Case("free", ("total        used        free", "Mem:"), "both"),
+    Case("uname -a", ("kudos #",), "both"),
+    Case("uptime", ("up ", " cores"), "both"),
+    Case("pwd", ("/ramdisk",), "both"),
 
     # ── PCI: assert the emulated devices BY ID (vendor:device + class) ──
     Case("lspci", (
@@ -138,7 +175,7 @@ CASES = [
     # success line prints only after the path resolved ON /usbdisk and the bytes
     # decoded as a PNG — the error arms above it print instead when either fails.
     # Proven on boot-1 (emulated): "OK 'background /usbdisk/pic.png'".
-    Case("background /usbdisk/pic.png", ("background: /usbdisk/pic.png",), "both"),
+    Case("kudos background /usbdisk/pic.png", ("background: /usbdisk/pic.png",), "both"),
 
     Case("cd /usbdisk", (), "both"),
     Case("cd", ("/usbdisk",), "both"),        # no-arg cd prints cwd → proves it
@@ -154,8 +191,8 @@ CASES = [
     # the reqtrace ratchet, deliberately uncited. (Naming its ID here would
     # read as a citation to the trace gate, which cannot tell a discussion of
     # a requirement from a claim to verify it.)
-    Case("run", ("usage: run",), "both"),
-    Case("run no-such-app", ("run: ",), "both"),
+    Case("kudos run", ("usage: kudos run",), "both"),
+    Case("kudos run no-such-app", ("run: ",), "both"),
     # AGT-009: an agent-generated app (AGT-008) that faults is contained to its own
     # session. `run crashy` executes a REAL .kudos module staged on the stick and
     # faults inside it; the very next command proves this session still answers —
@@ -165,15 +202,15 @@ CASES = [
     # used to be cited only from a K-risk-level table row in layering.sh, which
     # says a group's blast radius is K3 and bears on nothing — the requirement
     # read as covered while its one piece of live evidence sat uncited.
-    Case("run crashy", (), "both"),
+    Case("kudos run crashy", (), "both"),
     Case("echo alive-after-crash", ("alive-after-crash",), "both"),
 
     # APP-005: the shell exposes the event counters too, not only tasks/memory/
     # PCI — `stats PREFIX` filters the same registry KMR1's OP_STATS dumps, and
     # is the view for a machine with no collector attached. A prefix that
     # matches nothing must say so rather than printing an empty success.
-    Case("stats net.", ("net.", " = "), "both"),
-    Case("stats zz.nothing", ("no matching counters",), "both"),
+    Case("kudos stats net.", ("net.", " = "), "both"),
+    Case("kudos stats zz.nothing", ("no matching counters",), "both"),
 
     # ── caps (MOD-011): what a loaded .kudos module may bind on THIS machine.
     # The declared set lives in abi.zig, which the factory serves to whoever is
@@ -181,14 +218,14 @@ CASES = [
     # machine will actually hand back, and to which kind of run. Asserted: both
     # published capabilities, the grant marks, and the deny-by-default statement —
     # a module reading a short list needs to know it is a decision.
-    Case("caps", (
+    Case("kudos caps", (
         "published capabilities",
         "window    id 1 v1",
         "metrics   id 6 v1",
         "taskctl   id 10 v1",
         "anything not listed is refused",
     ), "both"),
-    Case("caps extra-arg", ("usage: caps",), "both"),
+    Case("kudos caps extra-arg", ("usage: kudos caps",), "both"),
 
     # DIAG-001: the system reports its own health and state — mem and ps
     # must answer with real numbers on every track.
@@ -201,32 +238,33 @@ CASES = [
     Case("ps", ("#0", "system", "#1", "terminal"), "smp"),
 
     # ── network ──────────────────────────────────────────────────────────
-    # APP-004: the shell ships network diagnostics — ip / dns / ping / fetch.
-    Case("net ip", ("network:",), "both"),          # up (slirp/tap) or loud DOWN
-    Case("net bogus", ("net: unknown subcommand 'bogus'",), "both"),
-    Case("net dns", ("usage: net dns NAME",), "both"),
-    Case("net ping", ("usage: net ping HOST",), "both"),
+    # APP-004: the shell ships network diagnostics — ip / host / ping / curl.
+    Case("ip", ("net0:",), "both"),                 # <UP,...> (slirp/tap) or loud <DOWN>
+    Case("ip bogus", ("usage: ip [addr|route]",), "both"),
+    Case("host", ("usage: host NAME",), "both"),
+    Case("ping", ("usage: ping HOST",), "both"),
+    Case("curl", ("usage: curl [-o FILE] URL",), "both"),
 
     # ── local commands: CPU load + real-time (usage + real run) ─────────
-    Case("prime 5000", (
+    Case("kudos prime 5000", (
         "prime: searching this core for a prime >= 5000",
         "prime: found",
         "primes scanned",
     ), "both"),
-    Case("prime", ("usage: prime N",), "both"),
-    Case("prime abc", ("usage: prime N",), "both"),
-    Case("rt 5", (
+    Case("kudos prime", ("usage: kudos prime N",), "both"),
+    Case("kudos prime abc", ("usage: kudos prime N",), "both"),
+    Case("kudos rt 5", (
         "rt: 10 Hz, 5 periods",
         "rt: jitter min/mean/max",
         "ns; drift = ",
         "us over 5 periods",
     ), "both"),
-    Case("rt", ("usage: rt N",), "both"),
+    Case("kudos rt", ("usage: kudos rt N",), "both"),
 
     # ── show: argument validation everywhere; window-opening on both ────
-    Case("show", ("usage: show PATH [max]",), "both"),
-    Case("show motd.txt", ("is not a .glb model",), "both"),
-    Case("show nope.glb", ("not found in the cwd, /ramdisk, or /usbdisk",), "both"),
+    Case("kudos show", ("usage: kudos show PATH [max]",), "both"),
+    Case("kudos show motd.txt", ("is not a .glb model",), "both"),
+    Case("kudos show nope.glb", ("not found in the cwd, /ramdisk, or /usbdisk",), "both"),
 
     # ── flipstat: loud error when there is nothing to measure ───────────
     # Two distinct reasons it cannot sample, and the shell names the one that is
@@ -234,11 +272,11 @@ CASES = [
     # ever published the re-arm hook — and saying "rebuild with -Dflip-sample" there
     # would be a lie, because that build would not help either. (Boot 2 has the real
     # 4090 and builds WITH -Dflip-sample; the driver re-arms for its 60 Hz test.)
-    Case("flipstat", ("error: no GPU present path is running",), "emulated"),
+    Case("kudos flipstat", ("error: no GPU present path is running",), "emulated"),
 
-    # ── unknown command ─────────────────────────────────────────────────
+    # ── unknown command: bash's wording ─────────────────────────────────
     Case("definitelynotacommand",
-         ("error: unknown command 'definitelynotacommand' (try 'help')",), "both"),
+         ("definitelynotacommand: command not found",), "both"),
 ]
 
 # Destructive / session-mutating — never in CASES. Drivers run these as explicit

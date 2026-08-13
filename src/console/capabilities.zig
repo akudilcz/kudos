@@ -3,11 +3,10 @@
 //! machine side — the adapters that front a kudos contract in C-ABI terms.
 //!
 //! In console/, not with the loader: an adapter names the desktop mailboxes, the
-//! counter registry, the scheduler, the file system. `src/kernel/` may not reach
-//! up into those, so a registry under `kernel/loader/` could only publish what
-//! needs no system around it. The loader verifies, places and jumps;
-//! `apprun.zig` builds the `Api`; this answers what that `Api` asks outward, and
-//! `hotload.zig` is handed the same answer for a feature.
+//! counter registry, the scheduler and the file system, and `src/kernel/` may not
+//! reach up into those. The loader verifies, places and jumps; `apprun.zig` builds
+//! the `Api`; this answers what that `Api` asks outward, and `hotload.zig` is
+//! handed the same answer for a feature.
 //!
 //! Every adapter: a module runs in a session address space on its own core
 //! (MOD-006) while the desktop and the GL context live on core 0, so no module
@@ -306,11 +305,12 @@ const vfs_vtable = abi.VfsApi{
 // ── work modules park for the system core ─────────────────────────────────────
 
 /// Perform whatever a module has parked, on the core that owns the thing it
-/// needs. Called from the steady loop (boot/pump.zig), never from a module's
-/// core: `NetApi.fetch_begin` parks a URL, and the network stack belongs to core
-/// 0. One bounded step per call — the transfer itself advances on the stack's own
-/// background path, so a download never stalls a frame.
-pub fn service() void {
+/// needs. A row in the steady loops' service table (boot/services.zig), never
+/// stepped from a module's core: `NetApi.fetch_begin` parks a URL, and the
+/// network stack belongs to core 0. One bounded step per call — the transfer
+/// itself advances on the stack's own background path, so a download never
+/// stalls a frame.
+pub fn step() void {
     if (inet.takeModuleFetchRequest()) |req| startModuleFetch(req);
 }
 

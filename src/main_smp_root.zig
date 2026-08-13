@@ -69,7 +69,6 @@ export fn kmain(mb_info: u64) callconv(.c) noreturn {
 fn runMinimal(mb_info: u64) noreturn {
     // Self-sufficient: this scaffold bypasses main.run() entirely, so it owns its
     // own trace bring-up.
-    klog.init();
     klog.installLogSink();
     klog.puts("MIN: minimal SMP path\n");
 

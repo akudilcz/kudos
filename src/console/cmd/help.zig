@@ -7,41 +7,43 @@ const HELP =
     \\  help            this list
     \\  clear           clear the screen
     \\  echo TEXT       print TEXT
+    \\  pwd             print the working directory
     \\  cd [PATH]       change directory (no arg: print it); / holds the mounts
-    \\  ls [PATH]       list a directory (default: the current one; alias: dir)
-    \\  cat PATH        print a file
-    \\  rm PATH         delete a file
-    \\  lspci           list pci devices
-    \\  net SUBCOMMAND  network: ip | dns NAME | ping HOST | fetch URL [NAME]
-    \\  mem             free / total RAM
+    \\  ls [PATH...]    list a directory (default: the current one)
+    \\  cat FILE...     print files
+    \\  head [-n N] [F] first N lines (default 10) of a file or the pipe
+    \\  grep PAT [F...] lines containing PAT, from files or the pipe (fixed string)
+    \\  wc [FILE...]    line, word and byte counts
+    \\  touch FILE...   create empty files
+    \\  cp SRC... DEST  copy files
+    \\  mv SRC... DEST  move files
+    \\  rm FILE...      delete files
+    \\  mkdir DIR...    create directories
+    \\  rmdir DIR...    remove empty directories
+    \\  ip [addr|route] the leased address configuration
+    \\  ping HOST       four ICMP echo requests
+    \\  host NAME       resolve a hostname
+    \\  curl [-o F] URL HTTP GET; print the body, or save it with -o
+    \\  free            physical RAM, and what the sessions hold
     \\  ps              list cores, their CPU %, and the tasks on each
-    \\  prime N         load THIS core: find primes until one >= N (bigger N = longer)
-    \\  rt N            real-time task on THIS core: N periods at 10 Hz, reports jitter/drift
-    \\  term            open a new terminal app
-    \\  system          open the system monitor app
-    \\  clock           open the analog clock app
-    \\  calc            open the graphing calculator app
-    \\  background PATH change the desktop background (.png, e.g. from /usbdisk)
-    \\  show PATH [max] open a spinning 3D model window (.glb; max: maximised)
-    \\  vm [N]          guest VMs: N boots image N | list | status | stop ID
-    \\  ai [PROMPT]     talk to the AI agent (or /help inside for its commands)
-    \\  compile SRC [N] compile a .zig file into a .kudos app named N
-    \\  run NAME        run a loaded .kudos application module
-    \\  caps            what a .kudos module may bind: the published capabilities
-    \\  feature SUB     manage loaded .kudos feature modules (feature help)
-    \\  flipstat        re-arm the present-cadence sample (-Dflip-sample builds):
-    \\                  measures the CURRENT scene, verdict over netdebug in ~13 s
-    \\  stats [PREFIX]  diagnostics counters (all, or only keys starting with PREFIX)
-    \\  exit            close this terminal window
+    \\  lspci           list pci devices
+    \\  uname [-a]      what this machine runs
+    \\  uptime          time since boot
+    \\  kudos SUB       everything kudos-specific: ai, compile, run, vm, caps,
+    \\                  feature, show, stats, flipstat, background, term, system,
+    \\                  clock, calc, prime, rt  (`kudos` alone lists them)
     \\  shutdown        power the machine off
     \\  reboot          restart the machine
+    \\  exit            close this terminal window
     \\
-    \\redirection (any command above):
+    \\pipes and files (any command above):
+    \\  CMD | CMD       the left command's output is the right one's input
     \\  CMD > FILE      write the output to FILE instead of the screen
     \\  CMD >> FILE     add the output to the end of FILE
     \\                  so a program can be typed and then compiled:
     \\                  echo const abi = @import("abi.zig"); > app.zig
     \\                  echo pub fn main(api: *const abi.Api) i32 { >> app.zig
+    \\  *  ?            glob in file arguments (ls *.zig); text elsewhere
     \\
     \\shortcuts (work anywhere):
     \\  F12             open a new terminal

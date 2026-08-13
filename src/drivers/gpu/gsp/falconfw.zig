@@ -7,7 +7,7 @@
 //! falcon image, locate the code/data segments + signature so they can be DMAed
 //! into the falcon. Verifiable on HW: the booter image magic is 0x10de.
 
-const log = @import("../base/log.zig").gpu;
+const log = @import("../rm/log.zig").gpu;
 
 /// `struct nvfw_bin_hdr` (nvfw/fw.h). bin_magic for NVIDIA images is 0x10de.
 pub const BinHdr = extern struct {

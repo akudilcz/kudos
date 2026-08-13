@@ -141,7 +141,7 @@ def type_line(client, text):
 
 def scoped_mirror(cmd):
     mirror = cases.mirror_text(read_capture(), core=0)
-    idx = mirror.rfind(f"> {cmd}")
+    idx = mirror.rfind(f"$ {cmd}")
     if idx == -1:
         return None
     nl = mirror.find("\n", idx)

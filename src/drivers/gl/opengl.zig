@@ -39,14 +39,14 @@
 //! even with the scratch shared across contexts.
 
 const std = @import("std");
-const log = @import("../gpu/base/log.zig").gpu;
+const log = @import("../gpu/rm/log.zig").gpu;
 const tsc = @import("../../kernel/cpu/tsc.zig");
 const gsp = @import("../gpu/gsp/gsp.zig");
-const fifo = @import("../gpu/core/fifo.zig");
-const gmmu = @import("../gpu/core/gmmu.zig");
-const vram = @import("../gpu/core/vram.zig");
-const shim = @import("../gpu/base/shim.zig");
-const ce = @import("../gpu/core/ce.zig");
+const fifo = @import("../gpu/engines/fifo.zig");
+const gmmu = @import("../gpu/engines/gmmu.zig");
+const vram = @import("../gpu/engines/vram.zig");
+const shim = @import("../gpu/rm/shim.zig");
+const ce = @import("../gpu/engines/ce.zig");
 const present = @import("../gpu/present/present.zig");
 const counter = @import("../../kernel/debug/counter.zig");
 const hostpush = @import("hostpush");

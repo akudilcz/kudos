@@ -201,6 +201,10 @@ pub fn start() bool {
     // drivers/): compliant spins pump this drain while they wait, and the deadman's
     // wedge report gets a best-effort push onto the wire from the timer interrupt.
     spinwait.pump = &drain;
+    // The CPU fault handler's one chance to get a crash record off the box:
+    // it must not name this driver (it is K1, this is K2), so the transport
+    // announces itself here — the same shape as the boot-log sink.
+    klog.setCrashFlush(&flushNow);
     deadman.distress = &distressFlush;
     // Build-identity banner: the first captured netdebug line ties the whole trace
     // to a known image, so a reader (or the netdebug MCP server) never analyses a
@@ -367,8 +371,8 @@ var pkt: [DATAGRAM_CAP]u8 = undefined;
 /// Packs multiple lines per datagram exactly like drain().
 pub fn flushNow() void {
     if (!enabled) return;
-    tx_busy = true;
-    defer tx_busy = false;
+    @atomicStore(bool, &tx_busy, true, .release);
+    defer @atomicStore(bool, &tx_busy, false, .release);
     // Sealed crash records first: on the terminal reboot path this call IS the
     // crash record's one chance to leave the box.
     shipCrashRecords();
@@ -386,9 +390,18 @@ pub fn flushNow() void {
 
 /// Normal-context transmit in progress — the flag the IRQ-context distress path
 /// checks so it never re-enters the NIC TX path mid-send. Set by drain()/flushNow()
-/// around their emit loops; same-core interrupts are the only concurrency (drain is
-/// a core-0 loop facility), so a plain bool read/write is race-free.
+/// around their emit loops. drain() runs from the steady loop OR the net
+/// wait-hook on a fetching task (one at a time via drain_busy), and the deadman
+/// fires on whatever core wedged — so this crosses cores and is read/written
+/// atomically.
 var tx_busy: bool = false;
+
+/// A drain pass in progress. drain() is called from the steady session loop AND
+/// from the net wait-hook inside a fetching task's blocking loops — different
+/// cores — and everything it touches (the heartbeat clock, the `pkt` staging,
+/// the two-phase fill/advance) is single-driver state. The loser of this
+/// try-lock skips: the winner is draining the same store for both of them.
+var drain_busy: bool = false;
 
 /// The deadman's best-effort wire push, called FROM THE TIMER INTERRUPT when a core
 /// has wedged (kernel/debug/deadman.zig). This is the one deliberate exception to
@@ -397,7 +410,7 @@ var tx_busy: bool = false;
 /// Guarded: skipped entirely if a normal-context send was interrupted mid-flight
 /// (tx_busy), bounded by the FIFO content, at most once per deadman report pace.
 fn distressFlush() void {
-    if (tx_busy) return;
+    if (@atomicLoad(bool, &tx_busy, .acquire)) return;
     flushNow();
 }
 
@@ -528,8 +541,11 @@ pub fn drain() void {
     // here is exactly a wedged loop (kernel/debug/deadman.zig). This is the
     // drain-pump SERVICE's own liveness (the task floats across cores — its
     // location is recorded only so the report can say where it last ran);
-    // per-CORE liveness is fed by the scheduler itself.
+    // per-CORE liveness is fed by the scheduler itself. Deliberately OUTSIDE
+    // the try-lock: a caller that lost the race is still a live loop.
     deadman.alivePump(percpu.indexOrZero());
+    if (@cmpxchgStrong(bool, &drain_busy, false, true, .acq_rel, .acquire) != null) return;
+    defer @atomicStore(bool, &drain_busy, false, .release);
     heartbeat(); // BEFORE the empty early-out: an idle kernel must still prove it lives
     if (store.pending() == 0 and !crashlog.pending()) return;
     if (collector == null and pathProven() and timer.millis() -% path_proven_ms < COLLECTOR_WAIT_MS) return;
@@ -538,16 +554,16 @@ pub fn drain() void {
     // valuable bytes this module ever carries — a contained core's record must
     // not idle behind the interval gate.
     if (crashlog.pending()) {
-        tx_busy = true;
+        @atomicStore(bool, &tx_busy, true, .release);
         shipCrashRecords();
-        tx_busy = false;
+        @atomicStore(bool, &tx_busy, false, .release);
     }
     if (store.pending() == 0) return;
     const now = timer.millis();
     if (now - last_drain_ms < DRAIN_INTERVAL_MS) return;
     last_drain_ms = now;
-    tx_busy = true; // the distress path must not re-enter the NIC mid-send
-    defer tx_busy = false;
+    @atomicStore(bool, &tx_busy, true, .release); // the distress path must not re-enter the NIC mid-send
+    defer @atomicStore(bool, &tx_busy, false, .release);
     // GENTLE while a frame-cadence sample is recording: one datagram per tick, never
     // a burst. A big one-shot catch-up (e.g. the whole boot backlog shipping the
     // instant an async DHCP lease binds — which lands right at the first present) can

@@ -29,6 +29,7 @@ const fat = @import("drivers/storage/fat.zig");
 const bootlog = @import("drivers/storage/bootlog.zig");
 const usbshot = @import("drivers/gpu/usbshot.zig");
 const net = @import("drivers/net/stack/net.zig");
+const netapi = @import("drivers/net/stack/netapi.zig");
 const netdebug = @import("drivers/net/debug/netdebug.zig");
 const fileserv = @import("drivers/net/debug/fileserv.zig");
 const agenttools = @import("console/agenttools.zig");
@@ -45,7 +46,7 @@ const typeface = @import("typeface"); // the scalable face the HUD sets its figu
 const smp = @import("kernel/smp/smp.zig");
 const sched = @import("kernel/sched/sched.zig");
 const jobs = @import("kernel/sched/jobs.zig");
-const verifyscript = @import("console/verifyscript.zig");
+const verifyscript = @import("boot/verifyscript.zig");
 const cpu = @import("kernel/cpu/cpu.zig");
 const tsc = @import("kernel/cpu/tsc.zig");
 const counter = @import("kernel/debug/counter.zig");
@@ -60,6 +61,7 @@ const power = @import("kernel/power/reboot.zig");
 const dbg = @import("kernel/debug/debug.zig");
 const iaccel = @import("iaccel"); // the GPU-acceleration seam (iface/iaccel.zig)
 const pump = @import("boot/pump.zig");
+const services = @import("boot/services.zig");
 
 extern var __kernel_start: u8;
 extern var __kernel_end: u8;
@@ -112,10 +114,10 @@ const DHCP_RETRY_GAP_MS: u64 = 6_000;
 fn bootPump() void {
     netdebug.drain();
     net.pump();
-    fileserv.service();
+    fileserv.step();
 }
 
-/// Guards netKeepalive against re-entry: fileserv.service() can act on a queued
+/// Guards netKeepalive against re-entry: fileserv.step() can act on a queued
 /// request (a spawn, a reboot) and must never recurse back through a net wait.
 var in_keepalive: bool = false;
 
@@ -131,7 +133,7 @@ fn netKeepalive() void {
     in_keepalive = true;
     defer in_keepalive = false;
     netdebug.drain();
-    fileserv.service();
+    fileserv.step();
 }
 
 // -Dheartbeat run length. 30 s is long enough that a 1 Hz host driver collects
@@ -246,7 +248,6 @@ pub fn run(mb_info: u64) noreturn {
     // computed at the first present, by which time tsc.hz() is known.
     tsc.boot_entry_tsc = tsc.rdtsc();
 
-    klog.init();
     klog.installLogSink(); // leaf UI modules log via iface/ilog.zig
     crashlog.init(); // register the crash-record counters (fatal paths only bump)
     klog.puts("hello from kudos kernel (64-bit)\n");
@@ -325,7 +326,7 @@ pub fn run(mb_info: u64) noreturn {
     // apprun refuses the run rather than executing a module uncontained.
     if (buildinfo.smp) session.publishSandbox();
     net.wait_hook = &netKeepalive; // a long fetch must not blind netdebug/KMR1 (see netKeepalive)
-    net.publish(); // apps reach the network through iface/inet.zig, never the stack itself
+    netapi.publish(); // apps reach the network through iface/inet.zig, never the stack itself
     devices.publish(); // …and the peripherals through iface/idevices.zig
     vfs.mount("ramdisk", ramdisk.fileSys()); // /ramdisk (vfs.zig; /usbdisk joins with USB storage)
 
@@ -336,7 +337,7 @@ pub fn run(mb_info: u64) noreturn {
 
     // Hand the GPU module the boot-info pointer so the GSP boot can locate the
     // firmware boot modules (no device work here).
-    gpu.init(mb_info);
+    gpu.configure(mb_info);
 
     klog.puts("boot: idt+pic+timer+kbd\n");
     idt.init();
@@ -422,16 +423,16 @@ pub fn run(mb_info: u64) noreturn {
         // phase that has hung a real machine. A lost first DISCOVER is covered by the
         // bounded retry loop. This latency is the price of trying first — paid only by
         // -Dheartbeat.
-        var lease = net.init();
+        var lease = net.init() catch false;
         var tries: u32 = 1;
-        while (!lease and tries < DHCP_ATTEMPTS) : (tries += 1) {
+        while (lease == false and tries < DHCP_ATTEMPTS) : (tries += 1) {
             var waited: u64 = 0;
             while (waited < DHCP_RETRY_GAP_MS) : (waited += 100) {
                 netdebug.drain();
                 timer.sleep(100);
             }
             klog.puts("net: dhcp retry\n");
-            lease = net.init();
+            lease = net.init() catch false;
         }
         if (lease) {
             klog.puts("net: up, lease ");
@@ -538,6 +539,9 @@ pub fn run(mb_info: u64) noreturn {
     // No-op if the 4090 / firmware aren't present.
     iaccel.compositor.pump = &pump.desktopPump;
     iaccel.compositor.poll_input = &pump.pollInputOnly;
+    // The GPU session loop steps the SAME service table this loop does — one
+    // list, reached through the seam because a driver may not import the apex.
+    iaccel.compositor.service = &services.serviceHook;
 
     // Keep kudos reachable THROUGH enumeration. xhci runs before the steady loop,
     // so without this it neither ships telemetry nor answers KMR1 while it works —

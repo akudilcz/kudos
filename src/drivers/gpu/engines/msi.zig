@@ -15,7 +15,7 @@
 const pci = @import("../../pci/pci.zig");
 const isr = @import("../../../kernel/interrupts/isr.zig");
 const lapic = @import("../../../kernel/apic/lapic.zig");
-const calc = @import("../base/calc.zig");
+const calc = @import("../rm/calc.zig");
 
 const MSI_CAP_ID: u8 = 0x05;
 

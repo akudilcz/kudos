@@ -3,9 +3,9 @@
 //! halt) and never returns.
 
 const std = @import("std");
-const io = @import("../../drivers/io/io.zig");
-const ps2 = @import("../../drivers/io/ps2.zig");
-const wait = @import("../../drivers/io/wait.zig");
+const io = @import("../io/io.zig");
+const ps2 = @import("../io/ps2.zig");
+const wait = @import("../io/wait.zig");
 const tsc = @import("../cpu/tsc.zig");
 const cpu = @import("../cpu/cpu.zig");
 

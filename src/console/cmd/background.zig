@@ -12,7 +12,7 @@ const png = @import("modelcache").png;
 /// path; every failure is reported on the terminal.
 pub fn run(c: console.Console, args: []const u8) void {
     if (args.len == 0) {
-        c.write("usage: background PATH   (a .png, e.g. /usbdisk/pic.png)\n");
+        c.write("usage: kudos background PATH   (a .png, e.g. /usbdisk/pic.png)\n");
         return;
     }
     if (!std.mem.endsWith(u8, args, ".png")) {

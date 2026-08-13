@@ -64,6 +64,15 @@ pub const ModelView = struct {
         self.model = null;
     }
 
+    /// Release everything this window owns and free it (App.close). The mesh's
+    /// GL objects go back to the shared context first — the caller has already
+    /// completed any deferred frame, so nothing is sampling them.
+    pub fn close(self: *ModelView, a: std.mem.Allocator, g: ?*gles.Context) void {
+        if (g) |ctx| self.deinitGl(ctx);
+        self.deinit();
+        a.destroy(self);
+    }
+
     /// Passive view: no key handling.
     pub fn onKey(self: *ModelView, ascii: u8) void {
         _ = self;

@@ -105,7 +105,7 @@ def judge_tick_advance(ticks_before, ticks_after, wall_s, period_ms):
 
 
 def _selftest():
-    mirror = ("> rt 20\nrt: 10 Hz, 20 periods ...\n"
+    mirror = ("$ kudos rt 20\nrt: 10 Hz, 20 periods ...\n"
               "rt: jitter min/mean/max = 1200/45000/900000 ns; drift = 350 us over 20 periods\n")
     res = parse_rt(mirror)
     assert res == {"min_ns": 1200, "mean_ns": 45000, "max_ns": 900000,

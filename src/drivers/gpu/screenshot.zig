@@ -18,17 +18,17 @@
 //! (the one premultiplied-alpha implementation in the tree).
 
 const std = @import("std");
-const log = @import("base/log.zig").gpu;
+const log = @import("rm/log.zig").gpu;
 const gsp = @import("gsp/gsp.zig");
-const fifo = @import("core/fifo.zig");
-const gmmu = @import("core/gmmu.zig");
-const shim = @import("base/shim.zig");
-const ce = @import("core/ce.zig");
+const fifo = @import("engines/fifo.zig");
+const gmmu = @import("engines/gmmu.zig");
+const shim = @import("rm/shim.zig");
+const ce = @import("engines/ce.zig");
 const present = @import("present/present.zig");
 const surface = @import("surface");
 const ramdisk = @import("../storage/ramdisk.zig");
 const usbshot = @import("usbshot.zig");
-const pngenc = @import("base/pngenc.zig");
+const pngenc = @import("rm/pngenc.zig");
 const heap = @import("../../kernel/memory/heap.zig");
 const tsc = @import("../../kernel/cpu/tsc.zig");
 

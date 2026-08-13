@@ -14,18 +14,14 @@ const counter = @import("../kernel/debug/counter.zig");
 const keyboard = @import("../drivers/input/keyboard.zig");
 const imouse = @import("imouse");
 const xhci = @import("../drivers/usb/xhci.zig");
-const bootlog = @import("../drivers/storage/bootlog.zig");
 const net = @import("../drivers/net/stack/net.zig");
-const netdebug = @import("../drivers/net/debug/netdebug.zig");
 const fileserv = @import("../drivers/net/debug/fileserv.zig");
-const jobs = @import("../kernel/sched/jobs.zig");
 const smp = @import("../kernel/smp/smp.zig");
+const services = @import("services.zig"); // THE service table both steady loops step
 const virt = @import("../kernel/virt/virt.zig");
-const ivirt = @import("ivirt");
 const idesk = @import("idesk"); // the desktop-control seam: window requests in, the window list out
 const iwindow = @import("iwindow"); // module windows: create/close requests, focus
 const apprun = @import("../console/apprun.zig"); // detached windowed runs, reaped on this loop
-const capabilities = @import("../console/capabilities.zig"); // what modules parked for the system core
 const power = @import("../kernel/power/reboot.zig");
 const framebuffer = @import("../ui/screen/framebuffer.zig");
 const hud = @import("../ui/desktop/hud.zig");
@@ -52,12 +48,6 @@ pub var desktop: *Desktop = undefined;
 // See systemLoop.
 const REPAINT_PERIOD_MS: u64 = 50;
 const REPAINT_PERIOD_TICKS: u64 = REPAINT_PERIOD_MS * timer.TICK_HZ / 1000;
-
-// Boot-log drain cadence: a USB write a few times a second at most, keeping the
-// flight recorder off the hot path (bootlog.service only writes whole
-// accumulated sectors, no sync).
-const BOOTLOG_PERIOD_MS: u64 = 250;
-const BOOTLOG_PERIOD_TICKS: u64 = BOOTLOG_PERIOD_MS * timer.TICK_HZ / 1000;
 
 /// Open an application window by name — the desktop-side of the agent's
 /// application tool (AGT-006). Unknown names are an error the caller traces.
@@ -115,14 +105,14 @@ fn publishWindowList(d: *Desktop) void {
 }
 
 
+/// Open the application a person or an agent named. The agent window is the one
+/// name that is not an `AppKind` — it is a terminal opened straight into a
+/// conversation, so it has its own spawner; every other name is looked up in
+/// the contract's catalogue rather than re-spelled here.
 fn spawnByName(d: *Desktop, name: []const u8) !void {
-    const eql = std.mem.eql;
-    if (eql(u8, name, "ai")) return d.spawnAgent();
-    if (eql(u8, name, "term")) return d.spawnApp(.term);
-    if (eql(u8, name, "system")) return d.spawnApp(.system);
-    if (eql(u8, name, "clock")) return d.spawnApp(.clock);
-    if (eql(u8, name, "calc")) return d.spawnApp(.calc);
-    return error.UnknownApp;
+    if (std.mem.eql(u8, name, "ai")) return d.spawnAgent();
+    const kind = idesk.AppKind.fromName(name) orelse return error.UnknownApp;
+    return d.spawnApp(kind);
 }
 
 /// Drain the keyboard + mouse rings into the desktop; returns true when
@@ -165,11 +155,11 @@ fn dispatchInput(d: *Desktop) bool {
         applyWindowAction(d, req);
         changed = true;
     }
-    // A loaded module asked for its window (MOD-012), or is done with it. Both
-    // are drained here — the desktop's core — because the window list is the
-    // desktop's; the module is meanwhile spinning in DrawApi.open (bounded) or
-    // already returning. A spawn failure is traced, and the module's wait times
-    // out into a refused open rather than hanging on silence.
+    // A loaded module asked for a window (MOD-012), or is done with one. Both are
+    // drained here — the desktop's core — because the window list is the desktop's;
+    // the module is meanwhile spinning in `WindowApi.create` (bounded) or already
+    // returning. A spawn failure is traced, and the module's wait times out into a
+    // refused create rather than hanging on silence.
     if (iwindow.takeCreateRequest()) |req| {
         lifecycle.spawnBlobWindow(d, req) catch |e|
             klog.puts(std.fmt.bufPrint(&msg, "module window open failed: {s}\n", .{@errorName(e)}) catch "module window open failed\n");
@@ -182,10 +172,6 @@ fn dispatchInput(d: *Desktop) bool {
     // Give a finished detached run its session back (the run task set `done` as
     // its last act; the reap is cheap and idempotent).
     apprun.reapWindowed();
-    // Perform whatever a module parked for the system core: an HTTP fetch so far
-    // (Interface.net). Pumped here, serviced in console beside the capability
-    // that parks it — the same split fileserv uses.
-    capabilities.service();
     // Publish where a keystroke would land, for the remote injector that has to
     // know before it types — and tell a module window whether it is the one
     // holding focus (its `WindowApi.focused`).
@@ -304,30 +290,15 @@ pub fn systemLoop() noreturn {
     desktop.render();
     var loop_n: u64 = 0;
     var last_repaint: u64 = timer.now();
-    var last_bootlog: u64 = timer.now();
     while (true) {
         loop_n += 1;
 
-        // Netdebug metered drain: ship a bounded batch of queued log lines per
-        // tick once the link/lease proves the LAN path delivers. Net + USB are
-        // already up (brought up on the
-        // boot stack before the GPU session, which never returns on native).
-        netdebug.drain();
-        // netdebug servicing: RX is otherwise
-        // drained only inside blocking DHCP/DNS/TCP waits — pump here so host
-        // pull requests are seen, then answer any pending one.
-        net.pump();
-        jobs.pump(); // advance any backgrounded long task one bounded step (job.zig)
-        fileserv.service();
-        // Drain the boot-log RAM buffer to the stick in bulk, THROTTLED so a USB
-        // write happens at most a few times a second (not per frame): the write
-        // is off the trace hot path (feed only fills RAM) and rides the device
-        // cache (no per-write sync), so it never lags the loop.
-        const nowb = timer.now();
-        if (nowb -% last_bootlog >= BOOTLOG_PERIOD_TICKS) {
-            last_bootlog = nowb;
-            bootlog.service();
-        }
+        // Every background service, in one ordered pass (boot/services.zig):
+        // the trace drain, the network pump and its KMR1 replies, backgrounded
+        // jobs, the boot log, module capabilities, guest boot requests. The
+        // list lives there rather than here because the GPU session loop steps
+        // the same one — two hand-written lists had already diverged.
+        services.stepAll(.service);
         var changed = false;
 
         if (power.shutdown_requested) power.poweroff();
@@ -374,42 +345,11 @@ pub fn systemLoop() noreturn {
             cnt_soft_frame_us_peak.peak(us);
         }
 
-        // Single-core build: advance every live guest by one bounded slice, AFTER
-        // this pass's input, tick and render, so a guest can never push a present
-        // past its deadline (PERF-003) — it runs in what is left of the pass.
-        // A no-op on SMP, where each guest's vCPU is a scheduled task of its own.
-        virt.pumpAll();
-
-        // Boot requests (VIRT-019): a terminal's `vm boot [n]` posted one — the
-        // system task (the one owner of windows and VM slots) creates the guest
-        // and its console window here. The staged built-in (image 1) builds
-        // synchronously; a catalog image starts its HTTP fetch (a job this same
-        // loop pumps) and its window opens on `.fetching`. The guest's vCPU is
-        // spawned as an ordinary task and placed on whichever core is free
-        // (VIRT-021), so no core is named anywhere on this path.
-        if (ivirt.takeBootRequest()) |req| {
-            if (req.image <= 1) {
-                desktop.spawnApp(.vm) catch |e| {
-                    virt.setStartError(@errorName(e));
-                    klog.puts("virt: vm boot failed: ");
-                    klog.puts(@errorName(e));
-                    klog.puts("\n");
-                };
-            } else if (virt.netbootBegin(req.image)) |id| {
-                desktop.spawnVmWindow(id) catch |e| {
-                    virt.windowClosed(id);
-                    klog.puts("virt: vm image window failed: ");
-                    klog.puts(@errorName(e));
-                    klog.puts("\n");
-                };
-            } else |e| {
-                virt.setStartError(@errorName(e));
-                klog.puts("virt: vm image boot failed: ");
-                klog.puts(@errorName(e));
-                klog.puts("\n");
-            }
-        }
-        virt.pumpNetboot();
+        // The post-render slice: every live guest advances by one bounded slice
+        // AFTER this pass's input, tick and render, so a guest can never push a
+        // present past its deadline (PERF-003) — it runs in what is left of the
+        // pass. A no-op on SMP, where each guest's vCPU is a task of its own.
+        services.stepAll(.slice);
 
         // The only per-variant difference: an SMP core 0 yields so its other tasks
         // (terminals, cmd-worker) run; single-core has nothing else to run, so it
@@ -437,14 +377,14 @@ var g_last_render_us: u64 = 0;
 /// the pipelined start instead of slipping to the second vblank.
 const RENDER_START_SLACK_US: u64 = 2_000;
 
-/// The pre-reset flush behind power.flush_hook (STO-007): the two BUFFERED
-/// paths, emptied before the machine goes. File-system writes are not among
-/// them and need no hook — every FAT mutation ends in its own durability
-/// epilogue (fat.syncMeta), so a volume is already Linux-mountable at the
-/// instant each operation returns, power cut or not.
+/// The pre-reset flush behind power.flush_hook (STO-007): every buffered
+/// service emptied before the machine goes, plus the state of anything that
+/// was not healthy on the way out — both derived from the service table, in
+/// reverse order, so a service added there is flushed here without anyone
+/// remembering to say so.
 pub fn orderlyFlush() void {
-    netdebug.flushNow();
-    bootlog.flushNow();
+    services.traceStatus();
+    services.flushAll();
 }
 
 /// Poll USB + input WITHOUT rendering (iaccel.compositor.poll_input). The GPU

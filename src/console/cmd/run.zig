@@ -19,7 +19,7 @@ const sessionspace = @import("../../kernel/memory/sessionspace.zig");
 pub fn run(out: Out, args: []const u8) void {
     const name = std.mem.trim(u8, args, " \t");
     if (name.len == 0) {
-        out.str("usage: run <name>\n");
+        out.str("usage: kudos run <name>\n");
         return;
     }
 
@@ -45,7 +45,7 @@ pub fn run(out: Out, args: []const u8) void {
         return;
     };
 
-    // A terminal is watching, so this run MAY open its own window (Interface.draw).
+    // A terminal is watching, so this run gets the app_terminal grant.
     const rc = apprun.execute(out, blob, sessionspace.moduleRegion(sid), .{ .windowed = true }) catch |e| {
         out.str("run: ");
         out.str(apprun.reason(e));

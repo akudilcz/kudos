@@ -11,19 +11,19 @@
 
 const ipresent = @import("ipresent");
 const gsp = @import("../gsp/gsp.zig");
-const fifo = @import("../core/fifo.zig");
-const ce = @import("../core/ce.zig");
-const gmmu = @import("../core/gmmu.zig");
-const vram = @import("../core/vram.zig");
-const shim = @import("../base/shim.zig");
-const chan = @import("../core/chan.zig");
+const fifo = @import("../engines/fifo.zig");
+const ce = @import("../engines/ce.zig");
+const gmmu = @import("../engines/gmmu.zig");
+const vram = @import("../engines/vram.zig");
+const shim = @import("../rm/shim.zig");
+const chan = @import("../engines/chan.zig");
 const modeset = @import("../display/modeset.zig");
 const overlay_plane = @import("overlay_plane");
 const disp = @import("../display/disp.zig");
 const tsc = @import("../../../kernel/cpu/tsc.zig");
 const hostpush = @import("hostpush");
 const flip_pacing = @import("flip_pacing.zig");
-const Push = @import("../core/push.zig").Push;
+const Push = @import("../engines/push.zig").Push;
 
 /// The HW-blended overlay plane's flip handles, the
 /// odd window co-flipped with the desktop window when a glass window is routed to

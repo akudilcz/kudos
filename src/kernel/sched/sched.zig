@@ -298,7 +298,6 @@ pub fn spawnOn(core: u32, name: []const u8, entry: *const fn () void) !*Task {
 /// Tasks dropped because their bound core went offline (dispatch's affinity
 /// check) — a loss that must not be silent.
 var cnt_stranded = counter.Counter{ .mod = .sched, .name = "stranded_tasks" };
-var cnt_stranded_registered = false;
 
 // The kernel address space's CR3 (the boot trampoline's identity map), captured
 // at the first spawn — which always happens on the boot path or a kernel task,
@@ -337,13 +336,9 @@ pub fn spawnStacked(name: []const u8, entry: *const fn () void, stack: []u8) !*T
 /// value is a defect, not a statistic. The detection itself lives in the pure
 /// `stackcanary` module, where it is tested rather than trusted.
 var cnt_stack_overflow = counter.Counter{ .mod = .sched, .name = "stack.overflow" };
-var cnt_stack_overflow_registered = false;
 
 fn armCanary(stack: []u8) void {
-    if (!cnt_stack_overflow_registered) {
-        cnt_stack_overflow_registered = true;
-        counter.register(&cnt_stack_overflow);
-    }
+    counter.register(&cnt_stack_overflow); // idempotent (counter.zig)
     stackcanary.arm(stack);
 }
 
@@ -420,10 +415,7 @@ pub fn dispatch(t: *Task) void {
         // dead core's run_lock may be held forever by the fault that killed
         // it). Count the loss loudly instead of queueing into a corpse.
         if ((online & placement.bit(a)) == 0) {
-            if (!cnt_stranded_registered) {
-                cnt_stranded_registered = true;
-                counter.register(&cnt_stranded);
-            }
+            counter.register(&cnt_stranded); // idempotent (counter.zig)
             cnt_stranded.inc();
             return;
         }

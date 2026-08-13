@@ -131,8 +131,7 @@ pub const Desktop = struct {
         self.* = .{
             .a = a,
             .wm = wm_mod.Wm.init(a, framebuffer.width(), framebuffer.height(), tsc.rdtsc()),
-            .apps = std.array_list.Managed(App).initCapacity(a, wm_mod.MAX_WINDOWS) catch
-                @panic("desktop: app-list reservation failed at init"),
+            .apps = try std.array_list.Managed(App).initCapacity(a, wm_mod.MAX_WINDOWS),
             .cursor_x = @intCast(framebuffer.width() / 2),
             .cursor_y = @intCast(framebuffer.height() / 2),
         };

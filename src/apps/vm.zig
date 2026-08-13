@@ -219,6 +219,19 @@ pub const Vm = struct {
         }
     }
 
+    /// Release everything this window owns and free it (App.close). Frees
+    /// nothing the GUEST owns and never blocks: posting the close through the
+    /// contract asks the hypervisor to stop the guest and drop this window's
+    /// hold on the slot, and the guest's own core does the teardown.
+    ///
+    /// The caller has already completed any deferred frame, so the scanout
+    /// texture is not in flight when it is deleted here.
+    pub fn close(self: *Vm, a: std.mem.Allocator, g: ?*gles.Context) void {
+        if (g) |ctx| self.deinitGl(ctx);
+        ivirt.postWindowClosed(self.id);
+        a.destroy(self);
+    }
+
     pub fn drawGl(self: *Vm, p: *kgl.Painter, atlas_tex: u32, atlas: kgl.Atlas, cw: usize, ch: usize, focused: bool, blink_on: bool) void {
         const w: f32 = @floatFromInt(cw);
         const h: f32 = @floatFromInt(ch);

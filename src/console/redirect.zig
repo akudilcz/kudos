@@ -1,15 +1,15 @@
-//! Output redirection: where a command line's output goes when the answer is a
-//! file, and the bounded buffer it lands in on the way. PURE — no VFS, no
-//! console, no allocation; shell.zig resolves the path, runs the command against
-//! a `Sink`, and writes the result.
+//! The shell's line grammar: output redirection and pipes, and the bounded
+//! buffer a captured stage lands in. PURE — no VFS, no console, no allocation;
+//! shell.zig resolves paths, runs commands against a `Sink`, and writes results.
 //!
 //! GRAMMAR: the LAST space-delimited `>` (replace) or `>>` (append) token
-//! redirects, and one path word follows it. Both rules exist so source code can
-//! be typed at a shell with no editor:
-//!   - space-delimited, so `a>b` inside a line is text;
-//!   - LAST, so `echo if (a > b) { > guard.zig` writes `if (a > b) {`.
-//! The cost: a line ending in a literal `>` cannot be written this way, there
-//! being no quoting to escape one with.
+//! redirects, and one path word follows it; space-delimited `|` tokens split
+//! the rest into pipeline stages. The rules exist so source code can be typed
+//! at a shell with no quoting:
+//!   - space-delimited, so `a>b` and `a|b` inside a line are text;
+//!   - LAST `>`, so `echo if (a > b) { > guard.zig` writes `if (a > b) {`.
+//! The cost: a line ending in a literal `>`, or carrying a spaced `|` as text,
+//! cannot be written this way, there being no quoting to escape either.
 //!
 //! Redirection is a SHELL facility. The per-core local commands (`prime`, `rt`,
 //! `run`, `shutdown`) are dispatched by the line editor before the shell sees the
@@ -72,6 +72,33 @@ fn isSpace(ch: u8) bool {
 
 fn isRedirect(tok: []const u8) bool {
     return std.mem.eql(u8, tok, ">") or std.mem.eql(u8, tok, ">>");
+}
+
+/// Most stages one line may chain. Two bounce buffers serve any depth; the cap
+/// only bounds the loop.
+pub const MAX_STAGES: usize = 8;
+
+/// `line` split at its space-delimited `|` tokens into `out` stage slices,
+/// trimmed; returns the count. One stage (no pipe) returns 1 with the whole
+/// line. An empty stage (`a | | b`, leading/trailing `|`) is preserved as an
+/// empty slice — the shell owns the complaint. Past MAX_STAGES returns 0: a
+/// truncated pipeline that ran anyway would silently drop commands.
+pub fn splitPipes(line: []const u8, out: *[MAX_STAGES][]const u8) usize {
+    var count: usize = 0;
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i <= line.len) : (i += 1) {
+        const at_pipe = i < line.len and line[i] == '|' and
+            (i == 0 or isSpace(line[i - 1])) and
+            (i + 1 >= line.len or isSpace(line[i + 1]));
+        if (i == line.len or at_pipe) {
+            if (count == MAX_STAGES) return 0;
+            out[count] = std.mem.trim(u8, line[start..i], " \t");
+            count += 1;
+            start = i + 1;
+        }
+    }
+    return count;
 }
 
 /// Where a redirected command's output accumulates: the caller's buffer, what is

@@ -21,11 +21,11 @@
 //!     dispnv50/disp.c:1607-1740 (cited inline at each constant).
 
 const std = @import("std");
-const log = @import("../base/log.zig").gpu;
+const log = @import("../rm/log.zig").gpu;
 const rm = @import("../gsp/rm.zig");
-const nvrm = @import("../base/nvrm.zig");
+const nvrm = @import("../rm/nvrm.zig");
 const gsp = @import("../gsp/gsp.zig");
-const shim = @import("../base/shim.zig");
+const shim = @import("../rm/shim.zig");
 
 pub const Error = error{
     DpNoSor, // DFP_ASSIGN_SOR returned no SOR for this displayId

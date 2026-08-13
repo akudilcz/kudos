@@ -311,7 +311,7 @@ pub fn allocContiguous(n: usize) ?usize {
 }
 
 /// The ceiling for DMA-visible physical memory: devices programmed through the
-/// split lo/hi `write64` pair (drivers/io/mmio.zig) — and any firmware struct
+/// split lo/hi `write64` pair (kernel/io/mmio.zig) — and any firmware struct
 /// with a 32-bit pointer field — cannot safely carry a >= 4 GiB address; the
 /// high dword is published non-atomically (or not at all). Every DMA allocation
 /// site asserts against this at the ALLOCATION, so a high frame fails loud

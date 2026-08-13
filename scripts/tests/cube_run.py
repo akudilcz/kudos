@@ -19,6 +19,7 @@ Requires: build/kudos-smp.iso built with -Dtest-hooks -Dsoft-display, zig on PAT
 """
 
 import os
+import re
 import subprocess
 import sys
 import time
@@ -46,6 +47,19 @@ KMIR_FWD_PORT = 19515
 BOOT_BUDGET_S = 90
 WINDOW_BUDGET_S = 30
 SPIN_SETTLE_S = 2.0  # between screendumps: ~80 degrees of cube at 40 deg/s
+
+def window_title(src):
+    """The title the sample gives its window, read from the sample itself.
+
+    `WindowApi.create` takes the title from the module, so the sample owns this
+    string; restating it here would let the two drift silently into a test that
+    waits for a window nobody opens.
+    """
+    m = re.search(r'const title = "([^"]+)"', src)
+    if not m:
+        raise SystemExit("cube_run: cube.zig no longer declares `const title`")
+    return m.group(1)
+
 
 def fail(nd, why):
     with open(LOG, "w") as f:
@@ -102,6 +116,7 @@ def main():
 
     # 1. The factory compiles the reference cube — in-process, no HTTP.
     src = open(os.path.join(ROOT, "scripts/agent/samples/cube.zig")).read()
+    title = window_title(src)
     res = factory.compile_kudos(src, kind="app", name="cube")
     if not res["ok"]:
         print(f"cube_run: cube.zig does not compile: {res['errors']}", file=sys.stderr)
@@ -126,21 +141,22 @@ def main():
         # 2. The network, so KMR1 can reach in; then the blob over the chunked
         #    write (DIAG-025) — bigger than one datagram, so this IS the test
         #    of WRITE_AT against the real machine.
-        q.type_str("net ip")
+        q.type_str("ip")
         q.key("ret")
-        if not wait_for(nd, r"ip\s+10\.0\.2\.\d+", 30, "dhcp lease"):
+        if not wait_for(nd, r"inet 10\.0\.2\.\d+", 30, "dhcp lease"):
             return fail(nd, "kudos never leased an address from slirp")
         client = kmir.Client("127.0.0.1", port=KMIR_FWD_PORT)
         client.write_file("cube.kudos", blob)
         print(f"  ok   pushed cube.kudos over KMR1 ({len(blob)} bytes, chunked)")
 
         # 3. Run it, as a person would.
-        q.type_str("run cube")
+        q.type_str("kudos run cube")
         q.key("ret")
 
-        # 4. The window opens (MOD-012): the WM mirror records a window titled
-        #    "kudos app".
-        if not wait_for(nd, r"dbg: wm\.win\d+ = .*t=kudos app", WINDOW_BUDGET_S, "blob window open"):
+        # 4. The window opens (MOD-012): the WM mirror records it under the title
+        #    the module passed to WindowApi.create.
+        if not wait_for(nd, r"dbg: wm\.win\d+ = .*t=" + re.escape(title),
+                        WINDOW_BUDGET_S, "blob window open"):
             return fail(nd, "the module never got its window")
 
         # 5. The cube spins: two screendumps a beat apart must differ (the
@@ -164,7 +180,7 @@ def main():
         #    the agent drives.
         client.mcp({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                     "params": {"name": "window",
-                               "arguments": {"action": "close", "window": "kudos app"}}})
+                               "arguments": {"action": "close", "window": title}}})
         if not wait_for(nd, r"\[exit 0\]", WINDOW_BUDGET_S, "run ended on window close"):
             return fail(nd, "closing the window did not end the module's run")
 

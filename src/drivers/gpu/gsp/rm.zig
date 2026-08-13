@@ -4,11 +4,11 @@
 //! fence the GPU wrote to DMA memory.
 
 const std = @import("std");
-const log = @import("../base/log.zig").gpu;
-const shim = @import("../base/shim.zig");
+const log = @import("../rm/log.zig").gpu;
+const shim = @import("../rm/shim.zig");
 const gsp = @import("gsp.zig");
-const gspfw = @import("../base/gspfw.zig");
-const nvrm = @import("../base/nvrm.zig");
+const gspfw = @import("../rm/gspfw.zig");
+const nvrm = @import("../rm/nvrm.zig");
 
 /// Offset of the RPC payload (RM alloc/control header + params) within a queue
 /// element: 48-byte element header + 32-byte RpcMessageHeader. The GSP writes the

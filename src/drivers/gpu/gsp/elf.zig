@@ -4,7 +4,7 @@
 //! r535_gsp_elf_section). We only need: given a blob + section name, return the
 //! section's [offset,size) within the blob.
 
-const log = @import("../base/log.zig").gpu;
+const log = @import("../rm/log.zig").gpu;
 
 pub const Error = error{ ElfBadMagic, ElfSectionNotFound, ElfOutOfBounds };
 

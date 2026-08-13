@@ -23,9 +23,10 @@ pub fn submit(j: job.Job) bool {
     return runner.submit(j);
 }
 
-/// Advance every active job one bounded step; retire the finished. Called once
-/// per session-loop iteration, next to net.pump() and the render.
-pub fn pump() void {
+/// Advance every active job one bounded step; retire the finished. A row in
+/// the steady loops' service table (boot/services.zig), stepped once per
+/// iteration next to the network pump and the render.
+pub fn step() void {
     runner.pump();
 }
 

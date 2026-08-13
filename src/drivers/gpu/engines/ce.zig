@@ -4,7 +4,7 @@
 //! fifo.zig submits and waits.
 
 const hostpush = @import("hostpush");
-const nvrm = @import("../base/nvrm.zig");
+const nvrm = @import("../rm/nvrm.zig");
 
 // NVA0B5 (CE) methods.
 const OFFSET_IN_UPPER: u32 = 0x400; // ..LOWER 0x404, OUT 0x408/0x40c,

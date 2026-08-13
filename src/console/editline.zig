@@ -61,6 +61,12 @@ pub const Editor = struct {
         return self.line[0..self.len];
     }
 
+    /// Drop the recall buffer. Called when masked input ends (a passphrase was
+    /// committed): Up-arrow must not replay onto the screen what the echo hid.
+    pub fn forgetRecall(self: *Editor) void {
+        self.last_len = 0;
+    }
+
     /// Apply one ASCII keystroke: Enter remembers a non-empty line for recall
     /// and asks the host to commit it; Up recalls the last committed line in
     /// place; Tab asks the host for completion; Backspace erases; printable

@@ -4,10 +4,10 @@
 //! right after; SET_PIPELINE_PROGRAM_ADDRESS points at the SPH.
 
 const std = @import("std");
-const log = @import("../../gpu/base/log.zig").gpu;
+const log = @import("../../gpu/rm/log.zig").gpu;
 const gsp = @import("../../gpu/gsp/gsp.zig");
-const vram = @import("../../gpu/core/vram.zig");
-const gmmu = @import("../../gpu/core/gmmu.zig");
+const vram = @import("../../gpu/engines/vram.zig");
+const gmmu = @import("../../gpu/engines/gmmu.zig");
 pub const manifest = @import("../shaders/manifest.zig");
 
 pub const Error = error{ShaderUploadTooBig} || gmmu.Error || error{VramOutOfMemory};

@@ -13,35 +13,41 @@
 pub const virtq = @import("virtq.zig");
 
 // Register offsets (§4.2.2 "MMIO Device Register Layout").
-const REG_MAGIC_VALUE: u64 = 0x000;
-const REG_VERSION: u64 = 0x004;
-const REG_DEVICE_ID: u64 = 0x008;
-const REG_VENDOR_ID: u64 = 0x00c;
-const REG_DEVICE_FEATURES: u64 = 0x010;
-const REG_DEVICE_FEATURES_SEL: u64 = 0x014;
-const REG_DRIVER_FEATURES: u64 = 0x020;
-const REG_DRIVER_FEATURES_SEL: u64 = 0x024;
-const REG_QUEUE_SEL: u64 = 0x030;
-const REG_QUEUE_NUM_MAX: u64 = 0x034;
-const REG_QUEUE_NUM: u64 = 0x038;
-const REG_QUEUE_READY: u64 = 0x044;
-const REG_QUEUE_NOTIFY: u64 = 0x050;
-const REG_INTERRUPT_STATUS: u64 = 0x060;
-const REG_INTERRUPT_ACK: u64 = 0x064;
-const REG_STATUS: u64 = 0x070;
-const REG_QUEUE_DESC_LOW: u64 = 0x080;
-const REG_QUEUE_DESC_HIGH: u64 = 0x084;
-const REG_QUEUE_DRIVER_LOW: u64 = 0x090;
-const REG_QUEUE_DRIVER_HIGH: u64 = 0x094;
-const REG_QUEUE_DEVICE_LOW: u64 = 0x0a0;
-const REG_QUEUE_DEVICE_HIGH: u64 = 0x0a4;
-const REG_SHM_SEL: u64 = 0x0ac;
-const REG_SHM_LEN_LOW: u64 = 0x0b0;
-const REG_SHM_LEN_HIGH: u64 = 0x0b4;
-const REG_SHM_BASE_LOW: u64 = 0x0b8;
-const REG_SHM_BASE_HIGH: u64 = 0x0bc;
-const REG_CONFIG_GENERATION: u64 = 0x0fc;
-const REG_CONFIG: u64 = 0x100;
+//
+// PUBLIC because the conformance suites drive this device model through these
+// exact offsets, and a test that re-spells a spec constant is testing its own
+// copy: all four virtio suites had restated this map, ~104 lines of numbers
+// with nothing checking they still matched. A spec value a test drives against
+// is part of this module's contract.
+pub const REG_MAGIC_VALUE: u64 = 0x000;
+pub const REG_VERSION: u64 = 0x004;
+pub const REG_DEVICE_ID: u64 = 0x008;
+pub const REG_VENDOR_ID: u64 = 0x00c;
+pub const REG_DEVICE_FEATURES: u64 = 0x010;
+pub const REG_DEVICE_FEATURES_SEL: u64 = 0x014;
+pub const REG_DRIVER_FEATURES: u64 = 0x020;
+pub const REG_DRIVER_FEATURES_SEL: u64 = 0x024;
+pub const REG_QUEUE_SEL: u64 = 0x030;
+pub const REG_QUEUE_NUM_MAX: u64 = 0x034;
+pub const REG_QUEUE_NUM: u64 = 0x038;
+pub const REG_QUEUE_READY: u64 = 0x044;
+pub const REG_QUEUE_NOTIFY: u64 = 0x050;
+pub const REG_INTERRUPT_STATUS: u64 = 0x060;
+pub const REG_INTERRUPT_ACK: u64 = 0x064;
+pub const REG_STATUS: u64 = 0x070;
+pub const REG_QUEUE_DESC_LOW: u64 = 0x080;
+pub const REG_QUEUE_DESC_HIGH: u64 = 0x084;
+pub const REG_QUEUE_DRIVER_LOW: u64 = 0x090;
+pub const REG_QUEUE_DRIVER_HIGH: u64 = 0x094;
+pub const REG_QUEUE_DEVICE_LOW: u64 = 0x0a0;
+pub const REG_QUEUE_DEVICE_HIGH: u64 = 0x0a4;
+pub const REG_SHM_SEL: u64 = 0x0ac;
+pub const REG_SHM_LEN_LOW: u64 = 0x0b0;
+pub const REG_SHM_LEN_HIGH: u64 = 0x0b4;
+pub const REG_SHM_BASE_LOW: u64 = 0x0b8;
+pub const REG_SHM_BASE_HIGH: u64 = 0x0bc;
+pub const REG_CONFIG_GENERATION: u64 = 0x0fc;
+pub const REG_CONFIG: u64 = 0x100;
 
 /// "virt" little-endian — the MagicValue a driver probes for (§4.2.2).
 const MAGIC_VALUE: u32 = 0x74726976;

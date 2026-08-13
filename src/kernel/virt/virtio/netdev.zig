@@ -283,30 +283,11 @@ pub const NetDev = struct {
     }
 };
 
-/// Scatter an all-zero virtio_net_hdr followed by `frame` into the chain's
-/// device-writable segments, in order. Returns the bytes the delivery needed,
-/// or 0 when the chain has too little writable room for all of them — the
-/// partial copy is harmless, because a used length of 0 tells the driver the
-/// buffer holds nothing.
+/// The all-zero virtio_net_hdr every delivered frame carries: this device
+/// negotiates no offloads, so the header's only job is to be the right size.
+const ZERO_HDR = [_]u8{0} ** HDR_BYTES;
+
+/// Deliver `frame` to the guest as a virtio_net_hdr followed by the frame.
 fn deliver(q: *const virtq.Virtq, head: u16, frame: []const u8) virtq.Error!u32 {
-    const total = HDR_BYTES + frame.len;
-    var off: usize = 0; // progress through the virtual [header ++ frame] source
-    var it = virtq.chain(q, head);
-    while (try it.next()) |d| {
-        if (d.flags & virtq.F_WRITE == 0) continue;
-        var seg = try q.segment(d);
-        if (off < HDR_BYTES) {
-            const n = @min(seg.len, HDR_BYTES - off);
-            @memset(seg[0..n], 0); // the whole header is zero: no offloads
-            off += n;
-            seg = seg[n..];
-        }
-        if (seg.len > 0 and off < total) {
-            const n = @min(seg.len, total - off);
-            @memcpy(seg[0..n], frame[off - HDR_BYTES ..][0..n]);
-            off += n;
-        }
-        if (off == total) return @intCast(total);
-    }
-    return 0;
+    return virtq.scatter(q, head, &.{ &ZERO_HDR, frame });
 }

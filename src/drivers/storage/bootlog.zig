@@ -19,7 +19,7 @@
 //!   - `feed` (called from klog.putc, possibly IRQ/reentrant) does ONLY a
 //!     memcpy into RAM — it NEVER touches the USB device. So logging is free at
 //!     the trace site; there is no blocking BOT transaction on the hot path.
-//!   - `service()` (called from the steady session loop, THROTTLED) drains only
+//!   - `step()` (a row in the steady loops' service table, self-throttled) drains only
 //!     WHOLE sectors that have accumulated, in ONE multi-sector WRITE(10) per
 //!     call (up to the transfer cap), leaving a partial trailing sector in RAM.
 //!     No SYNCHRONIZE CACHE here — steady-state writes ride the device cache.
@@ -32,6 +32,8 @@
 const std = @import("std");
 const fat = @import("fat.zig");
 const klog = @import("../../kernel/debug/klog.zig");
+const timer = @import("../../kernel/timer/timer.zig");
+const idevices = @import("idevices");
 
 /// The ring file kudos writes. Host-seeded at a fixed size (make-bootlog on the
 /// stick); kudos never creates or grows it — a missing file disables the sink
@@ -47,7 +49,7 @@ const MAGIC = "KUDOSLOG";
 /// The in-RAM staging ring: a whole boot's worth of trace with headroom, so
 /// `feed` is always a cheap memcpy and the device is written only in bulk. 1 MiB
 /// of static BSS is nothing against 64 GiB; a chatty GPU boot fits with room to
-/// spare between service() drains.
+/// spare between step() drains.
 const SECTOR: usize = 512;
 const BUF_BYTES: usize = 1 << 20; // 1 MiB
 var buf: [BUF_BYTES]u8 = undefined;
@@ -55,7 +57,7 @@ var head: usize = 0; // producer offset (feed writes here)
 var tail: usize = 0; // consumer offset (service has written up to here to disk)
 var dropped: u64 = 0; // bytes lost to overrun (buffer full before a drain)
 
-/// Whole sectors are drained per service() call; cap the burst so one drain is a
+/// Whole sectors are drained per step() call; cap the burst so one drain is a
 /// single BOT WRITE(10) and does not monopolise the session loop. 64 sectors =
 /// 32 KiB = msc.MAX_XFER_SECTORS.
 const DRAIN_SECTORS_MAX: usize = 64;
@@ -113,7 +115,7 @@ pub fn init(vol: *fat.Volume, build_number: u32) bool {
     }
 
     // Boot banner into the RAM buffer so a reader can delimit boots (drained to
-    // disk by the first service() call — no device write during init).
+    // disk by the first step() call — no device write during init).
     var banner: [96]u8 = undefined;
     const b = std.fmt.bufPrint(&banner, "\n===== kudos boot #{d} (log seq {d}) =====\n", .{ build_number, seq }) catch "\n===== kudos boot =====\n";
     push(b);
@@ -161,7 +163,7 @@ fn feed(bytes: []const u8) void {
 
 /// Enqueue a byte SLICE into the RAM ring: wrap-aware memcpy (at most two
 /// spans), not a per-byte loop. On overrun (the buffer filled before a
-/// service() drain) the excess is dropped and counted — losing the OLDEST
+/// step() drain) the excess is dropped and counted — losing the OLDEST
 /// unflushed tail would corrupt ordering; dropping the newest keeps what is
 /// already committed intact, and `dropped` is reported so loss is never silent.
 fn push(bytes: []const u8) void {
@@ -181,13 +183,57 @@ fn pending() usize {
     return (head + BUF_BYTES - (tail % BUF_BYTES)) % BUF_BYTES;
 }
 
-/// Drain WHOLE sectors of queued bytes to the stick — called from the steady
-/// session loop, throttled by the caller. One bulk multi-sector WRITE(10) per
-/// call (≤ DRAIN_SECTORS_MAX), leaving any partial trailing sector in RAM for a
-/// later drain (or flushNow). NO SYNCHRONIZE CACHE here — steady writes ride the
-/// device cache; durability is a flushNow (panic) concern. Cheap when there is
-/// less than a sector pending (the common idle case): returns immediately.
-pub fn service() void {
+/// How often the drain below actually writes. The write is a real USB bulk
+/// transfer of a few milliseconds, so it happens a few times a second at most,
+/// never per frame: the trace path only fills RAM, and the ring absorbs the
+/// gap. The throttle lives HERE, with the service that owes it, rather than in
+/// each steady loop that steps it — two loops keeping one cadence is two
+/// cadences waiting to disagree.
+const DRAIN_PERIOD_MS: u64 = 250;
+var last_drain_ms: u64 = 0;
+
+/// Hold the drain off entirely. The GPU session loop raises this while a
+/// frame-cadence sample records: a multi-millisecond USB write inside that
+/// window reads as a late flip and fails the smoothness gate outright. The
+/// period timer is NOT reset while held, so the drain fires the instant the
+/// window closes — nothing is lost, it only waits.
+var held_off: bool = false;
+
+/// Hold off (or release) the periodic drain — the GPU session loop's call,
+/// because measuring frame cadence is its concern, not this driver's.
+pub fn setHoldOff(hold: bool) void {
+    held_off = hold;
+}
+
+/// Drain WHOLE sectors of queued bytes to the stick if the period has elapsed.
+/// A row in the steady loops' service table (boot/services.zig); it owns its
+/// own cadence (see DRAIN_PERIOD_MS) so every caller gets the same one.
+pub fn step() void {
+    if (!installed or held_off) return;
+    const now = timer.millis();
+    if (now -% last_drain_ms < DRAIN_PERIOD_MS) return;
+    last_drain_ms = now;
+    drain();
+}
+
+/// How this sink is faring: absent with no stick, failed once a write error
+/// disabled it, ready while it is carrying the log.
+pub fn status() idevices.Status {
+    if (log == null) return .absent;
+    return if (installed) .ready else .failed;
+}
+
+/// Drain the whole sectors pending RIGHT NOW, ignoring the cadence: one bulk
+/// multi-sector WRITE(10) (≤ DRAIN_SECTORS_MAX), leaving any partial trailing
+/// sector in RAM for a later drain (or flushNow). NO SYNCHRONIZE CACHE here —
+/// steady writes ride the device cache; durability is a flushNow (panic)
+/// concern. Cheap when there is less than a sector pending (the common idle
+/// case): returns immediately.
+///
+/// `step` is the paced caller the steady loops use; this is the operation
+/// itself, for the panic flush and for tests that want the write to have
+/// happened by the time they look.
+pub fn drain() void {
     if (!installed) return;
     const whole = pending() / SECTOR;
     if (whole == 0) return;
@@ -249,7 +295,7 @@ fn disable() void {
 pub fn flushNow() void {
     if (!installed) return;
     // Drain all whole sectors first.
-    while (pending() >= SECTOR) service();
+    while (pending() >= SECTOR) drain();
     // Then the partial tail (wrap-aware two-span copy), padded to a sector.
     const rem = pending();
     if (rem > 0) {

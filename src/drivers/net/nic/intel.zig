@@ -11,7 +11,7 @@
 //! Linux e1000 and igc drivers.
 
 const pmm = @import("../../../kernel/memory/pmm.zig");
-const mmio = @import("../../io/mmio.zig");
+const mmio = @import("../../../kernel/io/mmio.zig");
 const counter = @import("../../../kernel/debug/counter.zig");
 
 /// Frames delivered by poll() — the RX-path liveness proof. A native stall
@@ -19,7 +19,6 @@ const counter = @import("../../../kernel/debug/counter.zig");
 /// frozen = the RX ring stalled at the NIC; climbing = frames arrive and the
 /// loss is above the driver (dispatch/fileserv).
 var cnt_rx_frames = counter.Counter{ .mod = .net, .name = "rx.frames" };
-var rx_counter_registered = false;
 
 /// Ring sizing, shared by both controllers. RX is deeper than TX because
 /// receives arrive unsolicited; TX is drained synchronously.
@@ -189,10 +188,6 @@ pub const Nic = struct {
         // copy past either buffer. This is the RAM-safety backstop independent of
         // whatever the RCTL config allows the NIC to accept.
         const len = @min(self.ops.rx_len(self.rx_ring, i) orelse return null, BUF);
-        if (!rx_counter_registered) {
-            rx_counter_registered = true;
-            counter.register(&cnt_rx_frames);
-        }
         cnt_rx_frames.inc();
         // Copy the payload through a VOLATILE source: the NIC DMA'd these bytes
         // in, and dmaAlloc @memset the buffer to 0 first, so a plain [*]const u8
@@ -222,15 +217,32 @@ pub const Nic = struct {
     }
 };
 
-/// Allocate `bytes` of zeroed, physically-contiguous DMA memory; returns 0 on
-/// failure so a driver's init can fail loudly rather than dereference null.
-pub fn dmaAlloc(bytes: usize) usize {
+/// Register the shared counters. Called by each driver's bring-up, NOT from
+/// poll(): registration scans the counter table, and doing that per received
+/// frame would put a linear search on the RX hot path.
+pub fn registerCounters() void {
+    counter.register(&cnt_rx_frames);
+}
+
+/// Allocate `bytes` of zeroed, physically-contiguous DMA memory. Null on
+/// failure — a value, not a 0 sentinel, so a forgotten check refuses to
+/// compile (physical 0 is real, reserved memory here).
+pub fn dmaAlloc(bytes: usize) ?usize {
     const frames = (bytes + pmm.FRAME_SIZE - 1) / pmm.FRAME_SIZE;
     // allocContiguousDma: the NIC rings/buffers are device-addressed — the
     // <4 GiB DMA rail is asserted at the allocation (pmm.DMA_LIMIT).
-    const p = pmm.allocContiguousDma(frames) orelse return 0;
+    const p = pmm.allocContiguousDma(frames) orelse return null;
     @memset(@as([*]u8, @ptrFromInt(p))[0 .. frames * pmm.FRAME_SIZE], 0);
     return p;
+}
+
+/// Return DMA memory taken by dmaAlloc (same frame rounding). A zero `addr` is
+/// a slot that was never allocated — the init unwind paths pass every slot
+/// unconditionally.
+pub fn dmaFree(addr: usize, bytes: usize) void {
+    if (addr == 0) return;
+    const frames = (bytes + pmm.FRAME_SIZE - 1) / pmm.FRAME_SIZE;
+    pmm.freeContiguous(addr, frames);
 }
 
 /// Unpack a 6-byte MAC from the Intel RAL/RAH receive-address registers (little

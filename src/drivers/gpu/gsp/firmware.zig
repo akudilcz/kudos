@@ -12,7 +12,7 @@
 
 const mb = @import("../../../kernel/boot/multiboot2.zig");
 const gsp = @import("gsp.zig");
-const log = @import("../base/log.zig").gpu;
+const log = @import("../rm/log.zig").gpu;
 
 /// Module id strings, matching the `module2 ... "<id>"` entries scripts/build/mkiso.sh
 /// stages. Single source of truth for the id contract between grub.cfg and here.

@@ -267,7 +267,7 @@ pub fn framebufferWriteCombine(phys: u64, span: u64) void {
 
 /// Set the effective cache type of an MMIO window [phys, phys+span) via a
 /// variable MTRR, for callers other than the framebuffer (e.g. GPU register and
-/// aperture BARs — src/drivers/gpu/base/mmio.zig). Unlike
+/// aperture BARs — src/drivers/gpu/rm/mmio.zig). Unlike
 /// `framebufferWriteCombine`, this does NOT touch any PDPTE/PAT selection: the
 /// window is reached through the identity map's existing PA0(WB) entries, and the
 /// MTRR overrides that per SDM Table 11-7 (UC and WC both win over WB). Programs

@@ -228,7 +228,7 @@ def type_cmd(q, cmd):
     # several cases are typed more than once per run), so a genuinely dropped
     # keystroke was never retyped and the run failed later with "the command
     # never took effect" — a harness bug masquerading as a kernel bug.
-    echoes_before = cases.mirror_text(read_serial(), core=core).count(f"> {cmd}")
+    echoes_before = cases.mirror_text(read_serial(), core=core).count(f"$ {cmd}")
     for attempt in (1, 2):
         q.type_str(cmd)
         q.key("ret")
@@ -241,7 +241,7 @@ def type_cmd(q, cmd):
         # phase on a kernel that had done exactly what it was told.
         deadline = time.time() + ECHO_TRAIL_S
         while time.time() < deadline:
-            if cases.mirror_text(read_serial(), core=core).count(f"> {cmd}") > echoes_before:
+            if cases.mirror_text(read_serial(), core=core).count(f"$ {cmd}") > echoes_before:
                 return core
             time.sleep(0.3)
         if attempt == 1:
@@ -253,7 +253,7 @@ def _scoped_output(cmd):
     """This command's own mirrored output: everything after the LAST `> <cmd>`
     echo line. None if the command was never echoed."""
     mirror = cases.mirror_text(read_serial(), core=0)
-    idx = mirror.rfind(f"> {cmd}")
+    idx = mirror.rfind(f"$ {cmd}")
     if idx == -1:
         return None
     nl = mirror.find("\n", idx)
@@ -651,7 +651,7 @@ def phase_smp(q):
         q.type_str(f"echo {marker}")
         q.key("ret")
         wait_quiescent()
-        if f"> echo {marker}" in cases.mirror_text(read_serial(), core=1):
+        if f"$ echo {marker}" in cases.mirror_text(read_serial(), core=1):
             break
         if attempt == 1:
             _record("boot1:   (no echo on term.1 — retyping once; lossy input path)")

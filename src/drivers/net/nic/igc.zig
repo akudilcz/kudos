@@ -10,7 +10,7 @@ const pci = @import("../../pci/pci.zig");
 const klog = @import("../../../kernel/debug/klog.zig");
 const gate = @import("../../../kernel/debug/gate.zig");
 const timer = @import("../../../kernel/timer/timer.zig");
-const wait = @import("../../io/wait.zig");
+const wait = @import("../../../kernel/io/wait.zig");
 const intel = @import("intel.zig");
 const igc_desc = @import("igc_desc.zig");
 
@@ -95,6 +95,24 @@ fn rxReset(ring: usize, i: usize, buf_phys: u64) void {
 }
 
 const OPS: intel.DescOps = .{ .tx_set = txSet, .tx_done = txDone, .rx_len = rxLen, .rx_reset = rxReset };
+
+/// Roll back a partial bring-up: quiesce the queues and both DMA engines FIRST
+/// (the RX queue is enabled before the TX allocations, so on a TX failure it
+/// is already live, writing into buffers about to be returned), then free
+/// every ring/buffer taken so far (dmaFree skips never-allocated 0 slots).
+/// Returns false so init's failure paths read as one expression.
+fn initFail() bool {
+    nic.write(RXDCTL, 0);
+    nic.write(TXDCTL, 0);
+    nic.write(RCTL, 0);
+    nic.write(TCTL, 0);
+    intel.dmaFree(nic.rx_ring, N_RX * @sizeOf(AdvDesc));
+    intel.dmaFree(nic.rx_buf, N_RX * BUF);
+    intel.dmaFree(nic.tx_ring, N_TX * @sizeOf(AdvDesc));
+    intel.dmaFree(nic.tx_buf, N_TX * BUF);
+    nic = .{};
+    return false;
+}
 
 // --- chip-specific bring-up helpers ----------------------------------------
 
@@ -183,6 +201,7 @@ pub fn linkUp() bool {
 pub fn init() bool {
     const dev = find() orelse return false;
     nic = .{ .regs = .{ .rdt = RDT, .tdt = TDT, .tdh = TDH }, .ops = OPS };
+    intel.registerCounters();
     dev.enableBusMaster();
     nic.mmio = @intCast(pci.bar64(dev, 0));
     if (nic.mmio == 0) return false;
@@ -218,10 +237,10 @@ pub fn init() bool {
 
     nic.mac = intel.macFromRegs(nic.read(RAL0), nic.read(RAH0));
 
-    // RX ring (advanced descriptors) + buffers.
-    nic.rx_ring = intel.dmaAlloc(N_RX * @sizeOf(AdvDesc));
-    nic.rx_buf = intel.dmaAlloc(N_RX * BUF);
-    if (nic.rx_ring == 0 or nic.rx_buf == 0) return false;
+    // RX ring (advanced descriptors) + buffers. Allocation failure unwinds
+    // whatever this bring-up already took.
+    nic.rx_ring = intel.dmaAlloc(N_RX * @sizeOf(AdvDesc)) orelse return initFail();
+    nic.rx_buf = intel.dmaAlloc(N_RX * BUF) orelse return initFail();
     var i: usize = 0;
     while (i < N_RX) : (i += 1) rxReset(nic.rx_ring, i, nic.rx_buf + i * BUF);
     // RX queue setup, matching the Linux igc driver order (igc_configure_rx_ring
@@ -269,10 +288,10 @@ pub fn init() bool {
         klog.putc('\n');
     }
 
-    // TX ring + buffers.
-    nic.tx_ring = intel.dmaAlloc(N_TX * @sizeOf(AdvDesc));
-    nic.tx_buf = intel.dmaAlloc(N_TX * BUF);
-    if (nic.tx_ring == 0 or nic.tx_buf == 0) return false;
+    // TX ring + buffers. The RX queue is already enabled — a failure here must
+    // unwind through initFail so it is not left DMA-ing into freed buffers.
+    nic.tx_ring = intel.dmaAlloc(N_TX * @sizeOf(AdvDesc)) orelse return initFail();
+    nic.tx_buf = intel.dmaAlloc(N_TX * BUF) orelse return initFail();
     nic.write(TDBAL, @truncate(nic.tx_ring));
     nic.write(TDBAH, @truncate(nic.tx_ring >> 32));
     nic.write(TDLEN, N_TX * @sizeOf(AdvDesc));

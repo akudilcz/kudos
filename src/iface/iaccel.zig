@@ -76,6 +76,20 @@ pub const Compositor = struct {
     /// that is. Firmware hands us a small safe mode at boot; this raises it.
     set_logical_size: ?*const fn (w: usize, h: usize) void = null,
 
+    /// Step every background service one bounded slice: the trace drain, the
+    /// network pump and its replies, backgrounded jobs, the boot log, guest
+    /// boot requests. On a native boot the GPU session loop never returns and
+    /// IS the machine, so it — not the no-GPU system loop — is what keeps
+    /// those services alive; it calls this rather than naming each service,
+    /// because the list belongs to the apex (`boot/services.zig`) and a driver
+    /// must never import it. `after_render` selects the post-render slice
+    /// (bounded guest work that must not push a present past its deadline)
+    /// from the ordinary pre-render pass.
+    ///
+    /// Null before the desktop is up. This hook exists because both loops once
+    /// carried their own hand-written service list and the two had diverged.
+    service: ?*const fn (after_render: bool) void = null,
+
     /// Poll input + USB WITHOUT rendering or presenting a frame. The GPU bring-up
     /// calls this in a bounded settle after GSP is up but BEFORE the first present,
     /// so a slow device that finishes coming up during GSP boot (a keyboard whose

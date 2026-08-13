@@ -8,11 +8,21 @@
 //! Keeping the merge + overflow policy here means it lives in exactly one place
 //! and is device-independently testable ("Event ring").
 //!
-//! SINGLE-PRODUCER BY CONSTRUCTION: pointer input is USB-only (no legacy IRQ) — every
-//! producer runs sequentially inside core 0's session loop (xhci.poll drains
-//! HID, net.pump delivers remote injects), so the SPSC ring's one-producer
-//! contract holds without masking. Adding an IRQ-context producer (a legacy
-//! mouse) would break it — mask IF around the push then, as keyboard.inject does.
+//! ONE PRODUCER AT A TIME, ENFORCED. This was once single-producer by
+//! construction — pointer input is USB-only and every producer ran inside core
+//! 0's session loop. That stopped being true when the agent grew a pointer
+//! tool: its injections run on the agent's own task, on whatever core the
+//! scheduler placed it, while xhci.poll pushes HID reports on core 0. Two
+//! producers on the SPSC ring can write the same slot and publish the same
+//! head, which loses a button edge — a click with no release is a stuck drag,
+//! and it happens precisely during agent-driven UI work.
+//!
+//! Coalescing is why this is a LOCK and not a lock-free multi-producer push:
+//! `aggregate` merges into the newest queued slot (`lastMut`), which is a
+//! read-modify-write of a slot the producer no longer exclusively owns. The
+//! critical section is a few stores on a path that carries at most a few
+//! hundred events a second, so the contention this costs is nil against the
+//! class of bug it removes.
 //!
 //! Unlike the vtable ifaces (idisplay/ipresent), this is pure data + logic with
 //! no substitutable backend, so it is a plain module tested directly — like
@@ -80,7 +90,26 @@ pub var dropped_events: u64 = 0;
 /// is authoritative, not additive). Safe to
 /// read-modify the newest slot because producer and consumer are serialized on
 /// one core (USB is polled on that core).
+/// Guards the producer side (see the header). A plain test-and-set rather than
+/// the kernel's SpinLock: this contract is a LEAF that host tests compile, and
+/// the section it protects is a handful of stores that never blocks, faults or
+/// re-enters — so there is nothing here for a richer lock to do.
+var produce_lock: bool = false;
+
+fn acquireProduce() void {
+    while (@cmpxchgWeak(bool, &produce_lock, false, true, .acq_rel, .acquire) != null) {
+        // The holder is a few stores from done; spin rather than sleep.
+        asm volatile ("pause");
+    }
+}
+
+fn releaseProduce() void {
+    @atomicStore(bool, &produce_lock, false, .release);
+}
+
 pub fn aggregate(ev: MouseEvent) void {
+    acquireProduce();
+    defer releaseProduce();
     if (ev.abs == null) {
         if (ring.lastMut()) |last| {
             if (last.abs == null and last.buttons == ev.buttons) {

@@ -175,3 +175,48 @@ pub const ChainIter = struct {
 pub fn chain(q: *const Virtq, head: u16) ChainIter {
     return .{ .q = q, .next_index = head };
 }
+
+/// Scatter `parts` — one logical byte sequence given in pieces — into the
+/// device-WRITABLE segments of the chain at `head`, in order. Returns the total
+/// bytes the delivery needed, or 0 when the chain has too little writable room
+/// for all of them.
+///
+/// A partial copy on the 0 path is harmless and deliberate: the caller retires
+/// the chain with a used length of 0, which tells the driver the buffer holds
+/// nothing, so the bytes already written are never read.
+///
+/// EVERY device model delivers this way — a network frame is a zero header plus
+/// the frame, an input event is one struct, a console byte is one byte — and
+/// each had written the same walk-the-chain-and-fill loop with the same doc
+/// comment above it. The loop belongs here, beside the chain iterator and the
+/// bounds-checked `segment` it is built from; a device model should only have
+/// to say WHAT its bytes are.
+pub fn scatter(q: *const Virtq, head: u16, parts: []const []const u8) Error!u32 {
+    var total: usize = 0;
+    for (parts) |p| total += p.len;
+
+    var part: usize = 0; // which piece we are copying from
+    var taken: usize = 0; // how much of that piece is already delivered
+    var written: usize = 0;
+    var it = chain(q, head);
+    while (try it.next()) |d| {
+        if (d.flags & F_WRITE == 0) continue;
+        var seg = try q.segment(d);
+        // Fill this segment from as many pieces as it spans: a chain is free to
+        // offer segments that cut across the header/payload boundary.
+        while (seg.len > 0 and part < parts.len) {
+            const src = parts[part];
+            const n = @min(seg.len, src.len - taken);
+            @memcpy(seg[0..n], src[taken..][0..n]);
+            seg = seg[n..];
+            taken += n;
+            written += n;
+            if (taken == src.len) {
+                part += 1;
+                taken = 0;
+            }
+        }
+        if (written == total) return @intCast(total);
+    }
+    return 0;
+}

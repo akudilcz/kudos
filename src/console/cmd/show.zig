@@ -19,13 +19,13 @@ const complete = @import("../complete.zig");
 pub fn run(c: console.Console, args: []const u8) void {
     var it = std.mem.tokenizeScalar(u8, args, ' ');
     const name = it.next() orelse {
-        c.write("usage: show PATH [max]\n");
+        c.write("usage: kudos show PATH [max]\n");
         return;
     };
     const max_arg = it.next();
     const maximized = max_arg != null and std.mem.eql(u8, max_arg.?, "max");
     if (max_arg != null and !maximized) {
-        c.write("usage: show PATH [max]\n");
+        c.write("usage: kudos show PATH [max]\n");
         return;
     }
     if (!modelcache.supportedName(name)) {

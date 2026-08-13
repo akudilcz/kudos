@@ -12,7 +12,8 @@
 //! per frame.
 
 const std = @import("std");
-const kgl = @import("kgl"); // the 2D toolkit the unified GL desktop draws through
+const kgl = @import("kgl");
+const gles = @import("gles"); // the 2D toolkit the unified GL desktop draws through
 const Window = @import("../ui/wm/window.zig").Window;
 const theme = @import("theme");
 const font = @import("../ui/screen/font.zig"); // the glyph atlas the entry text draws with
@@ -41,6 +42,13 @@ const ROW_H: f32 = 18;
 const CHAR_W: f32 = @floatFromInt(font.WIDTH); // monospace atlas cell
 
 pub const Calculator = struct {
+    /// Release everything this window owns and free it (App.close). This
+    /// app holds nothing but its own struct — the method exists so the
+    /// desktop closes every app the same way and never has to know that.
+    pub fn close(self: *Calculator, a: std.mem.Allocator, _: ?*gles.Context) void {
+        a.destroy(self);
+    }
+
     win: *Window,
     mode: Mode = .home,
 
