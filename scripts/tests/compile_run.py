@@ -344,9 +344,9 @@ def main():
         q = qmp.QMP(QMP_SOCK)
 
         # 1. The network, which `compile` needs and boot leaves down on purpose.
-        if not send(q, nd, "ip", r"inet 10\.0\.2\.", NET_BUDGET_S, "ip addr"):
-            return fail(nd, "the `ip` line never leased an address")
-        if not wait_for(nd, r"ip\s+10\.0\.2\.\d+", NET_BUDGET_S, "dhcp lease"):
+        if not send(q, nd, "ip", r"\$ ip", NET_BUDGET_S, "ip"):
+            return fail(nd, "the `ip` line never reached the terminal")
+        if not wait_for(nd, r"inet 10\.0\.2\.\d+", NET_BUDGET_S, "dhcp lease"):
             return fail(nd, "kudos never leased an address from slirp")
 
         # 2. Point the compiler at this host (AGT: the factory is configurable at
