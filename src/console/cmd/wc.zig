@@ -22,11 +22,11 @@ pub fn run(c: console.Console, args: []const u8) void {
         report(c, data, path);
     }
     if (!any_file) {
-        if (c.stdin.len == 0) {
+        const data = c.stdin orelse {
             c.write("wc: no input (pipe something in or name a file)\n");
             return;
-        }
-        report(c, c.stdin, null);
+        };
+        report(c, data, null);
     }
 }
 

@@ -114,7 +114,7 @@ pub fn execute(c: console.Console, line_in: []const u8) void {
     // Head stages run captured; only the LAST stage's output reaches the
     // terminal or the redirect target. Two bounce buffers alternate, so a
     // stage's input stays intact while its output fills the other.
-    var stdin: []const u8 = "";
+    var stdin: ?[]const u8 = null;
     for (stages[0 .. n - 1], 0..) |stage, i| {
         var inner = c;
         inner.stdin = stdin;

@@ -22,7 +22,7 @@ pub fn run(c: console.Console, args: []const u8) void {
             path = word;
         }
     }
-    var data: []const u8 = c.stdin;
+    var data: []const u8 = undefined;
     if (path.len > 0) {
         var buf: [vfs.MAX_PATH]u8 = undefined;
         const abs = patharg.resolve(c, path, &buf) orelse return;
@@ -32,9 +32,11 @@ pub fn run(c: console.Console, args: []const u8) void {
             c.write(": no such file\n");
             return;
         };
-    } else if (data.len == 0) {
-        c.write("head: no input (pipe something in or name a file)\n");
-        return;
+    } else {
+        data = c.stdin orelse {
+            c.write("head: no input (pipe something in or name a file)\n");
+            return;
+        };
     }
     var lines = std.mem.splitScalar(u8, data, '\n');
     var n: usize = 0;

@@ -481,13 +481,13 @@ def phase_complete(q):
     # `ls` cases, so a failure here is completion, never a missing fixture.
     complete_case(q, "ls /usb", ["m", "ra"],
                   "ls /usbdisk/models/rabbit.glb",
-                  ("error: not a directory",))
+                  ("rabbit.glb  (",))  # ls of a FILE prints its entry
     # `Tri` matches Triangle.gltf AND TriangleWithoutIndices.gltf, so the line
     # grows to the text they share and STOPS there (APP-024) — the error names
     # the common prefix, never either whole name.
     complete_case(q, "ls /usbdisk/models/Tri", [],
                   "ls /usbdisk/models/Triangle",
-                  ("error: no such directory '/usbdisk/models/Triangle'",))
+                  ("ls: no such directory '/usbdisk/models/Triangle'",))
     # The FIRST word completes against the command names, not the file system
     # (APP-025) — `he`⇥ can only be `help`, and gains the space that starts an
     # argument, so what runs is the command itself.
@@ -498,7 +498,7 @@ def phase_complete(q):
     # which is why the error names Box and not box.
     complete_case(q, "ls /usbdisk/models/box", [],
                   "ls /usbdisk/models/Box",
-                  ("error: no such directory '/usbdisk/models/Box'",),
+                  ("ls: no such directory '/usbdisk/models/Box'",),
                   shown=("BoxInterleaved.glb", "BoxTextured.glb"))
 
 

@@ -32,11 +32,11 @@ pub fn run(c: console.Console, args: []const u8) void {
         filter(c, pat, data, if (nfiles > 1) path else null);
     }
     if (!any_file) {
-        if (c.stdin.len == 0) {
+        const data = c.stdin orelse {
             c.write("grep: no input (pipe something in or name a file)\n");
             return;
-        }
-        filter(c, pat, c.stdin, null);
+        };
+        filter(c, pat, data, null);
     }
 }
 

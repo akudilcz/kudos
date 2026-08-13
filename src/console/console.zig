@@ -67,10 +67,13 @@ pub const Console = struct {
     /// The hosting desktop's services and this console's window within it.
     desktop: Desktop,
     win: *anyopaque,
-    /// What a pipe fed this command: the previous stage's captured output, or
-    /// empty at the head of a line. A plain value — the shell sets it per
-    /// stage; consumers (`grep`, `wc`, `head`) read it when no file is named.
-    stdin: []const u8 = "",
+    /// What a pipe fed this command: the previous stage's captured output —
+    /// null at the head of a line. Null and empty are DIFFERENT answers: a
+    /// stage that produced nothing still fed the pipe, and `wc` on it counts
+    /// zeros rather than complaining of no input. A plain value — the shell
+    /// sets it per stage; consumers (`grep`, `wc`, `head`) read it when no
+    /// file is named.
+    stdin: ?[]const u8 = null,
     /// The desktop's allocator: pixels handed over via `setBackground` and
     /// buffers a backgrounded fetch retains are owned by it.
     a: std.mem.Allocator,
