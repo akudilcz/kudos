@@ -54,23 +54,32 @@ fn write(c: console.Console, shown: []const u8, abs: []const u8, data: []const u
         return;
     }
     // Append with no seek: read what is there and write the whole file back.
-    // The store holds a file as ONE value, so this IS the append.
+    // The store holds a file as ONE value, so this IS the append. The join
+    // lives on the heap, not this frame — a budget-sized array here put the
+    // frame over the kernel's 16 KiB stack budget (stackframes gate), and the
+    // terminal's scratch may already be carrying this very stage's capture.
     const existing = vfs.read(abs) orelse "";
     if (existing.len == 0) {
         vfs.write(abs, data) catch |e| return complain(c, shown, e);
         return;
     }
-    var joined: [APPEND_MAX_BYTES]u8 = undefined;
-    if (existing.len + data.len > joined.len) {
+    if (existing.len + data.len > APPEND_MAX_BYTES) {
         var buf: [96]u8 = undefined;
         c.write("tee: ");
         c.write(shown);
-        c.write(std.fmt.bufPrint(&buf, ": appending would take more than {d} bytes — not written\n", .{joined.len}) catch ": too large — not written\n");
+        c.write(std.fmt.bufPrint(&buf, ": appending would take more than {d} bytes — not written\n", .{APPEND_MAX_BYTES}) catch ": too large — not written\n");
         return;
     }
+    const joined = c.a.alloc(u8, existing.len + data.len) catch {
+        c.write("tee: ");
+        c.write(shown);
+        c.write(": out of memory — not written\n");
+        return;
+    };
+    defer c.a.free(joined);
     @memcpy(joined[0..existing.len], existing);
     @memcpy(joined[existing.len..][0..data.len], data);
-    vfs.write(abs, joined[0 .. existing.len + data.len]) catch |e| complain(c, shown, e);
+    vfs.write(abs, joined) catch |e| complain(c, shown, e);
 }
 
 fn complain(c: console.Console, path: []const u8, e: vfs.ifilesys.WriteError) void {
