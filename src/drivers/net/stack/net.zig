@@ -24,6 +24,7 @@ const udp = @import("udp.zig");
 const tcp = @import("tcp.zig");
 const http = @import("http.zig");
 const dhcp = @import("dhcp.zig");
+const dhcp_wire = @import("dhcp_wire.zig");
 const sched = @import("../../../kernel/sched/sched.zig");
 const counter = @import("../../../kernel/debug/counter.zig");
 const http_wire = @import("http_wire.zig");
@@ -31,8 +32,10 @@ const fetchjob = @import("fetchjob.zig");
 const job = @import("job"); // the shared named module (jobs.zig + fetchjob.zig too)
 const jobs = @import("../../../kernel/sched/jobs.zig");
 
-pub const ETH_ARP = 0x0806;
-pub const ETH_IP = 0x0800;
+// Ethertype values are owned by the pure wire.zig (the DHCP ACK snoop reads
+// them off raw frames there) — re-exported like the byte-order helpers below.
+pub const ETH_ARP = wire.ETH_ARP;
+pub const ETH_IP = wire.ETH_IP;
 // IP protocol numbers and IP/UDP header sizes are owned by the pure wire.zig
 // (like the byte-order helpers below) — re-exported, never re-spelled.
 pub const PROTO_ICMP = wire.PROTO_ICMP;
@@ -323,13 +326,17 @@ pub const ipEq = wire.ipEq;
 pub const parseIp = wire.parseIp;
 pub const buildUdp = wire.buildUdp;
 
-/// Resolve `host` — a dotted-quad literal or a DNS name — to an IPv4 address.
-/// A literal address is not a name: resolving "192.168.20.30" must not put a
-/// DNS query on the wire (and must still work when the DNS server is the thing
-/// that is broken). The single home of the literal-or-DNS rule; every fetch
+/// Resolve `host` — a dotted-quad literal, a local guest's name, or a DNS
+/// name — to an IPv4 address, in that order. A literal address is not a name:
+/// resolving "192.168.20.30" must not put a DNS query on the wire (and must
+/// still work when the DNS server is the thing that is broken). A running
+/// guest's catalog id ("zigserver") resolves next, from the guest-name table —
+/// those names exist only on this machine, so asking DNS about them could at
+/// best answer wrongly. The single home of the resolution order; every fetch
 /// path (http, the background GET, the app seam) resolves through it.
 pub fn resolveHost(host: []const u8) ?[4]u8 {
     if (wire.parseIp(host)) |ip| return ip;
+    if (inet.lookupGuest(host)) |ip| return ip;
     return udp.dnsResolve(host);
 }
 
@@ -843,6 +850,12 @@ pub fn pump() void {
         // both answering. Broadcast comes back false — copied to the guests AND
         // dispatched below, because an ARP request is everyone's.
         if (bridge) |b| {
+            // A guest's DHCP ACK crosses here on its way to the guest, and this
+            // is the ONLY place kudos can learn the address that server dealt —
+            // snoop it before the bridge consumes the frame, and the guest's
+            // name resolves (resolveHost). MACs not in the guest-name table
+            // (this host's own lease included) bind nothing.
+            if (dhcp_wire.snoopAck(frame)) |l| inet.bindGuestIp(l.mac, l.ip);
             if (b.offer(b.ctx, null, frame)) continue;
         }
         dispatchFrame(frame);

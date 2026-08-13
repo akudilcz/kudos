@@ -284,3 +284,106 @@ pub fn finishModuleFetch() void {
         @atomicStore(MFetchState, &mf_state, .idle, .release);
     }
 }
+
+// ── the guest-name table ─────────────────────────────────────────────────────
+//
+// Guest VMs are reachable BY NAME (`host zigserver`, a factory at
+// "zigserver:8623") with no configuration: the hypervisor registers each
+// guest's catalog id against the MAC it deals that guest, the stack binds the
+// address when the guest's DHCP ACK crosses the bridge (guests lease from the
+// wire's DHCP server, never from kudos — dhcp_wire.snoopAck), and the
+// resolver consults this table after dotted literals, before DNS. The
+// hypervisor and the stack may not import each other, so the table lives in
+// this leaf, like the frame constants above.
+//
+// Keyed by MAC, not name: the MAC is derived from the VM slot, so it is known
+// at registration, unique per live guest, and still known at teardown — while
+// the address does not exist until the guest has run its own DHCP client.
+//
+// Cross-core like the mailboxes above: register runs on core 0, unregister on
+// the guest's own core, bind on whichever task drives the stack, lookup on any
+// session. `used` is the publish barrier for the entry's fields; `ip` is a
+// separate atomic because it arrives later, from another core.
+
+/// Longest registrable guest name. Catalog ids are single short words.
+pub const GUEST_NAME_MAX: usize = 32;
+
+/// Table capacity — one entry per possible live guest. The hypervisor asserts
+/// at comptime that its slot count (ivirt.MAX_VMS, which imports this module
+/// and so cannot be named here) fits.
+pub const GUEST_NAMES: usize = 4;
+
+const GuestName = struct {
+    /// Publish barrier: the name and MAC are valid only while this is true.
+    used: bool = false,
+    mac: [6]u8 = @splat(0),
+    /// The bound address as one atomic word (native byte order via @bitCast);
+    /// 0 = lease not yet seen. Never a real lease: a server grants no 0.0.0.0.
+    ip: u32 = 0,
+    name_len: u8 = 0,
+    name: [GUEST_NAME_MAX]u8 = undefined,
+};
+
+var guest_names: [GUEST_NAMES]GuestName = @splat(.{});
+
+/// HYPERVISOR (core 0, guest start): publish `name` for the guest holding
+/// `mac`, with no address yet. Re-registering a MAC replaces its entry (a
+/// recycled VM slot deals the same MAC). False when the name does not fit or
+/// every entry is taken by another live guest.
+pub fn registerGuest(name: []const u8, mac: [6]u8) bool {
+    if (name.len == 0 or name.len > GUEST_NAME_MAX) return false;
+    var slot: ?usize = null;
+    for (&guest_names, 0..) |*e, i| {
+        if (@atomicLoad(bool, &e.used, .acquire)) {
+            if (std.mem.eql(u8, &e.mac, &mac)) {
+                slot = i;
+                break;
+            }
+        } else if (slot == null) slot = i;
+    }
+    const e = &guest_names[slot orelse return false];
+    // Retract while rewriting: a lookup racing this sees the entry absent,
+    // never a torn name.
+    @atomicStore(bool, &e.used, false, .release);
+    e.mac = mac;
+    @memcpy(e.name[0..name.len], name);
+    e.name_len = @intCast(name.len);
+    @atomicStore(u32, &e.ip, 0, .monotonic);
+    @atomicStore(bool, &e.used, true, .release);
+    return true;
+}
+
+/// HYPERVISOR (the core tearing the guest down): the guest holding `mac`
+/// stopped — its name resolves no more. A no-op for a MAC never registered,
+/// so every teardown path may call it unconditionally.
+pub fn unregisterGuest(mac: [6]u8) void {
+    for (&guest_names) |*e| {
+        if (!@atomicLoad(bool, &e.used, .acquire)) continue;
+        if (std.mem.eql(u8, &e.mac, &mac)) @atomicStore(bool, &e.used, false, .release);
+    }
+}
+
+/// NET STACK: a DHCP ACK for `mac` crossed the bridge — bind its address. A
+/// no-op for a MAC not in the table (this host's own lease, or a stranger's).
+/// A re-lease simply rebinds.
+pub fn bindGuestIp(mac: [6]u8, ip: [4]u8) void {
+    const word: u32 = @bitCast(ip);
+    if (word == 0) return; // 0 is the "unbound" value, never a lease
+    for (&guest_names) |*e| {
+        if (!@atomicLoad(bool, &e.used, .acquire)) continue;
+        if (std.mem.eql(u8, &e.mac, &mac)) @atomicStore(u32, &e.ip, word, .release);
+    }
+}
+
+/// RESOLVER: the address bound to guest `name`, or null while the guest has no
+/// lease yet (or no such guest runs). An entry whose lease has not landed is
+/// skipped, not final — two boots of the same image are two entries.
+pub fn lookupGuest(name: []const u8) ?[4]u8 {
+    for (&guest_names) |*e| {
+        if (!@atomicLoad(bool, &e.used, .acquire)) continue;
+        if (!std.mem.eql(u8, e.name[0..e.name_len], name)) continue;
+        const word = @atomicLoad(u32, &e.ip, .acquire);
+        if (word != 0) return @bitCast(word);
+    }
+    return null;
+}

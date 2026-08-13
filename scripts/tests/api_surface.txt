@@ -173,21 +173,34 @@ src/console/cmd/cd.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/clear.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/clock.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/compile.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/cp.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/cp.zig: pub fn copyOne(c: console.Console, src: []const u8, dest: []const u8, dest_is_dir: bool) bool
+src/console/cmd/cp.zig: pub fn collect(args: []const u8, words: *[16][]const u8) usize
 src/console/cmd/crash.zig: pub fn run(out: Out, args: []const u8) void
+src/console/cmd/curl.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/echo.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/exit.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/feature.zig: pub fn dispatch(c: console.Console, name: []const u8, args: []const u8) bool
 src/console/cmd/feature.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/flipstat.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/free.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/grep.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/head.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/help.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/host.zig: pub fn run(c: console.Console, name: []const u8) void
+src/console/cmd/ip.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/kudos.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/lspci.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/ls.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/memfault.zig: pub fn run(out: Out, args: []const u8) void
-src/console/cmd/mem.zig: pub fn run(c: console.Console, _: []const u8) void
-src/console/cmd/net.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/mkdir.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/mv.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/ping.zig: pub fn run(c: console.Console, host: []const u8) void
 src/console/cmd/prime.zig: pub fn run(out: Out, args: []const u8) void
 src/console/cmd/ps.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/pwd.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/reboot.zig: pub fn run(_: console.Console, _: []const u8) void
+src/console/cmd/rmdir.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/rm.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/rt.zig: pub const RtResult = struct
 src/console/cmd/rt.zig: pub fn lastRt() RtResult
@@ -199,10 +212,14 @@ src/console/cmd/stats.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/system.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/term.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmdtoken.zig: pub const CmdToken = struct
+src/console/cmd/touch.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/uname.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/uptime.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/vm.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/vm.zig: pub fn writeList(w: anytype) void
 src/console/cmd/vm.zig: pub fn writeStop(w: anytype, arg: []const u8) void
 src/console/cmd/vm.zig: pub fn writeStatus(w: anytype) void
+src/console/cmd/wc.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/complete.zig: pub const ifilesys = @import("ifilesys");
 src/console/complete.zig: pub const BARE_ROOTS = [_][]const u8{ "/ramdisk", "/usbdisk" };
 src/console/complete.zig: pub const Dirs = struct
@@ -219,6 +236,8 @@ src/console/editline.zig: pub const Screen = struct
 src/console/editline.zig: pub const Action = enum { none, commit, complete, recalled, recall_empty };
 src/console/editline.zig: pub const Completion = enum { none, grew, ambiguous };
 src/console/editline.zig: pub const Editor = struct
+src/console/glob.zig: pub fn hasGlob(word: []const u8) bool
+src/console/glob.zig: pub fn match(pat: []const u8, name: []const u8) bool
 src/console/grants.zig: pub const Grant = enum
 src/console/grants.zig: pub const Row = struct
 src/console/grants.zig: pub const TABLE = [_]Row{
@@ -226,18 +245,28 @@ src/console/grants.zig: pub fn allows(grant: Grant, id: u32, version: u32) bool
 src/console/grants.zig: pub fn find(id: u32, version: u32) ?Row
 src/console/localcmd.zig: pub const Out = @import("out.zig").Out;
 src/console/localcmd.zig: pub const Command = struct
+src/console/localcmd.zig: pub const GROUP = "kudos";
 src/console/localcmd.zig: pub const COMMANDS = if (buildinfo.test_hooks)
 src/console/localcmd.zig: pub const NAMES: [COMMANDS.len][]const u8 = blk:
 src/console/localcmd.zig: pub fn lookup(cmd: []const u8) ?Command
+src/console/localcmd.zig: pub const Resolved = struct { c: Command, args: []const u8 };
+src/console/localcmd.zig: pub fn resolveLine(cmd: []const u8, args: []const u8) ?Resolved
 src/console/localcmd.zig: pub fn refusesRedirect(args: []const u8) bool
+src/console/network.zig: pub fn up(c: console.Console) ?inet.INet
+src/console/network.zig: pub fn any(c: console.Console) ?inet.INet
+src/console/network.zig: pub fn writeIp(c: console.Console, ip: [4]u8) void
+src/console/network.zig: pub fn prefixLen(mask: [4]u8) u8
 src/console/out.zig: pub const Out = struct
 src/console/patharg.zig: pub fn resolve(c: console.Console, arg: []const u8, buf: *[vfs.MAX_PATH]u8) ?[]const u8
+src/console/patharg.zig: pub fn writeErrorText(e: ifilesys.WriteError) []const u8
 src/console/redirect.zig: pub const MAX_BYTES: usize = 16 << 10;
 src/console/redirect.zig: pub const Mode = enum
 src/console/redirect.zig: pub const Parsed = struct
 src/console/redirect.zig: pub fn parse(line: []const u8) ?Parsed
+src/console/redirect.zig: pub const MAX_STAGES: usize = 8;
+src/console/redirect.zig: pub fn splitPipes(line: []const u8, out: *[MAX_STAGES][]const u8) usize
 src/console/redirect.zig: pub const Sink = struct
-src/console/session.zig: pub const ReqKind = enum(u8) { echo, backspace, run_line, complete };
+src/console/session.zig: pub const ReqKind = enum(u8) { echo, backspace, run_line, complete, prompt };
 src/console/session.zig: pub const Request = struct
 src/console/session.zig: pub const Key = struct { ascii: u8 };
 src/console/session.zig: pub const REQ_RING_CAP = 256;
@@ -2174,8 +2203,16 @@ src/drivers/net/stack/config.zig: pub var netmask = [4]u8{ 0, 0, 0, 0 };
 src/drivers/net/stack/config.zig: pub var gateway = [4]u8{ 0, 0, 0, 0 };
 src/drivers/net/stack/config.zig: pub var dns_server = [4]u8{ 0, 0, 0, 0 };
 src/drivers/net/stack/config.zig: pub var our_mac = [6]u8{ 0, 0, 0, 0, 0, 0 };
+src/drivers/net/stack/dhcp_wire.zig: pub const SERVER_PORT: u16 = 67;
+src/drivers/net/stack/dhcp_wire.zig: pub const CLIENT_PORT: u16 = 68;
+src/drivers/net/stack/dhcp_wire.zig: pub const OFF_OP: usize = 0;
+src/drivers/net/stack/dhcp_wire.zig: pub const OFF_HTYPE: usize = 1;
+src/drivers/net/stack/dhcp_wire.zig: pub const OFF_HLEN: usize = 2;
 src/drivers/net/stack/dhcp_wire.zig: pub const OFF_YIADDR: usize = 16;
+src/drivers/net/stack/dhcp_wire.zig: pub const OFF_CHADDR: usize = 28;
 src/drivers/net/stack/dhcp_wire.zig: pub const BOOTP_FIXED: usize = 240;
+src/drivers/net/stack/dhcp_wire.zig: pub const BOOTREPLY: u8 = 2;
+src/drivers/net/stack/dhcp_wire.zig: pub const HTYPE_ETHER: u8 = 1;
 src/drivers/net/stack/dhcp_wire.zig: pub const OPT_SUBNET: u8 = 1;
 src/drivers/net/stack/dhcp_wire.zig: pub const OPT_ROUTER: u8 = 3;
 src/drivers/net/stack/dhcp_wire.zig: pub const OPT_DNS: u8 = 6;
@@ -2190,9 +2227,11 @@ src/drivers/net/stack/dhcp_wire.zig: pub const Options = struct
 src/drivers/net/stack/dhcp_wire.zig: pub fn parseOptions(msg: []const u8) Options
 src/drivers/net/stack/dhcp_wire.zig: pub fn yiaddr(msg: []const u8) [4]u8
 src/drivers/net/stack/dhcp_wire.zig: pub fn isZero(ip: [4]u8) bool
+src/drivers/net/stack/dhcp_wire.zig: pub const SnoopedLease = struct { mac: [6]u8, ip: [4]u8 };
+src/drivers/net/stack/dhcp_wire.zig: pub fn snoopAck(frame: []const u8) ?SnoopedLease
 src/drivers/net/stack/dhcp_wire.zig: pub const Lease = struct
 src/drivers/net/stack/dhcp_wire.zig: pub fn acceptAck(ip: [4]u8, o: Options) ?Lease
-src/drivers/net/stack/dhcp.zig: pub const CLIENT_PORT = 68;
+src/drivers/net/stack/dhcp.zig: pub const CLIENT_PORT = dhcp_wire.CLIENT_PORT;
 src/drivers/net/stack/dhcp.zig: pub fn active() bool
 src/drivers/net/stack/dhcp.zig: pub fn handleReply(msg: []const u8) void
 src/drivers/net/stack/dhcp.zig: pub fn configure() bool
@@ -2238,8 +2277,8 @@ src/drivers/net/stack/netapi.zig: pub fn publish() void
 src/drivers/net/stack/netown.zig: pub const Holder = ?*anyopaque;
 src/drivers/net/stack/netown.zig: pub fn mayClaim(held: Holder, caller: Holder) bool
 src/drivers/net/stack/netown.zig: pub fn mustSkip(held: Holder, caller: Holder) bool
-src/drivers/net/stack/net.zig: pub const ETH_ARP = 0x0806;
-src/drivers/net/stack/net.zig: pub const ETH_IP = 0x0800;
+src/drivers/net/stack/net.zig: pub const ETH_ARP = wire.ETH_ARP;
+src/drivers/net/stack/net.zig: pub const ETH_IP = wire.ETH_IP;
 src/drivers/net/stack/net.zig: pub const PROTO_ICMP = wire.PROTO_ICMP;
 src/drivers/net/stack/net.zig: pub const PROTO_TCP = wire.PROTO_TCP;
 src/drivers/net/stack/net.zig: pub const PROTO_UDP = wire.PROTO_UDP;
@@ -2351,6 +2390,9 @@ src/drivers/net/stack/wire.zig: pub const PROTO_ICMP: u8 = 1;
 src/drivers/net/stack/wire.zig: pub const PROTO_TCP: u8 = 6;
 src/drivers/net/stack/wire.zig: pub const PROTO_UDP: u8 = 17;
 src/drivers/net/stack/wire.zig: pub const IP_BROADCAST: [4]u8 = .{ 255, 255, 255, 255 };
+src/drivers/net/stack/wire.zig: pub const ETHERTYPE_OFF: usize = 12;
+src/drivers/net/stack/wire.zig: pub const ETH_ARP: u16 = 0x0806;
+src/drivers/net/stack/wire.zig: pub const ETH_IP: u16 = 0x0800;
 src/drivers/net/stack/wire.zig: pub fn buildUdp(seg: []u8, src_port: u16, dst_port: u16, payload: []const u8) usize
 src/drivers/net/stack/wire.zig: pub const IpPacket = struct { proto: u8, src: [4]u8, dst: [4]u8, payload: []const u8 };
 src/drivers/net/stack/wire.zig: pub fn classifyIp(frame: []const u8, our_ip: [4]u8, dhcp_binding: bool) ?IpPacket
@@ -2696,6 +2738,12 @@ src/iface/inet.zig: pub fn takeModuleFetchRequest() ?MFetchReq
 src/iface/inet.zig: pub fn completeModuleFetch(ok: bool) void
 src/iface/inet.zig: pub fn moduleFetchState() MFetchState
 src/iface/inet.zig: pub fn finishModuleFetch() void
+src/iface/inet.zig: pub const GUEST_NAME_MAX: usize = 32;
+src/iface/inet.zig: pub const GUEST_NAMES: usize = 4;
+src/iface/inet.zig: pub fn registerGuest(name: []const u8, mac: [6]u8) bool
+src/iface/inet.zig: pub fn unregisterGuest(mac: [6]u8) void
+src/iface/inet.zig: pub fn bindGuestIp(mac: [6]u8, ip: [4]u8) void
+src/iface/inet.zig: pub fn lookupGuest(name: []const u8) ?[4]u8
 src/iface/ipci.zig: pub const Device = struct
 src/iface/ipci.zig: pub var devices: []const Device = &.{};
 src/iface/ipresent.zig: pub const MapError = error{ BackendMapFailed, BackendVaExhausted, BackendVramExhausted };

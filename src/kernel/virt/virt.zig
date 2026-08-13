@@ -258,7 +258,7 @@ pub fn guestBaked(id: []const u8) bool {
 pub fn bootStaged(ram_bytes: u64, cmdline: []const u8) BootError!ivirt.Id {
     if (!probed) return error.NotAvailable;
     if (!gueststage.staged()) return error.NotStaged;
-    return boot(ram_bytes, gueststage.bzImage(), gueststage.initramfs(), cmdline);
+    return boot(gueststage.name(), ram_bytes, gueststage.bzImage(), gueststage.initramfs(), cmdline);
 }
 
 /// Whether a bootable guest image is staged into this build (gueststage.zig).
@@ -286,6 +286,33 @@ pub fn guestCore(id: ivirt.Id) ?u32 {
 /// are the names the apex wires into the network stack's Bridge hook.
 pub const bridgeOffer = netbridge.offer;
 pub const bridgePoll = netbridge.poll;
+
+// ── guest names ─────────────────────────────────────────────────────────────
+//
+// A guest is reachable by its catalog id the moment its lease lands, with no
+// configuration: starting a guest registers <id> → its dealt MAC in the
+// resolver's guest-name table (inet), the stack binds the address when it
+// snoops the guest's DHCP ACK crossing the bridge, and every teardown path
+// withdraws the name. Registration is keyed by the MAC because that is derived
+// from the slot — known at start, still known at teardown, no address needed.
+
+comptime {
+    if (ivirt.MAX_VMS > inet.GUEST_NAMES)
+        @compileError("more VM slots than guest-name table entries (inet.GUEST_NAMES)");
+}
+
+/// Register `name` for slot `id`'s guest. A refusal (a `-Dguest=` name longer
+/// than the table's bound) costs only name resolution, so it is a trace line,
+/// never a failed boot.
+fn publishGuestName(id: ivirt.Id, name: []const u8) void {
+    if (!inet.registerGuest(name, netdev.guestMac(id)))
+        klog.puts("virt: guest name not registered (too long?) — it will not resolve\n");
+}
+
+/// Withdraw slot `id`'s name. Safe on a slot that never registered one.
+fn withdrawGuestName(id: ivirt.Id) void {
+    inet.unregisterGuest(netdev.guestMac(id));
+}
 
 // ── network image boots (VIRT-019/VIRT-020) ─────────────────────────────────
 
@@ -341,7 +368,7 @@ pub fn netbootBegin(image_no: u8) BootError!ivirt.Id {
     // guest starts here, synchronously, exactly as the staged built-in does.
     if (gueststage.bakedFor(img.id)) |b| {
         klog.puts("virt: booting a guest carried in this image (no download)\n");
-        return boot(@as(u64, img.ram_mb) * 1024 * 1024, b.bzimage, b.initramfs, img.cmdline);
+        return boot(img.id, @as(u64, img.ram_mb) * 1024 * 1024, b.bzimage, b.initramfs, img.cmdline);
     }
 
     if (netboot.active) return error.Busy;
@@ -464,6 +491,7 @@ fn nbInitrdDone(_: *anyopaque, body: ?[]const u8) void {
         defer regUnlock(reg_if);
         registry.vcpuStarted(id);
     }
+    publishGuestName(id, netboot.img.id);
     heap.allocator().free(kernel);
     netboot.kernel = null;
     netboot.active = false;
@@ -482,6 +510,7 @@ fn nbInitrdDone(_: *anyopaque, body: ?[]const u8) void {
         vmx.disableOnCore();
         storage[id].deinit();
         ivirt.setState(id, .failed);
+        withdrawGuestName(id);
         {
             const reg_if = regLock();
             defer regUnlock(reg_if);
@@ -503,6 +532,7 @@ fn nbFail(reason: []const u8) void {
     netboot.kernel = null;
     netboot.active = false;
     ivirt.setState(netboot.id, .failed);
+    withdrawGuestName(netboot.id);
     {
         const reg_if = regLock();
         defer regUnlock(reg_if);
@@ -525,7 +555,7 @@ fn noteStartError(e: anyerror) void {
     klog.puts("\n");
 }
 
-fn boot(ram_bytes: u64, bz_image: []const u8, initrd: []const u8, cmdline: []const u8) BootError!ivirt.Id {
+fn boot(name: []const u8, ram_bytes: u64, bz_image: []const u8, initrd: []const u8, cmdline: []const u8) BootError!ivirt.Id {
     const claim_if = regLock();
     const id = registry.claim() orelse {
         regUnlock(claim_if);
@@ -548,6 +578,8 @@ fn boot(ram_bytes: u64, bz_image: []const u8, initrd: []const u8, cmdline: []con
         defer regUnlock(reg_if);
         registry.vcpuStarted(id);
     }
+    publishGuestName(id, name);
+    errdefer withdrawGuestName(id);
 
     if (buildinfo.smp) {
         // Spawn the vCPU as an ordinary task and let the scheduler place it
@@ -636,6 +668,7 @@ fn vcpuEntry() void {
         ivirt.setState(id, .failed);
     }
     vmx.disableOnCore();
+    withdrawGuestName(id);
     // The slot is reusable once its window has also closed. Nothing else has to
     // be given back: this task IS the guest's hold on a processor, and it is
     // about to return and be reaped.
@@ -679,6 +712,7 @@ pub fn pumpAll() void {
                 vm.deinit();
                 ivirt.setState(id, .halted);
                 vmx.disableOnCore();
+                withdrawGuestName(id);
                 {
                     const reg_if = regLock();
                     defer regUnlock(reg_if);

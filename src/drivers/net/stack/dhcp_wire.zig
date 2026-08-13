@@ -9,11 +9,25 @@
 //! except booting real hardware and watching the box fail to answer a ping.
 
 const std = @import("std");
+const inet = @import("inet");
+const wire = @import("wire.zig");
+
+// BOOTP/DHCP UDP ports (RFC 951/2131). Owned here (pure); dhcp.zig re-exports
+// CLIENT_PORT for net.zig's RX demux.
+pub const SERVER_PORT: u16 = 67;
+pub const CLIENT_PORT: u16 = 68;
 
 // BOOTP fixed-header layout (RFC 2131 §2) and the option codes we consume
 // (RFC 2132). Options start after the magic cookie at offset 236+4.
+pub const OFF_OP: usize = 0;
+pub const OFF_HTYPE: usize = 1;
+pub const OFF_HLEN: usize = 2;
 pub const OFF_YIADDR: usize = 16;
+pub const OFF_CHADDR: usize = 28;
 pub const BOOTP_FIXED: usize = 240;
+
+pub const BOOTREPLY: u8 = 2;
+pub const HTYPE_ETHER: u8 = 1;
 
 pub const OPT_SUBNET: u8 = 1;
 pub const OPT_ROUTER: u8 = 3;
@@ -85,6 +99,49 @@ pub fn yiaddr(msg: []const u8) [4]u8 {
 
 pub fn isZero(ip: [4]u8) bool {
     return std.mem.eql(u8, &ip, &[_]u8{ 0, 0, 0, 0 });
+}
+
+/// A lease that belongs to some OTHER machine, read off a passing frame: the
+/// leased address and the client hardware address it was granted to.
+pub const SnoopedLease = struct { mac: [6]u8, ip: [4]u8 };
+
+/// Read a guest's lease off a raw Ethernet frame carrying a DHCP ACK, or null
+/// for any other frame.
+///
+/// kudos never serves DHCP to its guests: they lease from the DHCP server on
+/// the wire (QEMU's slirp, or the LAN's), and the ACK crosses kudos' NIC on its
+/// way to the guest like any other bridged frame. Snooping that ACK is the only
+/// place kudos can learn which address a guest holds — the binding key is the
+/// BOOTP `chaddr` (client hardware address), because a server is free to answer
+/// on broadcast, in which case the Ethernet destination names nobody.
+///
+/// Every length here is attacker-controlled (any host on the LAN can send the
+/// frame), so each step bounds-checks before it slices — same discipline as
+/// `classifyIp`, spelled out because this reads frames that are NOT addressed
+/// to this host and so never pass that parser.
+pub fn snoopAck(frame: []const u8) ?SnoopedLease {
+    if (frame.len < inet.ETHER_HEADER_BYTES) return null;
+    if (wire.rbe16(frame[wire.ETHERTYPE_OFF..][0..2]) != wire.ETH_IP) return null;
+    const pkt = frame[inet.ETHER_HEADER_BYTES..];
+    if (pkt.len < wire.IP_HLEN) return null;
+    if ((pkt[0] >> 4) != 4) return null; // not IPv4
+    const total_len = wire.rbe16(pkt[2..4]);
+    if (total_len < wire.IP_HLEN or total_len > pkt.len) return null;
+    const ihl: usize = @as(usize, pkt[0] & 0x0F) * 4;
+    if (ihl < wire.IP_HLEN or ihl > total_len) return null;
+    if (pkt[9] != wire.PROTO_UDP) return null;
+    const seg = pkt[ihl..total_len];
+    if (seg.len < wire.UDP_HLEN) return null;
+    if (wire.rbe16(seg[0..2]) != SERVER_PORT) return null;
+    if (wire.rbe16(seg[2..4]) != CLIENT_PORT) return null;
+    const msg = seg[wire.UDP_HLEN..];
+    if (msg.len < BOOTP_FIXED) return null;
+    if (msg[OFF_OP] != BOOTREPLY) return null;
+    if (msg[OFF_HTYPE] != HTYPE_ETHER or msg[OFF_HLEN] != inet.ETHER_ADDR_BYTES) return null;
+    if (parseOptions(msg).msg_type != DHCPACK) return null;
+    const ip = yiaddr(msg);
+    if (isZero(ip)) return null; // no address granted: nothing to learn
+    return .{ .mac = msg[OFF_CHADDR..][0..6].*, .ip = ip };
 }
 
 /// A lease we are willing to commit.
