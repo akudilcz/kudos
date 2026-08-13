@@ -11,6 +11,14 @@ build/
 .claude/worktrees/
 .claude/drift/queue
 .claude/drift/*.lock
+.claude/drift/*.log
+.claude/drift/runs
+# Local watermarks, not shared state: last-run's meaning IS its mtime (which git
+# does not carry), and last-reviewed names the commit THIS machine got to.
+# A pattern line carries no inline comment — it would match a filename with the
+# comment in it — so the note lives here.
+.claude/drift/last-run
+.claude/drift/last-reviewed
 .claude/settings.local.json
 
 # Zig's default install prefix / cache when someone runs bare `zig build` instead

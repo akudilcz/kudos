@@ -3,11 +3,18 @@
 # upstream and downstream neighbours against process.md's rubric, applies the mechanical
 # fixes on a branch, and promotes recurring findings into gates and rails.
 #
-#   scripts/tools/drift-review.sh queue [SHA]   record a commit and try to run (the git hook)
+#   scripts/tools/drift-review.sh queue [SHA]   record a point of interest and try to run
 #   scripts/tools/drift-review.sh run           run now if the debounce allows it
 #   scripts/tools/drift-review.sh now           run regardless of the debounce
 #   scripts/tools/drift-review.sh working-tree  review UNCOMMITTED work instead of a range
 #   scripts/tools/drift-review.sh status        queue, locks, last run, ledger size
+#
+# WHAT TRIGGERS IT, AND WHY NOT A GIT HOOK. `queue` is called from the Stop hook in
+# .claude/settings.json — versioned config that ships with the repo and can be reviewed like
+# anything else. A .git/hooks/ script cannot be committed, so it would be the one part of this
+# automation nobody else could see or review, which is exactly the failure the rest of the
+# setup exists to avoid. Add a cron entry calling `run` if you want it firing with no session
+# open; the debounce below makes either trigger safe.
 #
 # THE REVIEW NEVER TOUCHES YOUR CHECKOUT. Every run happens in its own git worktree on a
 # branch `drift/<stamp>`; the mechanical fixes, the gate run and any new rail all land
@@ -115,8 +122,15 @@ cmd_run() {
     fi
 
     : >"$QUEUE"
-    run_workflow commits "$base" "$head"
-    echo "$head" >"$LAST_REVIEWED"
+    # A FAILED RUN HAS NOT REVIEWED ANYTHING. Advancing the marker on failure would retire a
+    # change set nobody looked at — the silent gap this job exists to prevent. So the marker
+    # moves only on success, while last-run is stamped either way so a persistent failure
+    # retries at the floor's pace instead of spinning on every trigger.
+    if run_workflow commits "$base" "$head"; then
+        echo "$head" >"$LAST_REVIEWED"
+    else
+        say "run failed — $base..$head stays unreviewed and will be retried"
+    fi
     touch "$LAST_RUN"
 }
 
@@ -142,8 +156,11 @@ run_workflow() {
 
     say "run #$n  mode=$mode  range=$base..$head  branch=$branch  shape=$shape"
 
-    git worktree add --detach "$tree" "$head" >/dev/null 2>&1 || {
-        say "could not create the worktree"; return 1; }
+    local err
+    if ! err=$(git worktree add --detach "$tree" "$head" 2>&1); then
+        say "could not create the worktree: $err"
+        return 1
+    fi
     git -C "$tree" switch -c "$branch" >/dev/null 2>&1
 
     if [ "$mode" = "working-tree" ]; then

@@ -17,24 +17,22 @@
 
 const std = @import("std");
 const abi = @import("abi");
+const agentmcp = @import("agentmcp.zig");
 const apprun = @import("apprun.zig");
 const console_mod = @import("console.zig");
 const shell = @import("shell.zig");
 const capabilities = @import("capabilities.zig");
 const taskstat = @import("../kernel/sched/taskstat.zig");
 const counter = @import("../kernel/debug/counter.zig");
-const fileproto = @import("fileproto");
 const fileserv = @import("../drivers/net/debug/fileserv.zig");
 const heap = @import("../kernel/memory/heap.zig");
 const hotload = @import("../kernel/loader/hotload.zig");
 const ifilesys = @import("ifilesys");
-const ilog = @import("ilog");
 const inet = @import("inet");
 const idesk = @import("idesk"); // the desktop-control seam: window requests + published readback
 const imouse = @import("imouse"); // the one producer path every mouse event takes
 const iramdisk = @import("iramdisk");
 const keyboard = @import("../drivers/input/keyboard.zig");
-const mcp = @import("../agent/mcp.zig");
 const timer = @import("../kernel/timer/timer.zig");
 const tools = @import("../agent/tools.zig");
 const vfs = @import("vfs");
@@ -82,9 +80,9 @@ pub fn setToken(tok: []const u8) void {
 }
 
 /// Bind an external MCP server whose tools join the ones offered to the model
-/// (AI.CFG `mcp=`, AGT-014).
+/// (AI.CFG `mcp=`, AGT-014). The binding itself lives with the client half.
 pub fn setMcpServer(url: []const u8) void {
-    setBuf(&g_mcp_url_buf, &g_mcp_url_len, url);
+    agentmcp.setServer(url);
 }
 
 /// Copy `src` into the fixed buffer `dst`, truncated to its capacity, and
@@ -869,128 +867,27 @@ const registry = tools.Registry{ .tools = &.{
     .{ .name = "read_abi", .description = "Read the .kudos ABI contract (abi.zig): the Api/FeatureApi every module is written against.", .params_schema = NONE_SCHEMA, .handler = toolReadAbi },
 } };
 
-// ── MCP server over netdebug (AGT-011 / AGT-013) ──────────────────────────────
-//
-// The SAME tool registry the LLM calls is served to external MCP clients: one
-// JSON-RPC request in (over the KMR1 OP_MCP op), the response written to the
-// ramdisk for the client to pull. Defined once — the registry is the single
-// source of truth for what kudos can do, whether the caller is the model or a
-// remote MCP client.
-var mcp_ctx: u8 = 0;
+// ── MCP, in both directions ───────────────────────────────────────────────────
+// Serving this registry to external MCP clients, and splicing a remote server's
+// tools into it, are one concern and they live in console/agentmcp.zig. The
+// registry is passed to it rather than imported, so the protocol half never
+// depends on what the tools do. These are the names the console and the boot
+// path already call; the work is one file down.
 
-fn mcpServe(body: []const u8) void {
-    const resp = mcp.handle(heap.allocator(), registry, &mcp_ctx, body) catch |e| {
-        logMcp("mcp.handle failed: {s}", .{@errorName(e)});
-        return;
-    };
-    defer heap.allocator().free(resp);
-    const rd = iramdisk.instance orelse return;
-    rd.put(fileproto.MCP_RESPONSE_FILE, resp) catch |e|
-        logMcp("mcp response write failed: {s}", .{@errorName(e)});
-}
-
-fn logMcp(comptime fmt: []const u8, args: anytype) void {
-    var buf: [128]u8 = undefined;
-    if (std.fmt.bufPrint(&buf, "ai: " ++ fmt ++ "\n", args)) |s| ilog.puts(s) else |_| {}
-}
-
-/// Wire the MCP-over-netdebug server, once at boot (main_root.zig). Makes kudos an
-/// MCP server whenever the network is up — independent of whether a user has
-/// opened the agent console.
+/// Wire the MCP-over-netdebug server, once at boot (main_root.zig).
 pub fn initMcpServer() void {
-    fileserv.setMcpHandler(mcpServe);
+    agentmcp.initServer(registry);
 }
 
-// ── MCP client: federate an external MCP server's tools (AGT-014/015/016) ──────
-//
-// When AI.CFG names an `mcp` endpoint, the agent binds to it: it lists the
-// server's tools once and offers them to the model alongside its own, and
-// routes a call to one of them back out to that server. kudos is thus an MCP
-// server (above) and an MCP client at the same time (AGT-016).
-var g_mcp_url_buf: [192]u8 = undefined;
-var g_mcp_url_len: usize = 0;
-var g_remote_arena: ?std.heap.ArenaAllocator = null;
-var g_remote_tools: []const mcp.RemoteTool = &.{};
-
-fn remoteMcpUrl() ?[]const u8 {
-    return if (g_mcp_url_len != 0) g_mcp_url_buf[0..g_mcp_url_len] else null;
-}
-
-/// POST one JSON-RPC message to the bound MCP server and return the response
-/// body (caller frees). The same inet.post seam the LLM chat rides.
-fn remoteMcpPost(alloc: std.mem.Allocator, request: []const u8) ![]u8 {
-    const url = remoteMcpUrl() orelse return error.NoMcpServer;
-    const n = inet.instance orelse return error.NoNetwork;
-    var hdrs: [1]inet.Header = .{.{ .name = "content-type", .value = "application/json" }};
-    return n.post(alloc, url, &hdrs, request);
-}
-
-/// Discover the bound server's tools once per session (AGT-014). Failure is
-/// non-fatal — the agent keeps its own tools and reports the reason.
+/// Discover a bound MCP server's tools once per session (AGT-014).
 pub fn discoverRemoteTools() void {
-    if (g_remote_arena) |*a| a.deinit();
-    g_remote_arena = null;
-    g_remote_tools = &.{};
-    if (remoteMcpUrl() == null) return;
-
-    const req = mcp.buildRequest(heap.allocator(), 1, "tools/list", "{}") catch return;
-    defer heap.allocator().free(req);
-    const resp = remoteMcpPost(heap.allocator(), req) catch |e| {
-        logMcp("remote MCP tools/list failed: {s}", .{@errorName(e)});
-        return;
-    };
-    defer heap.allocator().free(resp);
-
-    var arena = std.heap.ArenaAllocator.init(heap.allocator());
-    const remote = mcp.parseToolsList(arena.allocator(), resp) catch {
-        arena.deinit();
-        return;
-    };
-    g_remote_arena = arena; // owns the remote tool slices for the session
-    g_remote_tools = remote;
-    if (remote.len != 0) logMcp("bound MCP server: {d} remote tools federated", .{remote.len});
+    agentmcp.discoverRemoteTools();
 }
 
-/// The tool set offered to the model: the local registry plus any federated
-/// remote tools (AGT-015). Splices the remote tools into the local array.
+/// The tool set offered to the model: this registry plus any federated remote
+/// tools (AGT-015).
 pub fn mergedToolsJson(alloc: std.mem.Allocator) ![]u8 {
-    const local = try registry.toolsJson(alloc);
-    if (g_remote_tools.len == 0) return local;
-    defer alloc.free(local);
-    const remote = try mcp.remoteToolsJson(alloc, g_remote_tools, true);
-    defer alloc.free(remote);
-    // local is "[...]"; insert the remote tools (each comma-led) before the ']'.
-    var out = std.array_list.Managed(u8).init(alloc);
-    try out.appendSlice(local[0 .. local.len - 1]);
-    try out.appendSlice(remote);
-    try out.append(']');
-    return out.toOwnedSlice();
-}
-
-/// True when `name` is a federated remote tool (dispatch must route it out).
-fn isRemoteTool(name: []const u8) bool {
-    for (g_remote_tools) |t| {
-        if (std.mem.eql(u8, t.name, name)) return true;
-    }
-    return false;
-}
-
-/// Route a call to a federated tool back to the bound MCP server (AGT-014) and
-
-/// Route a call to a federated tool back to the bound MCP server (AGT-014) and
-/// append its text result.
-fn callRemoteTool(name: []const u8, args_json: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
-    const req = try mcp.buildToolCall(heap.allocator(), 2, name, args_json);
-    defer heap.allocator().free(req);
-    const resp = remoteMcpPost(heap.allocator(), req) catch |e| {
-        try tools.printTo(out, "remote tool '{s}' failed: {s}", .{ name, @errorName(e) });
-        return;
-    };
-    defer heap.allocator().free(resp);
-    var arena = std.heap.ArenaAllocator.init(heap.allocator());
-    defer arena.deinit();
-    const text = mcp.parseToolCallText(arena.allocator(), resp) catch "";
-    try out.appendSlice(text);
+    return agentmcp.mergedToolsJson(alloc, registry);
 }
 
 /// Where tool activity is announced as it happens, so a user watching the
@@ -1024,7 +921,7 @@ pub fn invoke(ctx: *anyopaque, name: []const u8, args: []const u8, out: *std.arr
     const before = out.items.len;
     // A federated remote tool routes back out to its MCP server (AGT-014);
     // everything else is a local tool.
-    const r = if (isRemoteTool(name)) callRemoteTool(name, args, out) else registry.dispatch(ctx, name, args, out);
+    const r = if (agentmcp.isRemoteTool(name)) agentmcp.callRemoteTool(name, args, out) else registry.dispatch(ctx, name, args, out);
     if (announce) |say| {
         if (r) {
             say("  \xe2\x86\x92 "); // "→ "

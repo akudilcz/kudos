@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cat >/dev/null || true; cd \"$(git rev-parse --show-toplevel 2>/dev/null)\" 2>/dev/null && make status 2>/dev/null || true",
+            "command": "cat >/dev/null || true; cd \"$(git rev-parse --show-toplevel 2>/dev/null)\" 2>/dev/null || exit 0; make status 2>/dev/null || true; [ -x scripts/tools/drift-review.sh ] && scripts/tools/drift-review.sh queue >/dev/null 2>&1 &\nexit 0",
             "timeout": 20
           }
         ]

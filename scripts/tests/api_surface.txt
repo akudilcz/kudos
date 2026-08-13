@@ -126,7 +126,14 @@ src/boot/services.zig: pub fn flushAll() void
 src/boot/services.zig: pub fn traceStatus() void
 src/boot/verifyscript.zig: pub fn spawn(desktop: *Desktop) void
 src/boot/virtboot.zig: pub fn step() void
+src/console/agentmcp.zig: pub fn initServer(registry: tools.Registry) void
+src/console/agentmcp.zig: pub fn setServer(url: []const u8) void
+src/console/agentmcp.zig: pub fn discoverRemoteTools() void
+src/console/agentmcp.zig: pub fn mergedToolsJson(alloc: std.mem.Allocator, registry: tools.Registry) ![]u8
+src/console/agentmcp.zig: pub fn isRemoteTool(name: []const u8) bool
+src/console/agentmcp.zig: pub fn callRemoteTool(name: []const u8, args_json: []const u8, out: *std.array_list.Managed(u8)) anyerror!void
 src/console/agenttools.zig: pub const CFG_PATH = "/ramdisk/AI.CFG";
+src/console/agenttools.zig: pub var shell_console: ?console_mod.Console = null;
 src/console/agenttools.zig: pub fn setToken(tok: []const u8) void
 src/console/agenttools.zig: pub fn setMcpServer(url: []const u8) void
 src/console/agenttools.zig: pub fn setBuf(dst: []u8, len: *usize, src: []const u8) void
@@ -155,6 +162,8 @@ src/console/apprun.zig: pub fn reapWindowed() void
 src/console/apprun.zig: pub const SPAWN_ID: u32 = 1;
 src/console/apprun.zig: pub fn spawnModule(name: []const u8) u32
 src/console/apprun.zig: pub fn stopSpawned(id: u32) bool
+src/console/bytesize.zig: pub const MAX_TEXT: usize = 8;
+src/console/bytesize.zig: pub fn human(bytes: usize, buf: *[MAX_TEXT]u8) []const u8
 src/console/capabilities.zig: pub const Grant = grants.Grant;
 src/console/capabilities.zig: pub fn get(grant: Grant, id: u32, version: u32) ?*const anyopaque
 src/console/capabilities.zig: pub fn appTerminal(_: *anyopaque, id: u32, version: u32) callconv(.c) ?*const anyopaque
@@ -166,6 +175,8 @@ src/console/capabilities.zig: pub fn at(i: usize) Entry
 src/console/capabilities.zig: pub fn step() void
 src/console/cmd/ai.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/background.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/basename.zig: pub fn runBase(c: console.Console, args: []const u8) void
+src/console/cmd/basename.zig: pub fn runDir(c: console.Console, args: []const u8) void
 src/console/cmd/calc.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/caps.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/cat.zig: pub fn run(c: console.Console, args: []const u8) void
@@ -174,21 +185,26 @@ src/console/cmd/clear.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/clock.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/compile.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/cp.zig: pub fn run(c: console.Console, args: []const u8) void
-src/console/cmd/cp.zig: pub fn copyOne(c: console.Console, src: []const u8, dest: []const u8, dest_is_dir: bool) bool
+src/console/cmd/cp.zig: pub fn copyOne(c: console.Console, name: []const u8, src: []const u8, dest: []const u8, dest_is_dir: bool, recurse: bool) bool
 src/console/cmd/cp.zig: pub fn collect(args: []const u8, words: *[16][]const u8) usize
 src/console/cmd/crash.zig: pub fn run(out: Out, args: []const u8) void
 src/console/cmd/curl.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/cut.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/df.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/diff.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/du.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/echo.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/exit.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/feature.zig: pub fn dispatch(c: console.Console, name: []const u8, args: []const u8) bool
 src/console/cmd/feature.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/find.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/flipstat.zig: pub fn run(c: console.Console, _: []const u8) void
-src/console/cmd/free.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/free.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/grep.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/head.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/help.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/history.zig: pub fn run(c: console.Console, args: []const u8) void
-src/console/cmd/host.zig: pub fn run(c: console.Console, name: []const u8) void
+src/console/cmd/host.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/ip.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/kudos.zig: pub const NAMES: [SUBS.len][]const u8 = blk:
 src/console/cmd/kudos.zig: pub fn run(c: console.Console, args: []const u8) void
@@ -197,7 +213,9 @@ src/console/cmd/ls.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/memfault.zig: pub fn run(out: Out, args: []const u8) void
 src/console/cmd/mkdir.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/mv.zig: pub fn run(c: console.Console, args: []const u8) void
-src/console/cmd/ping.zig: pub fn run(c: console.Console, host: []const u8) void
+src/console/cmd/nl.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/pager.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/ping.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/prime.zig: pub fn run(out: Out, args: []const u8) void
 src/console/cmd/ps.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/pwd.zig: pub fn run(c: console.Console, _: []const u8) void
@@ -208,20 +226,29 @@ src/console/cmd/rt.zig: pub const RtResult = struct
 src/console/cmd/rt.zig: pub fn lastRt() RtResult
 src/console/cmd/rt.zig: pub fn run(out: Out, args: []const u8) void
 src/console/cmd/run.zig: pub fn run(out: Out, args: []const u8) void
+src/console/cmd/seq.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/show.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/shutdown.zig: pub fn run(out: Out, args: []const u8) void
+src/console/cmd/sleep.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/sort.zig: pub const MAX_LINES: usize = 4096;
+src/console/cmd/sort.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/stats.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/stat.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/system.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/tail.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/tee.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/term.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmdtoken.zig: pub const CmdToken = struct
 src/console/cmd/touch.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/uname.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/uniq.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/uptime.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/vm.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/vm.zig: pub fn writeList(w: anytype) void
 src/console/cmd/vm.zig: pub fn writeStop(w: anytype, arg: []const u8) void
 src/console/cmd/vm.zig: pub fn writeStatus(w: anytype) void
 src/console/cmd/wc.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/xxd.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/complete.zig: pub const ifilesys = @import("ifilesys");
 src/console/complete.zig: pub const BARE_ROOTS = [_][]const u8{ "/ramdisk", "/usbdisk" };
 src/console/complete.zig: pub const Dirs = struct
@@ -230,6 +257,7 @@ src/console/complete.zig: pub const Each = struct
 src/console/complete.zig: pub const Result = struct
 src/console/complete.zig: pub fn line(buf: []u8, len: usize, cwd: []const u8, dirs: Dirs, cmds: []const []const u8, group: Group) Result
 src/console/complete.zig: pub fn eachMatch(text: []const u8, cwd: []const u8, dirs: Dirs, cmds: []const []const u8, group: Group, each: Each) void
+src/console/console.zig: pub const Scratch = scratch.Scratch;
 src/console/console.zig: pub const AppKind = idesk.AppKind;
 src/console/console.zig: pub const Desktop = struct
 src/console/console.zig: pub const Console = struct
@@ -240,13 +268,31 @@ src/console/editline.zig: pub const Screen = struct
 src/console/editline.zig: pub const Action = enum { none, commit, complete, recalled, recall_empty, interrupt };
 src/console/editline.zig: pub const Completion = enum { none, grew, ambiguous };
 src/console/editline.zig: pub const Editor = struct
+src/console/filter.zig: pub const Input = struct
+src/console/filter.zig: pub const Inputs = struct
+src/console/filter.zig: pub fn lines(data: []const u8) std.mem.SplitIterator(u8, .scalar)
+src/console/filter.zig: pub fn lineCount(data: []const u8) usize
+src/console/filter.zig: pub fn line(c: console.Console, text: []const u8) void
+src/console/fstree.zig: pub const MAX_DEPTH: usize = 8;
+src/console/fstree.zig: pub fn removeTree(c: console.Console, name: []const u8, abs: []const u8) bool
+src/console/fstree.zig: pub fn copyTree(c: console.Console, name: []const u8, src_abs: []const u8, dst_abs: []const u8) bool
+src/console/fstree.zig: pub const Seen = struct
+src/console/fstree.zig: pub const Visit = *const fn (ctx: ?*anyopaque, e: Seen) void;
+src/console/fstree.zig: pub fn walk(abs: []const u8, ctx: ?*anyopaque, visit: Visit) bool
 src/console/glob.zig: pub fn hasGlob(word: []const u8) bool
 src/console/glob.zig: pub fn match(pat: []const u8, name: []const u8) bool
+src/console/glob.zig: pub fn matchIgnoringCase(pat: []const u8, name: []const u8) bool
 src/console/grants.zig: pub const Grant = enum
 src/console/grants.zig: pub const Row = struct
 src/console/grants.zig: pub const TABLE = [_]Row{
 src/console/grants.zig: pub fn allows(grant: Grant, id: u32, version: u32) bool
 src/console/grants.zig: pub fn find(id: u32, version: u32) ?Row
+src/console/linediff.zig: pub const LOOKAHEAD: usize = 64;
+src/console/linediff.zig: pub const Step = union(enum)
+src/console/linediff.zig: pub const Walk = struct
+src/console/linediff.zig: pub fn same(a: []const u8, b: []const u8) bool
+src/console/linediff.zig: pub fn lineAt(text: []const u8, i: usize) ?[]const u8
+src/console/linediff.zig: pub fn count(text: []const u8) usize
 src/console/localcmd.zig: pub const Out = @import("out.zig").Out;
 src/console/localcmd.zig: pub const Command = struct
 src/console/localcmd.zig: pub const GROUP = "kudos";
@@ -261,16 +307,30 @@ src/console/network.zig: pub fn up(c: console.Console) ?inet.INet
 src/console/network.zig: pub fn any(c: console.Console) ?inet.INet
 src/console/network.zig: pub fn writeIp(c: console.Console, ip: [4]u8) void
 src/console/network.zig: pub fn prefixLen(mask: [4]u8) u8
+src/console/opt.zig: pub const Opt = union(enum)
+src/console/opt.zig: pub const Words = struct
+src/console/opt.zig: pub fn strip(word: []const u8) []const u8
+src/console/opt.zig: pub const Scan = struct
+src/console/opt.zig: pub const Operands = struct
+src/console/opt.zig: pub fn refuse(c: anytype, name: []const u8, o: Opt, usage: []const u8) void
 src/console/out.zig: pub const Out = struct
 src/console/patharg.zig: pub fn resolve(c: console.Console, arg: []const u8, buf: *[vfs.MAX_PATH]u8) ?[]const u8
 src/console/patharg.zig: pub fn writeErrorText(e: ifilesys.WriteError) []const u8
+src/console/pathname.zig: pub fn base(path: []const u8, suffix: []const u8) []const u8
+src/console/pathname.zig: pub fn dir(path: []const u8) []const u8
+src/console/ranges.zig: pub const List = struct
+src/console/ranges.zig: pub fn valid(spec: []const u8) bool
 src/console/redirect.zig: pub const MAX_BYTES: usize = 16 << 10;
 src/console/redirect.zig: pub const Mode = enum
 src/console/redirect.zig: pub const Parsed = struct
 src/console/redirect.zig: pub fn parse(line: []const u8) ?Parsed
 src/console/redirect.zig: pub const MAX_STAGES: usize = 8;
 src/console/redirect.zig: pub fn splitPipes(line: []const u8, out: *[MAX_STAGES][]const u8) usize
+src/console/redirect.zig: pub const MAX_LIST: usize = 8;
+src/console/redirect.zig: pub fn splitList(line: []const u8, out: *[MAX_LIST][]const u8) ?usize
 src/console/redirect.zig: pub const Sink = struct
+src/console/scratch.zig: pub const EXPAND_BYTES: usize = 4096;
+src/console/scratch.zig: pub const Scratch = struct
 src/console/session.zig: pub const ReqKind = enum(u8) { echo, backspace, run_line, complete, prompt, move, interrupt };
 src/console/session.zig: pub const Request = struct
 src/console/session.zig: pub const Key = struct { ascii: u8 };
@@ -278,6 +338,10 @@ src/console/session.zig: pub const REQ_RING_CAP = 256;
 src/console/session.zig: pub const KEY_RING_CAP = 256;
 src/console/session.zig: pub const Session = struct
 src/console/session.zig: pub const MAX_SESSIONS = percpu.MAX_CPUS;
+src/console/session.zig: pub fn commandWorker(id: u32) ?*sched.Task
+src/console/session.zig: pub fn setCommandWorker(id: u32, t: *sched.Task) void
+src/console/session.zig: pub fn wakeCommandWorker(sess: *Session) void
+src/console/session.zig: pub fn commandPending(id: u32) bool
 src/console/session.zig: pub fn claim() ?*Session
 src/console/session.zig: pub fn release(sess: *Session) void
 src/console/session.zig: pub fn open() ?*Session
@@ -294,6 +358,7 @@ src/console/session.zig: pub fn cancelCommand(sess: *Session) void
 src/console/shell.zig: pub const NAMES: [COMMANDS.len][]const u8 = blk:
 src/console/shell.zig: pub fn splitCommand(line: []const u8) struct { cmd: []const u8, args: []const u8 }
 src/console/shell.zig: pub fn execute(c: console.Console, line_in: []const u8) void
+src/console/shell.zig: pub fn executeCaptured(base: console.Console, line: []const u8, buf: []u8) redirect.Sink
 src/drivers/devices.zig: pub fn publish() void
 src/drivers/gl/ada/ctx_init_full.zig: pub const hostpush = @import("hostpush");
 src/drivers/gl/ada/ctx_init_full.zig: pub const SUBCH_3D: u32 = 0;
@@ -2486,7 +2551,7 @@ src/drivers/usb/hid_report.zig: pub fn dci(ep_addr: u8) u32
 src/drivers/usb/hid_report.zig: pub const MouseEvent = struct
 src/drivers/usb/hid_report.zig: pub fn decodeMouse(report: []const u8, layout: MouseLayout) ?MouseEvent
 src/drivers/usb/hid_report.zig: pub const KeyPresses = struct
-src/drivers/usb/hid_report.zig: pub fn decodeKeyboard(report: []const u8, last_keys: [6]u8, last_mods: u8) ?KeyPresses
+src/drivers/usb/hid_report.zig: pub fn decodeKeyboard(report: []const u8, last_keys: [6]u8, last_mods: u8, baseline: bool) ?KeyPresses
 src/drivers/usb/hid_report.zig: pub const TABLET_LOGICAL_MAX: usize = 0x7FFF;
 src/drivers/usb/hid_report.zig: pub const TabletEvent = struct
 src/drivers/usb/hid_report.zig: pub fn decodeTablet(report: []const u8, mps: u32, width: usize, height: usize) ?TabletEvent
@@ -3350,7 +3415,7 @@ src/kernel/smp/smp.zig: pub fn takeFaultedTask() ?*sched.Task
 src/kernel/smp/smp.zig: pub fn registerFaultCounter() void
 src/kernel/smp/smp.zig: pub fn coresOnline() u32
 src/kernel/smp/smp.zig: pub fn startBspMinimal(system_entry: *const fn () void) noreturn
-src/kernel/smp/smp.zig: pub fn startBspScheduler(system_entry: *const fn () void, command_worker: *const fn () void) noreturn
+src/kernel/smp/smp.zig: pub fn startBspScheduler(system_entry: *const fn () void) noreturn
 src/kernel/smp/smp.zig: pub fn yieldCpu() void
 src/kernel/smp/smp.zig: pub fn init() void
 src/kernel/smp/smp.zig: pub fn start() void
@@ -3855,6 +3920,7 @@ src/ui/assets/png.zig: pub const SIGNATURE = [8]u8{ 0x89, 'P', 'N', 'G', '\r', '
 src/ui/assets/png.zig: pub fn decode(a: std.mem.Allocator, bytes: []const u8) Error!Image
 src/ui/desktop/boot_layout.zig: pub fn retileBoot(d: *Desktop) void
 src/ui/desktop/boot_layout.zig: pub fn spawnBootLayout(d: *Desktop) !void
+src/ui/desktop/cmdworker.zig: pub fn ensure(d: *Desktop, id: u32) void
 src/ui/desktop/cursor.zig: pub const W: u32 = 16;
 src/ui/desktop/cursor.zig: pub const H: u32 = 22;
 src/ui/desktop/cursor.zig: pub const HOT_X: u32 = 0;
@@ -3919,7 +3985,7 @@ src/ui/desktop/lifecycle.zig: pub fn focusTermId(d: *Desktop, id: u32) void
 src/ui/desktop/lifecycle.zig: pub fn closeBlobWindow(d: *Desktop, handle: u32) void
 src/ui/desktop/lifecycle.zig: pub fn closeVm(d: *Desktop, id: ivirt.Id) void
 src/ui/desktop/lifecycle.zig: pub fn closeTermId(d: *Desktop, id: u32) void
-src/ui/desktop/lifecycle.zig: pub fn runPendingCommands(d: *Desktop) bool
+src/ui/desktop/lifecycle.zig: pub fn runPendingCommandFor(d: *Desktop, id: u32) bool
 src/ui/desktop/mouse_accel.zig: pub fn accelFactor(speed_units_per_ms: f64) f64
 src/ui/desktop/mouse_accel.zig: pub const Accelerator = struct
 src/ui/desktop/mouse_accel.zig: pub const HZ: u64 = 1_000_000_000; // 1GHz, ticks == ns, for readable test math
