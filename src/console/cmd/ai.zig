@@ -222,6 +222,7 @@ fn lockedMessage() []const u8 {
 /// `ai ...` — the shell command entry (core-0 table).
 pub fn run(c: console.Console, args: []const u8) void {
     g_console = c;
+    agenttools.shell_console = c;
     announceOnConsole();
     const cfg = loadConfig();
     if (cfg.factory) |f| agenttools.setFactory(f);

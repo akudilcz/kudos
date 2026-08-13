@@ -155,6 +155,18 @@ fn dispatch(c: console.Console, line_in: []const u8) void {
     c.write(": command not found\n");
 }
 
+/// Run one command line with its output captured into `buf` instead of the
+/// terminal — the agent's `shell` tool and netdebug's remote shell. The same
+/// dispatch a terminal uses: pipes, redirects and globs all work; a redirect
+/// writes its file and captures only the refusals. Returns the sink (length +
+/// loss count); the caller states truncation rather than hiding it.
+pub fn executeCaptured(base: console.Console, line: []const u8, buf: []u8) redirect.Sink {
+    var sink = redirect.Sink{ .buf = buf };
+    var capture = Capture{ .inner = base, .sink = &sink };
+    execute(capture.asConsole(), line);
+    return sink;
+}
+
 // Static for LIFETIME, not allocation: a command can outlive its invocation
 // (`curl` keeps the Console by value and completes on a later core-0 pass),
 // so a stack buffer would be a dangling write once the fetch retired. A late

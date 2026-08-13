@@ -18,6 +18,8 @@
 const std = @import("std");
 const abi = @import("abi");
 const apprun = @import("apprun.zig");
+const console_mod = @import("console.zig");
+const shell = @import("shell.zig");
 const capabilities = @import("capabilities.zig");
 const taskstat = @import("../kernel/sched/taskstat.zig");
 const counter = @import("../kernel/debug/counter.zig");
@@ -46,6 +48,12 @@ pub const CFG_PATH = "/ramdisk/AI.CFG";
 /// Cap on the feature output captured into one tool result — a chatty feature
 /// must not burn the request's token budget. Overflow is truncated LOUDLY.
 const MAX_TOOL_OUTPUT_BYTES: usize = 8 * 1024;
+
+/// The console the `shell` tool runs against — the terminal hosting the agent
+/// session, set by cmd/ai.zig each invocation (a Console is a value; its
+/// contexts live as long as the window). Null outside a session: the tool
+/// refuses rather than inventing a terminal.
+pub var shell_console: ?console_mod.Console = null;
 
 // ── the compile factory (ARCH-012): compile/source requests ONLY ──────────────
 const Endpoints = struct {
@@ -127,6 +135,53 @@ const INVOKE_SCHEMA =
 const NONE_SCHEMA =
     \\{"type":"object","properties":{}}
 ;
+const SHELL_SCHEMA =
+    \\{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}
+;
+
+/// Words the `shell` tool refuses: machine/window lifecycle belongs to the
+/// person at the desk, and `ai` inside the agent is a loop.
+const SHELL_DENIED = [_][]const u8{ "exit", "reboot", "shutdown" };
+
+var g_shell_out: [MAX_TOOL_OUTPUT_BYTES]u8 = undefined;
+
+/// Run one kudos shell command line, captured — the agent's own `ip`, `host`,
+/// `ls`, `kudos vm status`, pipes and all. Runs on the cmd worker (the same
+/// single thread every shell command uses), so the shell's static buffers are
+/// safe here.
+fn toolShell(_: *anyopaque, args_json: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
+    var arena = std.heap.ArenaAllocator.init(heap.allocator());
+    defer arena.deinit();
+    const v = (try parseToolArgs(arena.allocator(), args_json, out)) orelse return;
+    const line = jsonStr(v, "command") orelse {
+        try out.appendSlice("shell: no command given");
+        return;
+    };
+    const parsed = shell.splitCommand(line);
+    for (SHELL_DENIED) |w| {
+        if (std.mem.eql(u8, parsed.cmd, w)) {
+            try out.appendSlice("shell: refused — that is the person's call, not a tool's");
+            return;
+        }
+    }
+    if (std.mem.eql(u8, parsed.cmd, "ai") or
+        (std.mem.eql(u8, parsed.cmd, "kudos") and std.mem.startsWith(u8, parsed.args, "ai")))
+    {
+        try out.appendSlice("shell: refused — the agent does not talk to itself");
+        return;
+    }
+    const c = shell_console orelse {
+        try out.appendSlice("shell: no hosting terminal");
+        return;
+    };
+    const sink = shell.executeCaptured(c, line, &g_shell_out);
+    if (sink.len == 0) {
+        try out.appendSlice("(no output)");
+    } else {
+        try out.appendSlice(sink.bytes());
+    }
+    if (sink.overflowed()) try out.appendSlice("\n[output truncated]");
+}
 
 /// One string argument out of a tool-call JSON object, or null.
 fn jsonStr(v: std.json.Value, key: []const u8) ?[]const u8 {
@@ -790,6 +845,7 @@ const registry = tools.Registry{ .tools = &.{
     .{ .name = "run_window", .description = "Run a compiled .kudos app DETACHED with permission to open its own window(s); it keeps running until they close. For apps whose answer is what they draw, not what they print.", .params_schema = NAME_SCHEMA, .handler = toolRunWindow },
     .{ .name = "stop_app", .description = "Stop the detached app started by run_window.", .params_schema = NONE_SCHEMA, .handler = toolStopApp },
     .{ .name = "tasks", .description = "List what the machine is running: every task, its core, state and CPU time.", .params_schema = NONE_SCHEMA, .handler = toolTasks },
+    .{ .name = "shell", .description = "Run one kudos shell command line and get its output — ls, cat, grep, ip, host, ping, free, curl, kudos vm status, ... Pipes | redirects > and globs * work. Output capped at 8KB.", .params_schema = SHELL_SCHEMA, .handler = toolShell },
     .{ .name = "read_file", .description = "Read a file. path is absolute (/ramdisk/motd.txt, /usbdisk/AI.CFG) or relative to /ramdisk.", .params_schema = PATH_SCHEMA, .handler = toolReadFile },
     .{ .name = "write_file", .description = "Create or replace a file under /ramdisk, making any directories its path names.", .params_schema = WRITE_SCHEMA, .handler = toolWriteFile },
     .{ .name = "delete_file", .description = "Delete a file under /ramdisk.", .params_schema = PATH_SCHEMA, .handler = toolDeleteFile },
@@ -943,16 +999,44 @@ fn callRemoteTool(name: []const u8, args_json: []const u8, out: *std.array_list.
 pub var announce: ?*const fn (text: []const u8) void = null;
 
 /// Run one tool call for the agent loop (`loop.Tools.invoke`).
+/// Most bytes of a tool call's arguments/result echoed to the terminal — a
+/// watcher needs the shape of the call, not a 16KB source file scrolling by.
+const ANNOUNCE_CAP: usize = 240;
+
+fn announceClipped(say: *const fn (text: []const u8) void, text: []const u8) void {
+    const n = @min(text.len, ANNOUNCE_CAP);
+    say(text[0..n]);
+    if (n < text.len) say(" …");
+}
+
 pub fn invoke(ctx: *anyopaque, name: []const u8, args: []const u8, out: *std.array_list.Managed(u8)) anyerror!void {
-    // Echo the tool activity to the terminal, Claude-Code style, then run it.
+    // Echo the FULL tool call to the terminal, Claude-Code style — the name,
+    // its arguments, and afterwards the result (or the error, by name). A
+    // budget burned on eight silent retries taught this: the watcher must see
+    // WHAT was called and WHAT came back, clipped, not just that something ran.
     if (announce) |say| {
         say("\n\xe2\x97\x8f "); // "● "
         say(name);
+        say(" ");
+        announceClipped(say, args);
         say("\n");
     }
+    const before = out.items.len;
     // A federated remote tool routes back out to its MCP server (AGT-014);
     // everything else is a local tool.
-    if (isRemoteTool(name)) return callRemoteTool(name, args, out);
-    try registry.dispatch(ctx, name, args, out);
+    const r = if (isRemoteTool(name)) callRemoteTool(name, args, out) else registry.dispatch(ctx, name, args, out);
+    if (announce) |say| {
+        if (r) {
+            say("  \xe2\x86\x92 "); // "→ "
+            const produced = out.items[before..];
+            if (produced.len == 0) say("(no output)") else announceClipped(say, produced);
+            say("\n");
+        } else |e| {
+            say("  \xe2\x86\x92 error: ");
+            say(@errorName(e));
+            say("\n");
+        }
+    }
+    return r;
 }
 
