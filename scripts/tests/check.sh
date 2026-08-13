@@ -296,7 +296,7 @@ python3 scripts/gl/es11_glsl_layout.py --check \
     && echo "  ✓ shaders/gles_state.glsl matches es/uniforms.zig"
 
 echo
-echo "▸ requirement trace (spec.md ↔ tests)"
+echo "▸ requirement trace (specs/ ↔ tests)"
 scripts/tests/reqtrace.sh
 
 # The verdict homes: before any hardware verdict that leans on these rules is

@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# The requirement-trace gate: spec.md's IDs and the test tree, kept honest both ways
-# (process.md §Traceability). Runs in `make check` and costs nothing — no build.
+# The requirement-trace gate: the spec's IDs (specs/*.md) and the test tree, kept
+# honest both ways (process.md §Traceability). Runs in `make check` and costs
+# nothing — no build.
 #
-# Direction 1 — every requirement is CITED: each ID in spec.md appears in a test
+# Direction 1 — every requirement is CITED: each ID in specs/*.md appears in a test
 # (test/ or scripts/tests/), or sits on the uncited ratchet (reqtrace_uncited.txt),
 # the shrinking record of requirements still awaiting their citation. The ratchet only
 # tightens: an ID that gains a citation must leave the file in the same change, so
 # progress can never silently regress.
 #
 # Direction 2 — every citation is real: an ID cited anywhere (source, tests, scripts,
-# root docs) whose prefix belongs to spec.md must itself exist in spec.md. A retired or
+# docs) whose prefix belongs to the spec must itself exist in specs/*.md. A retired or
 # misspelled identifier is a citation of nothing.
 #
 # A citation records where the evidence is claimed to live. It does not itself
@@ -20,7 +21,7 @@ cd "$(dirname "$0")/../.."
 ID_RE='\b[A-Z]{2,4}-[0-9]{3}\b'
 RATCHET=scripts/tests/reqtrace_uncited.txt
 
-spec_ids="$(grep -ohE "$ID_RE" spec.md | sort -u)"
+spec_ids="$(grep -ohE "$ID_RE" specs/*.md | sort -u)"
 prefixes="$(echo "$spec_ids" | sed 's/-.*//' | sort -u | paste -sd'|')"
 # scripts/agent/ holds the agent-pipeline tests check.sh runs; its samples/ are
 # fixtures — prose there cites requirements without verifying them, so it is excluded.
@@ -70,21 +71,21 @@ if [ -n "$stale" ]; then
     fail=1
 fi
 
-# 3. Ratchet rows for requirements spec.md no longer states.
+# 3. Ratchet rows for requirements the spec no longer states.
 gone="$(comm -23 <(echo "$ratchet_ids") <(echo "$spec_ids"))"
 if [ -n "$gone" ]; then
-    echo "  ✗ ratchet entr(ies) not in spec.md — the requirement retired; drop the row:"
+    echo "  ✗ ratchet entr(ies) not in specs/ — the requirement retired; drop the row:"
     echo "$gone" | sed 's/^/      /'
     fail=1
 fi
 
-# 4. Citations of nothing: a spec-prefixed ID that spec.md does not state.
-cited_anywhere="$(grep -rhoE "$ID_RE" src/ test/ scripts/ ./*.md --include='*.zig' \
+# 4. Citations of nothing: a spec-prefixed ID that the spec does not state.
+cited_anywhere="$(grep -rhoE "$ID_RE" src/ test/ scripts/ specs/ ./*.md --include='*.zig' \
     --include='*.py' --include='*.sh' --include='*.md' 2>/dev/null \
     | grep -E "^($prefixes)-" | sort -u)"
 phantom="$(comm -23 <(echo "$cited_anywhere") <(echo "$spec_ids"))"
 if [ -n "$phantom" ]; then
-    echo "  ✗ cited requirement(s) that spec.md does not state:"
+    echo "  ✗ cited requirement(s) that specs/ does not state:"
     echo "$phantom" | sed 's/^/      /'
     echo "      fix: correct the ID, or if the requirement retired, retire the citation"
     fail=1
@@ -110,10 +111,10 @@ fi
 # would have kept every track green while silently abandoning the requirement —
 # the test asserts the kernel's own verdict, and the kernel computes that verdict
 # against its own constant.
-spec_boot_s="$(grep -A 2 '^\*\*PERF-002\.\*\*' spec.md | grep -ohE 'within [0-9]+ seconds' | grep -ohE '[0-9]+')"
+spec_boot_s="$(grep -h -A 2 '^\*\*PERF-002\.\*\*' specs/*.md | grep -ohE 'within [0-9]+ seconds' | grep -ohE '[0-9]+')"
 code_boot_ms="$(grep -ohE 'BOOT_TO_FIRST_PRESENT_BUDGET_MS: u64 = [0-9_]+' src/drivers/gpu/gpu.zig | grep -ohE '[0-9_]+$' | tr -d '_')"
 if [ -z "$spec_boot_s" ] || [ -z "$code_boot_ms" ]; then
-    echo "  ✗ PERF-002: could not read the boot budget from spec.md or gpu.zig"
+    echo "  ✗ PERF-002: could not read the boot budget from specs/ or gpu.zig"
     fail=1
 elif [ "$code_boot_ms" != "$((spec_boot_s * 1000))" ]; then
     echo "  ✗ PERF-002: spec says ${spec_boot_s}s, gpu.zig enforces ${code_boot_ms}ms"
@@ -126,13 +127,13 @@ fi
 # added there without a matching requirement is a capability nobody specified.
 for tok in $(grep -oE 'GL_EXTENSIONS => "[^"]+"' src/drivers/gl/es/gl.zig | sed 's/.*"\(.*\)"/\1/'); do
     name="${tok#GL_}"
-    if ! grep -q "$name" spec.md; then
+    if ! grep -q "$name" specs/*.md; then
         echo "  ✗ advertised GL extension '$tok' is captured by no requirement (RND-007)" >&2
         fail=1
     fi
 done
 if [ "${fail:-0}" = 0 ]; then
-    echo "  ✓ every advertised GL extension is captured in spec.md (RND-007)"
+    echo "  ✓ every advertised GL extension is captured in specs/ (RND-007)"
 fi
 
 if [ "$fail" -ne 0 ]; then
