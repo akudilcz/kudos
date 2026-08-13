@@ -75,11 +75,11 @@ FIVE_MODELS = [
     # live on the GPU. (Alpha blending is judged by the render-oracle suite
     # against Khronos' AlphaBlendModeTest reference — none of these five models
     # is blended, so this run is not evidence for it and no longer claims to be.)
-    "show duck.glb",
-    "show teapot.glb",
-    "show /usbdisk/models/rabbit.glb",
-    "show duck.glb",
-    "show teapot.glb",
+    "kudos show duck.glb",
+    "kudos show teapot.glb",
+    "kudos show /usbdisk/models/rabbit.glb",
+    "kudos show duck.glb",
+    "kudos show teapot.glb",
 ]
 
 passed = 0
@@ -345,7 +345,7 @@ def phase4(client, p):
     for i, cmd in enumerate(FIVE_MODELS):
         type_line(client, cmd)
         await_scoped(cmd, "opened")
-        ok(f"model window {i + 1} opened ({cmd.split()[1]})")
+        ok(f"model window {i + 1} opened ({cmd.split()[2]})")
         refocus_terminal(p)  # `show` focused the model window; take focus back
     st = cases.wm_state(read_capture())
     if st["nwins"] != base_n + len(FIVE_MODELS):
@@ -391,7 +391,7 @@ def phase4(client, p):
 def phase5(client):
     _record("boot2: PHASE 5 — 60 Hz under load (five spinning models)")
     before = flipstat_count()
-    type_line(client, "flipstat")
+    type_line(client, "kudos flipstat")
     await_scoped("flipstat", "sampling re-armed")
     ok("`flipstat` re-armed the cadence sample")
     deadline = time.time() + FLIPSTAT_TIMEOUT_S
@@ -726,9 +726,9 @@ def phase7(client, p):
             # `term` must come from the IDLE core-0 shell each time — the
             # previous AP terminal is already grinding and consumes nothing.
             focus_terminal()
-            type_line(client, "term")  # the new terminal spawns focused, on its own AP
+            type_line(client, "kudos term")  # the new terminal spawns focused, on its own AP
             time.sleep(0.5)
-            type_line(client, "prime 500000")  # grinds that AP; echo returns when done
+            type_line(client, "kudos prime 500000")  # grinds that AP; echo returns when done
         grinding = True
         ok("two AP-pinned terminals set grinding primes in parallel")
 
@@ -737,7 +737,7 @@ def phase7(client, p):
     # its frame budget to compute load.
     focus_terminal()
     before = flipstat_count()
-    type_line(client, "flipstat")
+    type_line(client, "kudos flipstat")
     await_scoped("flipstat", "sampling re-armed")
     deadline = time.time() + FLIPSTAT_TIMEOUT_S
     while time.time() < deadline and flipstat_count() <= before:
@@ -786,7 +786,7 @@ def phase7(client, p):
     n0 = cases.wm_state(read_capture())["nwins"]
     for i in range(3):
         focus_terminal()
-        type_line(client, "show teapot.glb")
+        type_line(client, "kudos show teapot.glb")
         time.sleep(1.5)
         st2 = cases.wm_state(read_capture())
         wid = max(st2["wins"])

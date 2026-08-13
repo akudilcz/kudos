@@ -271,7 +271,7 @@ There is no separate `design/` tree and no checked-in reference
 extracts — the source is the record. Where a register layout or protocol constant
 came from a specification, the owning module names the specification and section
 in place. `specs/` holds the requirements, one file per package, indexed by
-`spec.md`; `process.md` describes how the project is developed and what it claims.
+`specs/`; `process.md` describes how the project is developed and what it claims.
 
 ### Dependencies
 
