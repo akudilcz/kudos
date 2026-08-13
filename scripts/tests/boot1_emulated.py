@@ -491,7 +491,8 @@ def phase_complete(q):
     # The FIRST word completes against the command names, not the file system
     # (APP-025) — `he`⇥ can only be `help`, and gains the space that starts an
     # argument, so what runs is the command itself.
-    complete_case(q, "he", [], "help ", ("help            this list",))
+    # `hel` not `he`: the Linux batch added `head`, so `he` is ambiguous now.
+    complete_case(q, "hel", [], "help ", ("help            this list",))
     # A lower-case guess still finds capitalised names (APP-027), and a word
     # that cannot be finished SHOWS its candidates (APP-026): `box`⇥ rewrites
     # the line to the `Box` the volume spells and lists all three entries,
