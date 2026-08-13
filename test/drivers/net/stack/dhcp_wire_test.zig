@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const dhcp_wire = @import("dhcp_wire");
+const inet = @import("inet");
 const BOOTP_FIXED = dhcp_wire.BOOTP_FIXED;
 const DHCPACK = dhcp_wire.DHCPACK;
 const Lease = dhcp_wire.Lease;
@@ -128,4 +129,88 @@ test "a truncated option length does not read past the datagram" {
 
 test "yiaddr on a runt datagram is zero, not a panic" {
     try expectEqual([4]u8{ 0, 0, 0, 0 }, yiaddr(&[_]u8{ 1, 2, 3 }));
+}
+
+// ── snoopAck: a guest's lease read off a raw bridged frame ───────────────────
+
+const ETH_HLEN = inet.ETHER_HEADER_BYTES;
+const IP_HLEN = 20; // RFC 791 header, no options (the fixture writes IHL=5)
+const UDP_HLEN = 8;
+const GUEST_MAC = [6]u8{ 0x52, 0x54, 0x00, 0xAA, 0xBB, 0x01 };
+const GUEST_IP = [4]u8{ 10, 0, 2, 16 };
+
+/// Test fixture: the frame QEMU's slirp answers a guest's REQUEST with —
+/// Ethernet + IPv4 + UDP 67→68 wrapping a BOOTREPLY whose chaddr is the
+/// guest's MAC. Raw adversary-shaped input, built byte-by-byte on purpose.
+fn mkAckFrame(msg_type: u8, ip: [4]u8) [ETH_HLEN + IP_HLEN + UDP_HLEN + 512]u8 {
+    var f: [ETH_HLEN + IP_HLEN + UDP_HLEN + 512]u8 = @splat(0);
+    f[12] = 0x08; // ethertype IPv4
+    f[13] = 0x00;
+    const p = f[ETH_HLEN..];
+    p[0] = 0x45; // version 4, IHL 5
+    const total = IP_HLEN + UDP_HLEN + 512;
+    p[2] = @intCast(total >> 8);
+    p[3] = @intCast(total & 0xFF);
+    p[9] = 17; // UDP
+    const seg = p[IP_HLEN..];
+    seg[1] = dhcp_wire.SERVER_PORT; // 67 → 68, big-endian low bytes
+    seg[3] = dhcp_wire.CLIENT_PORT;
+    var msg = mkReply(ip, &[_]u8{ OPT_MSGTYPE, 1, msg_type, OPT_END });
+    msg[dhcp_wire.OFF_OP] = dhcp_wire.BOOTREPLY;
+    msg[dhcp_wire.OFF_HTYPE] = dhcp_wire.HTYPE_ETHER;
+    msg[dhcp_wire.OFF_HLEN] = inet.ETHER_ADDR_BYTES;
+    @memcpy(msg[dhcp_wire.OFF_CHADDR..][0..6], &GUEST_MAC);
+    @memcpy(seg[UDP_HLEN..][0..512], &msg);
+    return f;
+}
+
+test "a bridged DHCP ACK yields the client MAC and the leased address" {
+    const f = mkAckFrame(DHCPACK, GUEST_IP);
+    const l = dhcp_wire.snoopAck(&f) orelse return error.AckNotSnooped;
+    // chaddr is the key, NOT the Ethernet destination: a server answering on
+    // broadcast names nobody in the frame header (the fixture's dst is zeros).
+    try expectEqual(GUEST_MAC, l.mac);
+    try expectEqual(GUEST_IP, l.ip);
+}
+
+test "only a server→client ACK with a real address is a lease" {
+    // An OFFER is a proposal, not a lease.
+    try expect(dhcp_wire.snoopAck(&mkAckFrame(dhcp_wire.DHCPOFFER, GUEST_IP)) == null);
+    // An ACK granting 0.0.0.0 grants nothing.
+    try expect(dhcp_wire.snoopAck(&mkAckFrame(DHCPACK, .{ 0, 0, 0, 0 })) == null);
+
+    var f = mkAckFrame(DHCPACK, GUEST_IP);
+    f[13] = 0x06; // ethertype ARP, not IPv4
+    try expect(dhcp_wire.snoopAck(&f) == null);
+
+    f = mkAckFrame(DHCPACK, GUEST_IP);
+    f[ETH_HLEN + 9] = 6; // TCP, not UDP
+    try expect(dhcp_wire.snoopAck(&f) == null);
+
+    f = mkAckFrame(DHCPACK, GUEST_IP);
+    f[ETH_HLEN + IP_HLEN + 1] = dhcp_wire.CLIENT_PORT; // 68 → 68: not a server's reply
+    try expect(dhcp_wire.snoopAck(&f) == null);
+
+    f = mkAckFrame(DHCPACK, GUEST_IP);
+    f[ETH_HLEN + IP_HLEN + 3] = dhcp_wire.SERVER_PORT; // 67 → 67: not for a client
+    try expect(dhcp_wire.snoopAck(&f) == null);
+
+    f = mkAckFrame(DHCPACK, GUEST_IP);
+    f[ETH_HLEN + IP_HLEN + UDP_HLEN + dhcp_wire.OFF_OP] = 1; // BOOTREQUEST, not a reply
+    try expect(dhcp_wire.snoopAck(&f) == null);
+}
+
+test "an out-of-bounds IHL or any truncation is refused, not read past" {
+    // Adversary-facing: this parser reads frames that are NOT addressed to this
+    // host, so classifyIp's guards never ran on them.
+    var f = mkAckFrame(DHCPACK, GUEST_IP);
+    f[ETH_HLEN] = 0x4F; // IHL claims 60 header bytes
+    try expect(dhcp_wire.snoopAck(&f) == null);
+
+    // Every strict prefix of a valid frame must be a clean refusal.
+    const whole = mkAckFrame(DHCPACK, GUEST_IP);
+    var len: usize = 0;
+    while (len < whole.len) : (len += 1) {
+        try expect(dhcp_wire.snoopAck(whole[0..len]) == null);
+    }
 }

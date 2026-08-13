@@ -2203,8 +2203,16 @@ src/drivers/net/stack/config.zig: pub var netmask = [4]u8{ 0, 0, 0, 0 };
 src/drivers/net/stack/config.zig: pub var gateway = [4]u8{ 0, 0, 0, 0 };
 src/drivers/net/stack/config.zig: pub var dns_server = [4]u8{ 0, 0, 0, 0 };
 src/drivers/net/stack/config.zig: pub var our_mac = [6]u8{ 0, 0, 0, 0, 0, 0 };
+src/drivers/net/stack/dhcp_wire.zig: pub const SERVER_PORT: u16 = 67;
+src/drivers/net/stack/dhcp_wire.zig: pub const CLIENT_PORT: u16 = 68;
+src/drivers/net/stack/dhcp_wire.zig: pub const OFF_OP: usize = 0;
+src/drivers/net/stack/dhcp_wire.zig: pub const OFF_HTYPE: usize = 1;
+src/drivers/net/stack/dhcp_wire.zig: pub const OFF_HLEN: usize = 2;
 src/drivers/net/stack/dhcp_wire.zig: pub const OFF_YIADDR: usize = 16;
+src/drivers/net/stack/dhcp_wire.zig: pub const OFF_CHADDR: usize = 28;
 src/drivers/net/stack/dhcp_wire.zig: pub const BOOTP_FIXED: usize = 240;
+src/drivers/net/stack/dhcp_wire.zig: pub const BOOTREPLY: u8 = 2;
+src/drivers/net/stack/dhcp_wire.zig: pub const HTYPE_ETHER: u8 = 1;
 src/drivers/net/stack/dhcp_wire.zig: pub const OPT_SUBNET: u8 = 1;
 src/drivers/net/stack/dhcp_wire.zig: pub const OPT_ROUTER: u8 = 3;
 src/drivers/net/stack/dhcp_wire.zig: pub const OPT_DNS: u8 = 6;
@@ -2219,9 +2227,11 @@ src/drivers/net/stack/dhcp_wire.zig: pub const Options = struct
 src/drivers/net/stack/dhcp_wire.zig: pub fn parseOptions(msg: []const u8) Options
 src/drivers/net/stack/dhcp_wire.zig: pub fn yiaddr(msg: []const u8) [4]u8
 src/drivers/net/stack/dhcp_wire.zig: pub fn isZero(ip: [4]u8) bool
+src/drivers/net/stack/dhcp_wire.zig: pub const SnoopedLease = struct { mac: [6]u8, ip: [4]u8 };
+src/drivers/net/stack/dhcp_wire.zig: pub fn snoopAck(frame: []const u8) ?SnoopedLease
 src/drivers/net/stack/dhcp_wire.zig: pub const Lease = struct
 src/drivers/net/stack/dhcp_wire.zig: pub fn acceptAck(ip: [4]u8, o: Options) ?Lease
-src/drivers/net/stack/dhcp.zig: pub const CLIENT_PORT = 68;
+src/drivers/net/stack/dhcp.zig: pub const CLIENT_PORT = dhcp_wire.CLIENT_PORT;
 src/drivers/net/stack/dhcp.zig: pub fn active() bool
 src/drivers/net/stack/dhcp.zig: pub fn handleReply(msg: []const u8) void
 src/drivers/net/stack/dhcp.zig: pub fn configure() bool
@@ -2267,8 +2277,8 @@ src/drivers/net/stack/netapi.zig: pub fn publish() void
 src/drivers/net/stack/netown.zig: pub const Holder = ?*anyopaque;
 src/drivers/net/stack/netown.zig: pub fn mayClaim(held: Holder, caller: Holder) bool
 src/drivers/net/stack/netown.zig: pub fn mustSkip(held: Holder, caller: Holder) bool
-src/drivers/net/stack/net.zig: pub const ETH_ARP = 0x0806;
-src/drivers/net/stack/net.zig: pub const ETH_IP = 0x0800;
+src/drivers/net/stack/net.zig: pub const ETH_ARP = wire.ETH_ARP;
+src/drivers/net/stack/net.zig: pub const ETH_IP = wire.ETH_IP;
 src/drivers/net/stack/net.zig: pub const PROTO_ICMP = wire.PROTO_ICMP;
 src/drivers/net/stack/net.zig: pub const PROTO_TCP = wire.PROTO_TCP;
 src/drivers/net/stack/net.zig: pub const PROTO_UDP = wire.PROTO_UDP;
@@ -2380,6 +2390,9 @@ src/drivers/net/stack/wire.zig: pub const PROTO_ICMP: u8 = 1;
 src/drivers/net/stack/wire.zig: pub const PROTO_TCP: u8 = 6;
 src/drivers/net/stack/wire.zig: pub const PROTO_UDP: u8 = 17;
 src/drivers/net/stack/wire.zig: pub const IP_BROADCAST: [4]u8 = .{ 255, 255, 255, 255 };
+src/drivers/net/stack/wire.zig: pub const ETHERTYPE_OFF: usize = 12;
+src/drivers/net/stack/wire.zig: pub const ETH_ARP: u16 = 0x0806;
+src/drivers/net/stack/wire.zig: pub const ETH_IP: u16 = 0x0800;
 src/drivers/net/stack/wire.zig: pub fn buildUdp(seg: []u8, src_port: u16, dst_port: u16, payload: []const u8) usize
 src/drivers/net/stack/wire.zig: pub const IpPacket = struct { proto: u8, src: [4]u8, dst: [4]u8, payload: []const u8 };
 src/drivers/net/stack/wire.zig: pub fn classifyIp(frame: []const u8, our_ip: [4]u8, dhcp_binding: bool) ?IpPacket
@@ -2725,6 +2738,12 @@ src/iface/inet.zig: pub fn takeModuleFetchRequest() ?MFetchReq
 src/iface/inet.zig: pub fn completeModuleFetch(ok: bool) void
 src/iface/inet.zig: pub fn moduleFetchState() MFetchState
 src/iface/inet.zig: pub fn finishModuleFetch() void
+src/iface/inet.zig: pub const GUEST_NAME_MAX: usize = 32;
+src/iface/inet.zig: pub const GUEST_NAMES: usize = 4;
+src/iface/inet.zig: pub fn registerGuest(name: []const u8, mac: [6]u8) bool
+src/iface/inet.zig: pub fn unregisterGuest(mac: [6]u8) void
+src/iface/inet.zig: pub fn bindGuestIp(mac: [6]u8, ip: [4]u8) void
+src/iface/inet.zig: pub fn lookupGuest(name: []const u8) ?[4]u8
 src/iface/ipci.zig: pub const Device = struct
 src/iface/ipci.zig: pub var devices: []const Device = &.{};
 src/iface/ipresent.zig: pub const MapError = error{ BackendMapFailed, BackendVaExhausted, BackendVramExhausted };

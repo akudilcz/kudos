@@ -50,6 +50,13 @@ pub const PROTO_TCP: u8 = 6;
 pub const PROTO_UDP: u8 = 17;
 pub const IP_BROADCAST: [4]u8 = .{ 255, 255, 255, 255 };
 
+/// Ethernet II ethertype field: where it sits and the two values this stack
+/// speaks (IEEE 802.3 / RFC 894). Owned here so the pure parsers can read a
+/// raw frame; net.zig re-exports the values like the byte-order helpers.
+pub const ETHERTYPE_OFF: usize = 12;
+pub const ETH_ARP: u16 = 0x0806;
+pub const ETH_IP: u16 = 0x0800;
+
 /// Lay out a UDP header + payload into `seg` (the transport region of an IPv4
 /// frame): ports, length, zero checksum (optional for IPv4 — RFC 768). Returns
 /// the segment length to hand to the IP send. The single place the UDP header

@@ -45,10 +45,11 @@ const OPT_PARAMREQ = 55;
 const DHCPDISCOVER = 1;
 const DHCPREQUEST = 3;
 
-// BOOTP/DHCP UDP ports (RFC 951/2131). CLIENT_PORT is pub so net.zig's RX demux
-// can recognise a server->client reply without redeclaring the value.
-pub const CLIENT_PORT = 68;
-const SERVER_PORT = 67;
+// BOOTP/DHCP UDP ports (RFC 951/2131) — owned by the pure dhcp_wire.zig (the
+// ACK snoop reads them off raw frames there); re-exported so net.zig's RX
+// demux keeps naming CLIENT_PORT through this module.
+pub const CLIENT_PORT = dhcp_wire.CLIENT_PORT;
+const SERVER_PORT = dhcp_wire.SERVER_PORT;
 
 // Per-phase receive policy: bounded retries, polled deadline (same shape as
 // net.resolveMac / udp.dnsResolve). DHCP runs ON the boot stack (the entry root
