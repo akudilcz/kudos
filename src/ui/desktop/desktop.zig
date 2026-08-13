@@ -189,7 +189,8 @@ pub const Desktop = struct {
 
     // ── boot layout (boot_layout.zig) ────────────────────────────────────────
 
-    /// Spawn the boot tiles: the boot terminal and the boot model window.
+    /// Spawn the boot tiles: SMP four terminals tiled 2x2 (two autostarted),
+    /// single-core the one quarter-screen terminal (boot_layout.zig).
     pub fn spawnBootLayout(self: *Desktop) !void {
         return boot_layout.spawnBootLayout(self);
     }
