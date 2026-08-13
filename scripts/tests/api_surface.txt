@@ -187,6 +187,7 @@ src/console/cmd/free.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/grep.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/head.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/help.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/history.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/host.zig: pub fn run(c: console.Console, name: []const u8) void
 src/console/cmd/ip.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/kudos.zig: pub fn run(c: console.Console, args: []const u8) void
@@ -232,8 +233,9 @@ src/console/console.zig: pub const Desktop = struct
 src/console/console.zig: pub const Console = struct
 src/console/editline.zig: pub const complete = @import("complete.zig");
 src/console/editline.zig: pub const LINE_MAX: usize = 256;
+src/console/editline.zig: pub const HISTORY: usize = 32;
 src/console/editline.zig: pub const Screen = struct
-src/console/editline.zig: pub const Action = enum { none, commit, complete, recalled, recall_empty };
+src/console/editline.zig: pub const Action = enum { none, commit, complete, recalled, recall_empty, interrupt };
 src/console/editline.zig: pub const Completion = enum { none, grew, ambiguous };
 src/console/editline.zig: pub const Editor = struct
 src/console/glob.zig: pub fn hasGlob(word: []const u8) bool
@@ -266,7 +268,7 @@ src/console/redirect.zig: pub fn parse(line: []const u8) ?Parsed
 src/console/redirect.zig: pub const MAX_STAGES: usize = 8;
 src/console/redirect.zig: pub fn splitPipes(line: []const u8, out: *[MAX_STAGES][]const u8) usize
 src/console/redirect.zig: pub const Sink = struct
-src/console/session.zig: pub const ReqKind = enum(u8) { echo, backspace, run_line, complete, prompt };
+src/console/session.zig: pub const ReqKind = enum(u8) { echo, backspace, run_line, complete, prompt, move, interrupt };
 src/console/session.zig: pub const Request = struct
 src/console/session.zig: pub const Key = struct { ascii: u8 };
 src/console/session.zig: pub const REQ_RING_CAP = 256;
@@ -285,6 +287,7 @@ src/console/session.zig: pub fn taskEntry() void
 src/console/session.zig: pub fn run(sess: *Session) void
 src/console/session.zig: pub fn wakeTask(sess: *Session) void
 src/console/session.zig: pub fn cancelTask(sess: *Session) void
+src/console/session.zig: pub fn cancelCommand(sess: *Session) void
 src/console/shell.zig: pub const NAMES: [COMMANDS.len][]const u8 = blk:
 src/console/shell.zig: pub fn splitCommand(line: []const u8) struct { cmd: []const u8, args: []const u8 }
 src/console/shell.zig: pub fn execute(c: console.Console, line_in: []const u8) void
@@ -2019,6 +2022,7 @@ src/drivers/input/keyboard.zig: pub const KEY_UP: u8 = keymap.KEY_UP;
 src/drivers/input/keyboard.zig: pub const KEY_DOWN: u8 = keymap.KEY_DOWN;
 src/drivers/input/keyboard.zig: pub const KeyEvent = struct
 src/drivers/input/keyboard.zig: pub const hidToAscii = keymap.hidToAscii;
+src/drivers/input/keyboard.zig: pub const hidToAsciiMods = keymap.hidToAsciiMods;
 src/drivers/input/keyboard.zig: pub const hidToEvdev = keymap.hidToEvdev;
 src/drivers/input/keyboard.zig: pub const MOD_USAGE_FIRST = keymap.MOD_USAGE_FIRST;
 src/drivers/input/keyboard.zig: pub fn inject(ev: KeyEvent) bool
@@ -2028,7 +2032,17 @@ src/drivers/input/keymap.zig: pub const KEY_UP: u8 = 0x10;
 src/drivers/input/keymap.zig: pub const KEY_DOWN: u8 = 0x11;
 src/drivers/input/keymap.zig: pub const KEY_LEFT: u8 = 0x12;
 src/drivers/input/keymap.zig: pub const KEY_RIGHT: u8 = 0x13;
+src/drivers/input/keymap.zig: pub const KEY_HOME: u8 = 0x14;
+src/drivers/input/keymap.zig: pub const KEY_END: u8 = 0x15;
+src/drivers/input/keymap.zig: pub const KEY_PGUP: u8 = 0x16;
+src/drivers/input/keymap.zig: pub const KEY_PGDN: u8 = 0x17;
+src/drivers/input/keymap.zig: pub const KEY_SHIFT_PGUP: u8 = 0x18;
+src/drivers/input/keymap.zig: pub const KEY_SHIFT_PGDN: u8 = 0x19;
+src/drivers/input/keymap.zig: pub const KEY_CTRL_C: u8 = 0x03;
 src/drivers/input/keymap.zig: pub const KEY_BACKSPACE: u8 = 0x08;
+src/drivers/input/keymap.zig: pub const MOD_SHIFT_MASK: u8 = 0x22;
+src/drivers/input/keymap.zig: pub const MOD_CTRL_MASK: u8 = 0x11;
+src/drivers/input/keymap.zig: pub fn hidToAsciiMods(usage: u8, mods: u8) u8
 src/drivers/input/keymap.zig: pub fn hidToAscii(usage: u8, shift: bool) u8
 src/drivers/input/keymap.zig: pub fn hidToEvdev(usage: u8) u16
 src/drivers/input/keymap.zig: pub const MOD_USAGE_FIRST: u8 = 0xE0;

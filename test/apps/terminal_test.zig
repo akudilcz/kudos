@@ -13,6 +13,7 @@ const troot = @import("testroot").terminal;
 const terminal = troot.terminal;
 const window = troot.window;
 const font = troot.font;
+const keymap = troot.keymap;
 
 const Terminal = terminal.Terminal;
 const Window = window.Window;
@@ -185,6 +186,64 @@ test "masked input echoes as stars, on the grid and in every echo path" {
     try expectEqual(@as(u8, '*'), f.term.cells[row + col - 2].ch);
     // The editor still holds the real characters — masking is display-only.
     try expect(std.mem.eql(u8, "s3", f.term.ed.text()));
+}
+
+test "scrollback: the offset clamps to the retained rows and pages by the view" {
+    var f = try Fixture.init(400, 300);
+    defer f.deinit();
+    // More content than the view holds, so there are retained rows to reveal.
+    var i: usize = 0;
+    while (i < f.term.rows + 8) : (i += 1) f.term.write("line\n");
+    try expect(f.term.cy >= f.term.rows);
+    const limit = f.term.cy + 1 - f.term.rows; // rows above the bottom view
+    f.term.scrollBack();
+    try expectEqual(@min(f.term.rows, limit), f.term.view_off);
+    // However far the user keeps paging, the view never leaves the grid.
+    i = 0;
+    while (i < 100) : (i += 1) f.term.scrollBack();
+    try expectEqual(limit, f.term.view_off);
+    // Paging down saturates at the bottom, never wraps.
+    i = 0;
+    while (i < 100) : (i += 1) f.term.scrollForward();
+    try expectEqual(@as(usize, 0), f.term.view_off);
+}
+
+test "scrollback: any new key or output snaps the view back to the bottom" {
+    var f = try Fixture.init(400, 300);
+    defer f.deinit();
+    var i: usize = 0;
+    while (i < f.term.rows + 8) : (i += 1) f.term.write("line\n");
+
+    f.term.scrollBack();
+    try expect(f.term.view_off > 0);
+    f.term.write("x"); // new output must be visible
+    try expectEqual(@as(usize, 0), f.term.view_off);
+
+    f.term.scrollBack();
+    try expect(f.term.view_off > 0);
+    f.term.onKey('a'); // any ordinary keystroke snaps too
+    try expectEqual(@as(usize, 0), f.term.view_off);
+
+    // The scroll keys themselves do NOT snap — paging twice goes further.
+    f.term.onKey(keymap.KEY_SHIFT_PGUP);
+    const once = f.term.view_off;
+    try expect(once > 0);
+    f.term.onKey(keymap.KEY_SHIFT_PGUP);
+    try expect(f.term.view_off >= once);
+}
+
+test "Ctrl-C abandons the line: ^C is acknowledged, the hold cleared, a fresh prompt printed" {
+    var f = try Fixture.init(400, 300);
+    defer f.deinit();
+    f.term.onKey('a');
+    f.term.onKey('b');
+    f.term.hold_prompt = true; // as if a command had asked an inline question
+    f.term.onKey(keymap.KEY_CTRL_C);
+    try expect(std.mem.eql(u8, "", f.term.ed.text()));
+    try expect(!f.term.hold_prompt);
+    // The cursor row holds a fresh prompt — ^C prompts EXPLICITLY, it never
+    // consumes the one-shot hold.
+    try expectEqual(@as(u8, '#'), f.term.cells[f.term.cy * terminal.MAX_COLS].ch);
 }
 
 test "a held prompt suppresses exactly one automatic prompt" {

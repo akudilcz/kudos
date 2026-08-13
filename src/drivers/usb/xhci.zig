@@ -2695,7 +2695,7 @@ fn processKeyboard(hid: *Hid) void {
         } else if (u == 0x45) {
             _ = keyboard.inject(.{ .ascii = 0, .key = .f12, .evdev = evdev });
         } else {
-            const ascii = keyboard.hidToAscii(u, kp.shift);
+            const ascii = keyboard.hidToAsciiMods(u, kp.mods);
             // A key that types no character still went down: it carries no ascii
             // and no name, and reaches only the consumers that read key codes.
             _ = keyboard.inject(.{ .ascii = ascii, .key = .none, .evdev = evdev });

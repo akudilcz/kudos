@@ -6,6 +6,7 @@ const std = @import("std");
 const console = @import("../console.zig");
 const network = @import("../network.zig");
 const timer = @import("../../kernel/timer/timer.zig");
+const sched = @import("../../kernel/sched/sched.zig");
 
 const COUNT: u8 = 4;
 const TIMEOUT_MS: u64 = 1000;
@@ -33,20 +34,24 @@ pub fn run(c: console.Console, host: []const u8) void {
     network.writeIp(c, ip);
     c.write(") 8 data bytes\n");
     var recv: u8 = 0;
+    var sent: u8 = 0;
     var seq: u8 = 0;
     while (seq < COUNT) : (seq += 1) {
+        // ^C between echoes: report what was measured so far and stop.
+        if (sched.cancelled()) break;
+        sent += 1;
         if (n.ping(ip, TIMEOUT_MS)) |rtt| {
             recv += 1;
             c.write("16 bytes from ");
             network.writeIp(c, ip);
             c.write(std.fmt.bufPrint(&buf, ": icmp_seq={d} time={d} ms\n", .{ seq + 1, rtt }) catch return);
         }
-        if (seq < COUNT - 1) timer.sleep(SPACING_MS);
+        if (seq < COUNT - 1 and !sched.cancelled()) timer.sleep(SPACING_MS);
     }
     c.write("--- ");
     c.write(host);
     c.write(" ping statistics ---\n");
     c.write(std.fmt.bufPrint(&buf, "{d} packets transmitted, {d} received, {d}% packet loss\n", .{
-        COUNT, recv, @as(u32, COUNT - recv) * 100 / COUNT,
+        sent, recv, if (sent == 0) 0 else @as(u32, sent - recv) * 100 / sent,
     }) catch return);
 }

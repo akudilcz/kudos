@@ -38,6 +38,24 @@ test "hidToAscii: whitespace, punctuation, arrows, no-char" {
     try expectEqual(@as(u8, 0), hidToAscii(0x00, false));
 }
 
+test "hidToAscii: the navigation keys, and shift picks the scrollback pair" {
+    try expectEqual(keymap.KEY_HOME, hidToAscii(0x4A, false));
+    try expectEqual(keymap.KEY_END, hidToAscii(0x4D, false));
+    try expectEqual(keymap.KEY_PGUP, hidToAscii(0x4B, false));
+    try expectEqual(keymap.KEY_PGDN, hidToAscii(0x4E, false));
+    try expectEqual(keymap.KEY_SHIFT_PGUP, hidToAscii(0x4B, true));
+    try expectEqual(keymap.KEY_SHIFT_PGDN, hidToAscii(0x4E, true));
+}
+
+test "hidToAsciiMods: Ctrl folds a letter to its control byte, shift still shifts" {
+    // Ctrl-C (usage 0x06) is the terminal's interrupt.
+    try expectEqual(keymap.KEY_CTRL_C, keymap.hidToAsciiMods(0x06, keymap.MOD_CTRL_MASK));
+    try expectEqual(@as(u8, 'c'), keymap.hidToAsciiMods(0x06, 0));
+    try expectEqual(@as(u8, 'C'), keymap.hidToAsciiMods(0x06, keymap.MOD_SHIFT_MASK));
+    // Ctrl leaves the keys that are already control bytes alone (Enter stays Enter).
+    try expectEqual(@as(u8, '\r'), keymap.hidToAsciiMods(0x28, keymap.MOD_CTRL_MASK));
+}
+
 test "hidToAscii: every punctuation usage in both shift states" {
     // 0x2D..0x38: the full shifted/unshifted symbol pairs.
     const pairs = [_]struct { u: u8, lo: u8, hi: u8 }{
