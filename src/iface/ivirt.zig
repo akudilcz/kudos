@@ -225,32 +225,36 @@ pub fn takeStop(id: Id) bool {
     return true;
 }
 
-/// No boot request pending — the mailbox's empty value (an image number can
-/// never reach it).
-const NO_BOOT_REQUEST: u32 = 0xFFFF_FFFF;
+/// No boot request pending — the mailbox's empty value (a packed request always
+/// has a non-zero image number in its low byte).
+const NO_BOOT_REQUEST: u64 = 0;
 
-/// The boot-request mailbox: which guest image to boot (its `vm boot` list
-/// number). One cell — a second request while one is in flight is refused,
-/// never queued (the caller reports it). No core is named: a guest's vCPU is
-/// an ordinary task placed by the scheduler (VIRT-021).
-var boot_request: u32 = NO_BOOT_REQUEST;
+/// The boot-request mailbox: the image number and the adopting window id packed
+/// into ONE cell, so two racing posters can never interleave the fields. One
+/// cell — a second request while one is in flight is refused, never queued (the
+/// caller reports it). No core is named: a guest's vCPU is an ordinary task
+/// placed by the scheduler (VIRT-021).
+var boot_request: u64 = NO_BOOT_REQUEST;
 
 /// A taken boot request: the image's `vm boot` list number (1 = the staged
-/// built-in).
-pub const BootRequest = struct { image: u8 };
+/// built-in), and the window that asked to host the guest — the desktop
+/// resolves the id and falls back to a fresh window when it no longer names a
+/// live terminal. 0 = no adoption.
+pub const BootRequest = struct { image: u8, adopt_win: u32 };
 
 /// A session or the shell: ask the system task to create a guest of catalog
-/// image `image`. False when a request is already in flight.
-pub fn postBootRequest(image: u8) bool {
-    return @cmpxchgStrong(u32, &boot_request, NO_BOOT_REQUEST, image, .acq_rel, .acquire) == null;
+/// image `image`, hosted in window `adopt_win` (0: open a new window). False
+/// when a request is already in flight.
+pub fn postBootRequest(image: u8, adopt_win: u32) bool {
+    const v = (@as(u64, adopt_win) << 8) | image;
+    return @cmpxchgStrong(u64, &boot_request, NO_BOOT_REQUEST, v, .acq_rel, .acquire) == null;
 }
 
 /// The system task: take the pending boot request, if any.
 pub fn takeBootRequest() ?BootRequest {
-    const v = @atomicLoad(u32, &boot_request, .acquire);
+    const v = @atomicRmw(u64, &boot_request, .Xchg, NO_BOOT_REQUEST, .acq_rel);
     if (v == NO_BOOT_REQUEST) return null;
-    @atomicStore(u32, &boot_request, NO_BOOT_REQUEST, .release);
-    return .{ .image = @intCast(v & 0xFF) };
+    return .{ .image = @truncate(v), .adopt_win = @intCast(v >> 8) };
 }
 
 /// Whether a stop has been requested for VM `id` and not yet taken. A

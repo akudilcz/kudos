@@ -84,6 +84,11 @@ pub const Vm = struct {
     /// painted scanout must never blank a console that is carrying the boot log.
     fb_presented: bool = false,
 
+    /// Whether this window was a TERMINAL that `kudos vm N` took over: when the
+    /// guest ends, the desktop restores a fresh shell into the same window
+    /// instead of leaving a dead console.
+    adopted: bool = false,
+
     pub fn create(a: std.mem.Allocator, win: *Window, id: ivirt.Id, core: ?u32) !*Vm {
         const self = try a.create(Vm);
         self.* = .{ .a = a, .win = win, .id = id, .core = core, .console = vmconsole.Console.init() };

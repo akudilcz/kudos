@@ -226,6 +226,82 @@ pub fn spawnVmWindow(d: *Desktop, id: ivirt.Id) !void {
     try appendApp(d, .{ .vm = v });
 }
 
+/// What `adoptVmWindow` did — the caller retries `busy` (a command is still
+/// running in the terminal being replaced) and falls back to a fresh window on
+/// `gone` (the id names no live, idle terminal — closed since the request).
+pub const AdoptResult = enum { done, busy, gone };
+
+/// Replace the TERMINAL in window `win_id` with the console of guest `id` —
+/// `kudos vm N` taking over the terminal it was typed in. The swap follows
+/// closeWindow's discipline exactly: deferral check and the app-list edit are
+/// one critical section under the structure lock (the command worker claims a
+/// terminal under the same lock), and the terminal is only freed after the
+/// deferred GL frame completes.
+pub fn adoptVmWindow(d: *Desktop, win_id: u32, id: ivirt.Id) AdoptResult {
+    var idx: ?usize = null;
+    for (d.apps.items, 0..) |a, i| {
+        if (a == .term and a.window().id == win_id) {
+            idx = i;
+            break;
+        }
+    }
+    const i = idx orelse return .gone;
+    const t = d.apps.items[i].term;
+    const win = t.win;
+    // A window already queued for close must not be adopted — the close wins.
+    for (d.pending_close[0..d.pending_close_len]) |w| {
+        if (w == win) return .gone;
+    }
+
+    const v = VmApp.create(d.a, win, id, virt.guestCore(id)) catch return .gone;
+    v.adopted = true;
+    {
+        const if_was = d.structure_lock.acquireIrqSave();
+        if (t.commandRunning() or t.commandPending() or t.localRunning()) {
+            d.structure_lock.releaseIrqRestore(if_was);
+            d.a.destroy(v);
+            return .busy;
+        }
+        d.apps.items[i] = .{ .vm = v };
+        d.structure_lock.releaseIrqRestore(if_was);
+    }
+    // The grid may be mid-frame on the GPU; finish before freeing it.
+    render.completeOpenFrame(d);
+    t.close(d.a, if (d.gles_comp) |*gc| &gc.gctx else null);
+    retitle(d, win, "linux #{d}", .{id});
+    d.wm.markFull();
+    return .done;
+}
+
+/// The way back: the guest in window index `i` ended, and the window it took
+/// over becomes a fresh shell terminal again. No free session leaves the
+/// guest's last screen in place — a dead console beats a vanished window.
+pub fn restoreTerminalWindow(d: *Desktop, i: usize) void {
+    const v = d.apps.items[i].vm;
+    const win = v.win;
+    const sess = sessionmod.open() orelse return;
+    const t = Terminal.create(d.a, win, consoleDesktop(d), sess.id, sess, false) catch {
+        sessionmod.abort(sess);
+        return;
+    };
+    {
+        const if_was = d.structure_lock.acquireIrqSave();
+        d.apps.items[i] = .{ .term = t };
+        d.structure_lock.releaseIrqRestore(if_was);
+    }
+    render.completeOpenFrame(d);
+    v.close(d.a, if (d.gles_comp) |*gc| &gc.gctx else null);
+    retitle(d, win, "term #{d}", .{sess.id});
+    d.wm.markFull();
+}
+
+/// Swap a window's heap-owned title (kept on OOM — a stale title beats none).
+fn retitle(d: *Desktop, win: *Window, comptime fmt: []const u8, args: anytype) void {
+    const fresh = std.fmt.allocPrint(d.a, fmt, args) catch return;
+    d.a.free(win.title);
+    win.title = fresh;
+}
+
 /// Open the window a module asked for (MOD-012). The CONTENT area is the
 /// requested size (the mailbox clamped it), so blits map one-to-one onto screen
 /// pixels; chrome is added around it. Publishing the handle is the last act —

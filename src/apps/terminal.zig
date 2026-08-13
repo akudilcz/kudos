@@ -638,6 +638,7 @@ pub const Terminal = struct {
             .promptFn = conPrompt,
             .desktop = self.desktop,
             .win = self.win,
+            .win_id = self.win.id,
             .a = self.a,
             .ai_mode = self.ai_mode,
             .agent_window = self.agent_window,

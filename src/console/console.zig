@@ -67,6 +67,11 @@ pub const Console = struct {
     /// The hosting desktop's services and this console's window within it.
     desktop: Desktop,
     win: *anyopaque,
+    /// The hosting window's WM id — what a command puts in a cross-task request
+    /// that must survive this window dying before it is served (`kudos vm N`'s
+    /// adoption): an id resolves to nothing then, where a pointer resolves to
+    /// whatever reused the memory.
+    win_id: u32 = 0,
     /// What a pipe fed this command: the previous stage's captured output —
     /// null at the head of a line. Null and empty are DIFFERENT answers: a
     /// stage that produced nothing still fed the pipe, and `wc` on it counts
