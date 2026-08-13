@@ -3,19 +3,51 @@
 //! (xhci.zig) shares. No hardware import.
 
 /// Control byte for the Up arrow (DLE, 0x10 — otherwise unused by the kernel):
-/// flows through the normal ASCII ring so the line editor recalls the last command
+/// flows through the normal ASCII ring so the line editor recalls history
 /// without a separate routing path.
 pub const KEY_UP: u8 = 0x10;
-/// Control byte for the Down arrow (DC1, 0x11): same ring as KEY_UP, wired for the
-/// planned scrollback; no consumer yet (ignored, < 0x20).
+/// Control byte for the Down arrow (DC1, 0x11): same ring as KEY_UP — the line
+/// editor walks history back toward the in-progress line.
 pub const KEY_DOWN: u8 = 0x11;
-/// Control byte for the Left arrow (DC2, 0x12): browser history back.
+/// Control byte for the Left arrow (DC2, 0x12): line-editor cursor left;
+/// browser history back.
 pub const KEY_LEFT: u8 = 0x12;
-/// Control byte for the Right arrow (DC3, 0x13): browser history forward.
+/// Control byte for the Right arrow (DC3, 0x13): line-editor cursor right;
+/// browser history forward.
 pub const KEY_RIGHT: u8 = 0x13;
+/// Control byte for Home (DC4, 0x14): line-editor cursor to start of line.
+pub const KEY_HOME: u8 = 0x14;
+/// Control byte for End (NAK, 0x15): line-editor cursor to end of line.
+pub const KEY_END: u8 = 0x15;
+/// Control byte for Page Up (SYN, 0x16): unmodified — reserved for apps.
+pub const KEY_PGUP: u8 = 0x16;
+/// Control byte for Page Down (ETB, 0x17): unmodified — reserved for apps.
+pub const KEY_PGDN: u8 = 0x17;
+/// Control byte for Shift+Page Up (CAN, 0x18): terminal scrollback, older rows.
+pub const KEY_SHIFT_PGUP: u8 = 0x18;
+/// Control byte for Shift+Page Down (EM, 0x19): terminal scrollback, newer rows.
+pub const KEY_SHIFT_PGDN: u8 = 0x19;
+/// What Ctrl-C types (ASCII ETX, 0x03): the terminal's interrupt — cancels the
+/// in-flight command, or abandons the line being edited.
+pub const KEY_CTRL_C: u8 = 0x03;
 /// Backspace (ASCII BS, 0x08): erases the character before the caret in every
 /// line editor / text field.
 pub const KEY_BACKSPACE: u8 = 0x08;
+
+/// The Shift bits (left|right) of a HID report's modifier bitmap (byte 0 of a
+/// boot keyboard report, HID Usage Table §8).
+pub const MOD_SHIFT_MASK: u8 = 0x22;
+/// The Control bits (left|right) of the same bitmap.
+pub const MOD_CTRL_MASK: u8 = 0x11;
+
+/// Translate a usage under the FULL modifier bitmap: shift picks the shifted
+/// character (and the shifted named keys, e.g. Shift+PgUp), and Ctrl folds a
+/// letter to its C0 control byte the way every terminal does (Ctrl-C → 0x03).
+pub fn hidToAsciiMods(usage: u8, mods: u8) u8 {
+    const ascii = hidToAscii(usage, (mods & MOD_SHIFT_MASK) != 0);
+    if ((mods & MOD_CTRL_MASK) != 0 and ascii >= 0x40 and ascii < 0x80) return ascii & 0x1F;
+    return ascii;
+}
 
 /// Translate a USB HID keyboard usage code (HID Usage Table §10) to ASCII, given
 /// whether shift is held. Single source of truth for "what character does this key
@@ -48,10 +80,14 @@ pub fn hidToAscii(usage: u8, shift: bool) u8 {
         0x36 => if (shift) '<' else ',',
         0x37 => if (shift) '>' else '.',
         0x38 => if (shift) '?' else '/',
-        0x52 => KEY_UP, // Up arrow → recall last command
-        0x51 => KEY_DOWN, // Down arrow → scrollback (planned)
-        0x50 => KEY_LEFT, // Left arrow → browser history back
-        0x4F => KEY_RIGHT, // Right arrow → browser history forward
+        0x52 => KEY_UP, // Up arrow → history older
+        0x51 => KEY_DOWN, // Down arrow → history newer
+        0x50 => KEY_LEFT, // Left arrow → cursor left / browser history back
+        0x4F => KEY_RIGHT, // Right arrow → cursor right / browser history forward
+        0x4A => KEY_HOME, // Home → start of line
+        0x4D => KEY_END, // End → end of line
+        0x4B => if (shift) KEY_SHIFT_PGUP else KEY_PGUP, // Page Up (+Shift: scrollback)
+        0x4E => if (shift) KEY_SHIFT_PGDN else KEY_PGDN, // Page Down (+Shift: scrollback)
         else => 0,
     };
 }

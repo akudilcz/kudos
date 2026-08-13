@@ -64,9 +64,20 @@ pub const Console = struct {
     /// turned off. Turning it OFF also forgets the editor's recall of the
     /// masked line, so Up-arrow cannot replay a passphrase.
     setInputMaskFn: *const fn (ctx: *anyopaque, on: bool) void,
+    /// The i-th line of this terminal's committed-command history, oldest
+    /// first, or null past the end — what the `history` command walks. The
+    /// history lives in the line EDITOR, which no command can see; this is the
+    /// one sanctioned window into it. The slice stays valid for the command's
+    /// life (the editor is parked while its command runs).
+    readHistoryFn: *const fn (ctx: *anyopaque, i: usize) ?[]const u8,
     /// The hosting desktop's services and this console's window within it.
     desktop: Desktop,
     win: *anyopaque,
+    /// The hosting window's WM id — what a command puts in a cross-task request
+    /// that must survive this window dying before it is served (`kudos vm N`'s
+    /// adoption): an id resolves to nothing then, where a pointer resolves to
+    /// whatever reused the memory.
+    win_id: u32 = 0,
     /// What a pipe fed this command: the previous stage's captured output —
     /// null at the head of a line. Null and empty are DIFFERENT answers: a
     /// stage that produced nothing still fed the pipe, and `wc` on it counts
@@ -91,6 +102,12 @@ pub const Console = struct {
     /// makes `ai` turn THIS terminal into the chat rather than opening another
     /// window beside it, and `/quit` hand it back to the shell.
     setAiModeFn: *const fn (ctx: *anyopaque, on: bool) void,
+    /// OPTIONAL: color the characters this command writes next (0xAARRGGBB),
+    /// with 0 restoring the default. Color is how a grid PRESENTS text, never
+    /// part of the bytes a command produces — a console without per-cell color
+    /// (or one capturing output for a file or pipe) leaves the writes uncolored,
+    /// and the command's output means the same thing.
+    setColorFn: ?*const fn (ctx: *anyopaque, argb: u32) void = null,
 
     /// Write one character to the grid.
     pub fn put(self: Console, ch: u8) void {
@@ -123,6 +140,19 @@ pub const Console = struct {
     /// Mask (or unmask) the line editor's echo; unmasking forgets the recall.
     pub fn setInputMask(self: Console, on: bool) void {
         self.setInputMaskFn(self.ctx, on);
+    }
+    /// Color subsequent writes (see setColorFn); a colorless console ignores it.
+    pub fn setColor(self: Console, argb: u32) void {
+        if (self.setColorFn) |f| f(self.ctx, argb);
+    }
+    /// Restore the default color — setColorFn's 0 convention.
+    pub fn resetColor(self: Console) void {
+        self.setColor(0);
+    }
+    /// The i-th committed-command history line, oldest first, or null past
+    /// the end.
+    pub fn history(self: Console, i: usize) ?[]const u8 {
+        return self.readHistoryFn(self.ctx, i);
     }
     /// Open a new app window of `kind` (see Desktop.spawnAppFn).
     pub fn spawnApp(self: Console, kind: AppKind) anyerror!void {

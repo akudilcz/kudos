@@ -97,7 +97,7 @@ fn bootNumber(c: console.Console, arg: []const u8) void {
         c.write("vm: no such image (see `vm list`)\n");
         return;
     }
-    if (!ivirt.postBootRequest(n)) {
+    if (!ivirt.postBootRequest(n, c.win_id)) {
         c.write("vm: another boot is already in flight — retry in a moment\n");
         return;
     }

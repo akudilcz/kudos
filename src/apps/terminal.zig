@@ -14,12 +14,14 @@ const session_mod = @import("../console/session.zig");
 const Session = session_mod.Session;
 const editline = @import("../console/editline.zig");
 const LINE_MAX = editline.LINE_MAX;
+const keymap = @import("keymap"); // scrollback + interrupt key codes (one home)
 const kgl = @import("kgl");
 const gles = @import("gles"); // the 2D toolkit the unified GL desktop draws through
 const sched = @import("../kernel/sched/sched.zig");
 const smp = @import("../kernel/smp/smp.zig");
 const buildinfo = @import("buildinfo");
 const localcmd = @import("../console/localcmd.zig");
+const kudoscmd = @import("../console/cmd/kudos.zig");
 const vfs = @import("vfs");
 const debug = @import("../kernel/debug/debug.zig");
 const counter = @import("../kernel/debug/counter.zig");
@@ -106,6 +108,12 @@ pub const Terminal = struct {
     /// OFF forgets the editor's recall of the masked line.
     input_mask: bool = false,
 
+    /// Scrollback: how many rows above the bottom-anchored view the user has
+    /// scrolled (Shift-PgUp/PgDn). 0 = pinned to the newest content. Clamped to
+    /// the retained rows above the view; ANY other keystroke or new output
+    /// snaps it back to 0, and the cursor is drawn only at 0.
+    view_off: usize = 0,
+
     /// Whether this terminal WAS OPENED as the agent window, as opposed to a
     /// shell terminal the `ai` command later moved into a conversation. Fixed at
     /// create: `ai_mode` moves, this does not, and leaving the agent means
@@ -167,8 +175,29 @@ pub const Terminal = struct {
     /// First grid row drawn: the visible rows are the BOTTOM `rows` of the used
     /// content (`0..=cy`), so a shrink slides the view down the retained grid
     /// (the newest output + cursor stay visible) and a grow reveals older rows.
+    /// Scrollback (`view_off`) slides the window up over the retained rows,
+    /// clamped so the view never leaves the grid.
     fn viewTop(self: *const Terminal) usize {
+        const base = if (self.cy >= self.rows) self.cy + 1 - self.rows else 0;
+        return base - @min(self.view_off, base);
+    }
+
+    /// Rows of retained content above the bottom-anchored view — the most the
+    /// user can scroll back.
+    fn scrollLimit(self: *const Terminal) usize {
         return if (self.cy >= self.rows) self.cy + 1 - self.rows else 0;
+    }
+
+    /// Shift-PgUp: scroll one page toward the oldest retained rows (clamped).
+    pub fn scrollBack(self: *Terminal) void {
+        self.view_off = @min(self.view_off + self.rows, self.scrollLimit());
+        @atomicStore(bool, &self.dirty, true, .release);
+    }
+
+    /// Shift-PgDn: scroll one page back toward the newest content (saturating).
+    pub fn scrollForward(self: *Terminal) void {
+        self.view_off -|= self.rows;
+        @atomicStore(bool, &self.dirty, true, .release);
     }
 
     /// The system task: drain the requests this terminal's session has posted and
@@ -183,6 +212,16 @@ pub const Terminal = struct {
                 .echo => self.echoChar(r.ch),
                 .prompt => self.promptAfterCommand(),
                 .backspace => self.backspaceCell(),
+                .move => self.moveCursorCells(r.n),
+                .interrupt => {
+                    // Ctrl-C on an idle line: the editor already abandoned it;
+                    // acknowledge and prompt fresh. Clearing the hold covers a
+                    // command that ended by asking a question (`passphrase: `)
+                    // — the interrupt is the answer it will never get.
+                    self.hold_prompt = false;
+                    self.write("^C\n");
+                    self.prompt();
+                },
                 .run_line => {
                     // Hand the committed line to the command WORKER task (not
                     // run inline here): a slow command must not block the system
@@ -227,7 +266,23 @@ pub const Terminal = struct {
     /// rendering. Returns true (a command ran).
     pub fn runPendingCommand(self: *Terminal) bool {
         const sess = self.session orelse return false;
+        // Fresh work: a ^C aimed at the PREVIOUS command (or one that landed
+        // between commands) must not fell this one.
+        sched.clearCancel();
+        // Publish which task is executing, so a ^C can requestCancel it
+        // (session.cancelCommand). The worker task is permanent — never
+        // reaped — so a raced load can at worst cancel between commands,
+        // which the clearCancel above absorbs.
+        @atomicStore(?*sched.Task, &sess.cmd_task, sched.currentTask(), .release);
         self.execLine(sess.ed.text());
+        @atomicStore(?*sched.Task, &sess.cmd_task, null, .release);
+        if (sched.cancelled()) {
+            // The command unwound on a ^C: acknowledge it and drop any prompt
+            // hold it left (nothing will answer a cancelled question).
+            sched.clearCancel();
+            self.hold_prompt = false;
+            self.write("^C\n");
+        }
         self.promptAfterCommand();
         // Release this terminal's line editor: it can edit the next line.
         @atomicStore(bool, &sess.busy, false, .release);
@@ -281,11 +336,56 @@ pub const Terminal = struct {
     /// atomics or the ring directly.
     pub fn routeKey(self: *Terminal, ascii: u8) void {
         const sess = self.session orelse return;
+        // Scrollback is a VIEW change: the grid and the editor never see it,
+        // and it is served here because this runs on the system task, which
+        // owns the view. Every other key snaps the view back to the newest
+        // content — the reply to a keystroke must be visible.
+        switch (ascii) {
+            keymap.KEY_SHIFT_PGUP => return self.scrollBack(),
+            keymap.KEY_SHIFT_PGDN => return self.scrollForward(),
+            else => self.view_off = 0,
+        }
+        // Ctrl-C aims at the command IN FLIGHT, so it is out-of-band like the
+        // signal it stands for: cancelled here, never queued behind the typed-
+        // ahead keys waiting in the ring. An idle terminal's ^C rides the ring
+        // to the editor instead, which abandons the line being edited.
+        if (ascii == keymap.KEY_CTRL_C and self.interruptRunning()) return;
         // A full ring means the editor is not draining (parked, starved, or
         // dead) — the keystroke is lost. Never silently: this counter is how a
         // "typed command never ran" report gets localized in one run.
         if (!sess.keys.push(.{ .ascii = ascii })) cnt_key_drops.inc();
         session_mod.wakeTask(sess);
+    }
+
+    /// Type `line` into this terminal as if at the keyboard, committed with a
+    /// newline (SMP; a no-op without a session). Every byte rides the same
+    /// path as a keystroke — routeKey → session editor → echo/commit — so the
+    /// line appears on the grid and dispatches exactly as a typed command; no
+    /// second dispatch path exists. The boot layout starts its tiles' commands
+    /// through this. The line must fit the key ring (KEY_RING_CAP) or the
+    /// overflow is counted in key.drops like any dropped keystroke.
+    pub fn autotype(self: *Terminal, line: []const u8) void {
+        for (line) |ch| self.routeKey(ch);
+        self.routeKey('\n');
+    }
+
+    /// Cancel this terminal's in-flight command, if any (the ^C path). A local
+    /// command (`prime`, `rt`) runs on the SESSION's own task — cancel that,
+    /// exactly as a window close does, WITHOUT clearing `alive` (the session
+    /// lives on; the command's loop polls sched.cancelled() and unwinds). A
+    /// proxied command runs on the worker — cancel the task the session
+    /// published at claim. Returns whether anything was running to cancel.
+    fn interruptRunning(self: *Terminal) bool {
+        const sess = self.session orelse return false;
+        if (self.localRunning()) {
+            session_mod.cancelTask(sess);
+            return true;
+        }
+        if (sess.cmd.isRunning()) {
+            session_mod.cancelCommand(sess);
+            return true;
+        }
+        return false;
     }
 
     /// Signal this terminal's session to close WITHOUT releasing its slot (SMP
@@ -371,6 +471,9 @@ pub const Terminal = struct {
         // Every grid write lands here or in backspaceCell/clearGrid: flag the
         // desktop so this window's damage gets marked (takeDirty).
         @atomicStore(bool, &self.dirty, true, .release);
+        // New output snaps a scrolled view back to the bottom: what just
+        // happened must be visible.
+        self.view_off = 0;
         if (ch == '\n') {
             self.newline();
             return;
@@ -496,6 +599,30 @@ pub const Terminal = struct {
         }
     }
 
+    /// Move the cursor `delta` cells (negative = left) across wrapped rows —
+    /// the same boundary crossing backspaceCell does, in both directions.
+    /// Content is untouched; the caller repaints through echo if it changed.
+    fn moveCursorCells(self: *Terminal, delta: i32) void {
+        var d = delta;
+        while (d < 0) : (d += 1) {
+            if (self.cx == 0) {
+                if (self.cy == 0) break;
+                self.cy -= 1;
+                self.cx = self.cols;
+            }
+            self.cx -= 1;
+        }
+        while (d > 0) : (d -= 1) {
+            self.cx += 1;
+            if (self.cx >= self.cols) {
+                self.cx = 0;
+                self.cy += 1;
+                if (self.cy >= MAX_ROWS) self.scroll();
+            }
+        }
+        @atomicStore(bool, &self.dirty, true, .release);
+    }
+
     /// editline.Screen echo bound to this grid (masked like every echo).
     fn scrEcho(ctx: ?*anyopaque, ch: u8) void {
         const t: *Terminal = @ptrCast(@alignCast(ctx.?));
@@ -506,23 +633,43 @@ pub const Terminal = struct {
         const t: *Terminal = @ptrCast(@alignCast(ctx.?));
         t.backspaceCell();
     }
-    /// This terminal's editline.Screen: echo/erase straight onto the cells.
+    /// editline.Screen move bound to this grid.
+    fn scrMove(ctx: ?*anyopaque, delta: i32) void {
+        const t: *Terminal = @ptrCast(@alignCast(ctx.?));
+        t.moveCursorCells(delta);
+    }
+    /// This terminal's editline.Screen: echo/erase/move straight onto the cells.
     fn screen(self: *Terminal) editline.Screen {
-        return .{ .ctx = self, .echoFn = scrEcho, .eraseFn = scrErase };
+        return .{ .ctx = self, .echoFn = scrEcho, .eraseFn = scrErase, .moveFn = scrMove };
     }
 
     /// Feed one ASCII key from the keyboard to the line editor (single-core
     /// path: the Terminal hosts the editor inline; editline owns the edit
-    /// semantics, shared with the SMP session task).
+    /// semantics, shared with the SMP session task). Scrollback keys are a
+    /// VIEW change served here — the editor never sees them — and any other
+    /// key snaps the view to the newest content, mirroring routeKey.
     pub fn onKey(self: *Terminal, ascii: u8) void {
+        switch (ascii) {
+            keymap.KEY_SHIFT_PGUP => return self.scrollBack(),
+            keymap.KEY_SHIFT_PGDN => return self.scrollForward(),
+            else => self.view_off = 0,
+        }
         switch (self.ed.key(ascii, self.screen())) {
             .commit => {
                 self.putChar('\n');
                 self.runLine();
-                self.ed.len = 0;
+                self.ed.clearLine();
                 self.promptAfterCommand();
             },
             .complete => self.completeFor(&self.ed),
+            .interrupt => {
+                // Ctrl-C: the editor abandoned the line; acknowledge and
+                // prompt fresh. On this single-core path commands run inline,
+                // so there is never an in-flight command to cancel.
+                self.hold_prompt = false;
+                self.write("^C\n");
+                self.prompt();
+            },
             .none, .recalled, .recall_empty => {},
         }
     }
@@ -613,6 +760,25 @@ pub const Terminal = struct {
         }
     }
 
+    /// Console setColorFn: color what the command writes next, 0 restoring the
+    /// default — writeColored's set/write/restore shape stretched across the
+    /// seam, with the command's resetColor as the restore.
+    fn conSetColor(ctx: *anyopaque, argb: u32) void {
+        const t: *Terminal = @ptrCast(@alignCast(ctx));
+        t.fg = if (argb == 0) FG else argb;
+    }
+
+    /// Console readHistoryFn: the i-th committed line, oldest first. The
+    /// history lives in the line EDITOR, which no shell command can see — this
+    /// is the one window into it. Safe from the worker: while a proxied
+    /// command (this call's host) runs, the session's editor task is parked on
+    /// `busy` — the same handoff that lets run_line read the committed line.
+    fn conReadHistory(ctx: *anyopaque, i: usize) ?[]const u8 {
+        const t: *Terminal = @ptrCast(@alignCast(ctx));
+        const ed = if (t.session) |sess| &sess.ed else &t.ed;
+        return ed.historyAt(i);
+    }
+
     /// The console surface over this terminal — what shell.execute hands each
     /// command: the grid half bound to this terminal, plus the desktop half
     /// and window handle this terminal was given at spawn.
@@ -626,12 +792,15 @@ pub const Terminal = struct {
             .promptFn = conPrompt,
             .desktop = self.desktop,
             .win = self.win,
+            .win_id = self.win.id,
             .a = self.a,
             .ai_mode = self.ai_mode,
             .agent_window = self.agent_window,
             .setAiModeFn = conSetAiMode,
             .holdPromptFn = conHoldPrompt,
             .setInputMaskFn = conSetInputMask,
+            .setColorFn = conSetColor,
+            .readHistoryFn = conReadHistory,
         };
     }
 
@@ -661,6 +830,15 @@ pub const Terminal = struct {
     /// the per-core local commands, each table still its own source of truth.
     const CMD_NAMES: []const []const u8 = &(shell.NAMES ++ localcmd.NAMES);
 
+    /// The words the SECOND word of a `kudos` line can complete to: the
+    /// shell-side subcommand table (cmd/kudos.zig) plus the local trio, each
+    /// table still its own source of truth; the group word rides along so the
+    /// pure core restates none of them.
+    const KUDOS_GROUP = editline.complete.Group{
+        .word = localcmd.GROUP,
+        .names = &(kudoscmd.NAMES ++ localcmd.GROUP_NAMES),
+    };
+
     /// The live enumeration seam handed to every completion on this terminal.
     fn dirs() editline.complete.Dirs {
         return .{ .ctx = null, .listFn = dirsList };
@@ -674,10 +852,10 @@ pub const Terminal = struct {
         // The AI window takes no filename arguments, so its Tab completes
         // nothing.
         if (self.ai_mode) return;
-        if (ed.completeLine(self.cwd(), dirs(), CMD_NAMES, self.screen()) != .ambiguous) return;
+        if (ed.completeLine(self.cwd(), dirs(), CMD_NAMES, KUDOS_GROUP, self.screen()) != .ambiguous) return;
         self.putChar('\n');
         var listing = Listing{ .t = self };
-        editline.complete.eachMatch(ed.text(), self.cwd(), dirs(), CMD_NAMES, .{
+        editline.complete.eachMatch(ed.text(), self.cwd(), dirs(), CMD_NAMES, KUDOS_GROUP, .{
             .ctx = &listing,
             .entryFn = candidateOut,
         });
@@ -751,7 +929,9 @@ pub const Terminal = struct {
                 p.text(atlas_tex, atlas, &s, @as(f32, @floatFromInt(x)) * fw, @as(f32, @floatFromInt(y)) * fh, cl.fg);
             }
         }
-        if (focused and blink_on) {
+        // The cursor exists only at the bottom view: a scrolled-back window
+        // shows history, and the edit point is not in it.
+        if (focused and blink_on and self.view_off == 0) {
             const thickness = 2;
             p.fillRect(@as(f32, @floatFromInt(vx)) * fw, @as(f32, @floatFromInt(vy)) * fh + fh - thickness, fw, thickness, CURSOR);
         }
@@ -763,7 +943,9 @@ pub const Terminal = struct {
     /// (view-translated row, edge-clamped column) — the same cell draw() paints.
     pub fn cursorCellScreen(self: *const Terminal) struct { x: i32, y: i32, w: usize, h: usize } {
         const vx = @min(self.cx, self.cols - 1);
-        const vy = self.cy - self.viewTop();
+        // Edge-clamped like the column: a scrolled-back view has no cursor on
+        // screen (drawGl skips it), so the blink rect just stays in-window.
+        const vy = @min(self.cy - self.viewTop(), self.rows - 1);
         return .{
             .x = self.win.contentX() + @as(i32, @intCast(vx * font.WIDTH)),
             .y = self.win.contentY() + @as(i32, @intCast(vy * font.HEIGHT)),

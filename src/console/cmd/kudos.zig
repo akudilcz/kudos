@@ -29,6 +29,15 @@ const SUBS = [_]Sub{
     .{ .name = "flipstat", .run = @import("flipstat.zig").run, .what = "re-arm the present-cadence sample" },
 };
 
+/// The subcommand names, for completing the second word of a `kudos` line —
+/// derived from SUBS so the table above stays the one source of what exists.
+/// The local members add their own (localcmd.GROUP_NAMES).
+pub const NAMES: [SUBS.len][]const u8 = blk: {
+    var n: [SUBS.len][]const u8 = undefined;
+    for (SUBS, 0..) |s, i| n[i] = s.name;
+    break :blk n;
+};
+
 pub fn run(c: console.Console, args: []const u8) void {
     const sp = std.mem.indexOfScalar(u8, args, ' ');
     const sub = if (sp) |i| args[0..i] else args;

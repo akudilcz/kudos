@@ -38,6 +38,15 @@ const GROUP_COMMANDS = [_]Command{
     .{ .name = "run", .run = @import("cmd/run.zig").run },
 };
 
+/// The local members' names, for completing the second word of a `kudos` line
+/// alongside the shell-side table (cmd/kudos.zig NAMES) — derived from
+/// GROUP_COMMANDS so the table above stays the one source of what exists.
+pub const GROUP_NAMES: [GROUP_COMMANDS.len][]const u8 = blk: {
+    var n: [GROUP_COMMANDS.len][]const u8 = undefined;
+    for (GROUP_COMMANDS, 0..) |c, i| n[i] = c.name;
+    break :blk n;
+};
+
 // No local `vm`: a guest's vCPU is an ordinary scheduled task (VIRT-021), so
 // there is nothing core-local about booting one — both builds use the shell
 // `vm` (cmd/vm.zig), which posts a request and returns.

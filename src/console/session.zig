@@ -49,12 +49,17 @@ const localcmd = @import("localcmd.zig");
 /// grid. The editor never touches the grid itself; every mutation is a message.
 /// `complete` additionally asks the system task to Tab-complete the line
 /// (against the terminal's cwd and the live VFS) while the editor is parked.
-pub const ReqKind = enum(u8) { echo, backspace, run_line, complete, prompt };
+/// `move` slides the grid cursor without touching content (the editor's
+/// in-line cursor); `interrupt` is Ctrl-C on an idle line — the terminal
+/// prints `^C` and prompts fresh.
+pub const ReqKind = enum(u8) { echo, backspace, run_line, complete, prompt, move, interrupt };
 pub const Request = struct {
     kind: ReqKind,
     /// For .echo: the typed character. For .run_line/.complete: unused (the
     /// line lives in the session's own editor, in shared RAM).
     ch: u8 = 0,
+    /// For .move: the cursor delta in cells (negative = left).
+    n: i32 = 0,
 };
 
 /// A keystroke delivered from the system task (which owns the keyboard) to the
@@ -86,6 +91,13 @@ pub const Session = struct {
     /// defers a queued close while `shell.execute` is in flight — freeing the
     /// Terminal mid-command would leave the worker resuming on freed memory.
     cmd: cmdtoken.CmdToken = .{},
+    /// The task executing this session's claimed command, published by the
+    /// worker for the life of the execution — the handle a ^C cancels through
+    /// (cancelCommand). A plain atomic, safe without task_lock's ceremony
+    /// because the worker is a PERMANENT task: it is never reaped, so a stale
+    /// pointer can at worst cancel a worker between commands, which the
+    /// worker's per-command clearCancel absorbs.
+    cmd_task: ?*sched.Task = null,
     /// alive: cleared when the terminal is torn down so the command worker stops
     /// touching its (about-to-be-freed) Terminal.
     alive: bool = true,
@@ -382,6 +394,14 @@ pub fn cancelTask(sess: *Session) void {
     if (sess.task) |t| sched.requestCancel(t);
 }
 
+/// Ask the task executing this session's PROXIED command to stop (^C): the
+/// command's loops poll sched.cancelled() and unwind; the worker prints `^C`
+/// and re-prompts. A no-op when nothing is executing. The session and its
+/// editor task are untouched — this cancels the work, not the terminal.
+pub fn cancelCommand(sess: *Session) void {
+    if (@atomicLoad(?*sched.Task, &sess.cmd_task, .acquire)) |t| sched.requestCancel(t);
+}
+
 /// block() predicate: resume when a keystroke is waiting OR the terminal was torn
 /// down (so the run loop re-checks `alive` and returns).
 fn sessionReady(sess: *Session) bool {
@@ -399,9 +419,15 @@ fn scrErase(ctx: ?*anyopaque) void {
     const sess: *Session = @ptrCast(@alignCast(ctx.?));
     if (!sess.req.push(.{ .kind = .backspace })) cnt_req_drops.inc();
 }
-/// This session's editline.Screen: echo/erase as req-ring messages.
+/// editline.Screen move bound to the req ring: one message per motion, the
+/// delta rides whole so a Home on a long line is one entry, not len of them.
+fn scrMove(ctx: ?*anyopaque, delta: i32) void {
+    const sess: *Session = @ptrCast(@alignCast(ctx.?));
+    if (!sess.req.push(.{ .kind = .move, .n = delta })) cnt_req_drops.inc();
+}
+/// This session's editline.Screen: echo/erase/move as req-ring messages.
 fn screen(sess: *Session) editline.Screen {
-    return .{ .ctx = sess, .echoFn = scrEcho, .eraseFn = scrErase };
+    return .{ .ctx = sess, .echoFn = scrEcho, .eraseFn = scrErase, .moveFn = scrMove };
 }
 
 /// Apply one keystroke to this session's line editor (editline owns the edit
@@ -418,6 +444,13 @@ fn handleKey(sess: *Session, ascii: u8) void {
         },
         .commit => commitLine(sess),
         .complete => requestComplete(sess),
+        // Ctrl-C on an idle line: the editor abandoned it; the terminal owns
+        // the acknowledgement (`^C` + fresh prompt). An in-flight command's ^C
+        // never reaches this task — the system task cancels it out-of-band
+        // (Terminal.routeKey).
+        .interrupt => {
+            if (!sess.req.push(.{ .kind = .interrupt })) cnt_req_drops.inc();
+        },
     }
 }
 
@@ -462,7 +495,16 @@ fn commitLine(sess: *Session) void {
         } else {
             r.c.run(out, r.args);
         }
-        sess.ed.len = 0;
+        if (sched.cancelled()) {
+            // ^C felled the local command (Terminal.routeKey cancelled THIS
+            // task — the command ran inline here). Acknowledge, and clear the
+            // flag so this task's own loop and the next command run unhindered.
+            sched.clearCancel();
+            emit(sess, '^');
+            emit(sess, 'C');
+            emit(sess, '\n');
+        }
+        sess.ed.clearLine();
         emitPrompt(sess);
         return;
     }
@@ -483,7 +525,7 @@ fn commitLine(sess: *Session) void {
     // the command.
     sched.block(@intFromPtr(sess), proxyDone);
     if (!@atomicLoad(bool, &sess.alive, .acquire)) return;
-    sess.ed.len = 0;
+    sess.ed.clearLine();
 }
 
 /// `block` predicate for the proxied-command wait: done when core 0's worker

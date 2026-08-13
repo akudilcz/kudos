@@ -187,8 +187,10 @@ src/console/cmd/free.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/grep.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/head.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/help.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/history.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/host.zig: pub fn run(c: console.Console, name: []const u8) void
 src/console/cmd/ip.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/kudos.zig: pub const NAMES: [SUBS.len][]const u8 = blk:
 src/console/cmd/kudos.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/lspci.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/ls.zig: pub fn run(c: console.Console, args: []const u8) void
@@ -223,17 +225,19 @@ src/console/cmd/wc.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/complete.zig: pub const ifilesys = @import("ifilesys");
 src/console/complete.zig: pub const BARE_ROOTS = [_][]const u8{ "/ramdisk", "/usbdisk" };
 src/console/complete.zig: pub const Dirs = struct
+src/console/complete.zig: pub const Group = struct
 src/console/complete.zig: pub const Each = struct
 src/console/complete.zig: pub const Result = struct
-src/console/complete.zig: pub fn line(buf: []u8, len: usize, cwd: []const u8, dirs: Dirs, cmds: []const []const u8) Result
-src/console/complete.zig: pub fn eachMatch(text: []const u8, cwd: []const u8, dirs: Dirs, cmds: []const []const u8, each: Each) void
+src/console/complete.zig: pub fn line(buf: []u8, len: usize, cwd: []const u8, dirs: Dirs, cmds: []const []const u8, group: Group) Result
+src/console/complete.zig: pub fn eachMatch(text: []const u8, cwd: []const u8, dirs: Dirs, cmds: []const []const u8, group: Group, each: Each) void
 src/console/console.zig: pub const AppKind = idesk.AppKind;
 src/console/console.zig: pub const Desktop = struct
 src/console/console.zig: pub const Console = struct
 src/console/editline.zig: pub const complete = @import("complete.zig");
 src/console/editline.zig: pub const LINE_MAX: usize = 256;
+src/console/editline.zig: pub const HISTORY: usize = 32;
 src/console/editline.zig: pub const Screen = struct
-src/console/editline.zig: pub const Action = enum { none, commit, complete, recalled, recall_empty };
+src/console/editline.zig: pub const Action = enum { none, commit, complete, recalled, recall_empty, interrupt };
 src/console/editline.zig: pub const Completion = enum { none, grew, ambiguous };
 src/console/editline.zig: pub const Editor = struct
 src/console/glob.zig: pub fn hasGlob(word: []const u8) bool
@@ -246,6 +250,7 @@ src/console/grants.zig: pub fn find(id: u32, version: u32) ?Row
 src/console/localcmd.zig: pub const Out = @import("out.zig").Out;
 src/console/localcmd.zig: pub const Command = struct
 src/console/localcmd.zig: pub const GROUP = "kudos";
+src/console/localcmd.zig: pub const GROUP_NAMES: [GROUP_COMMANDS.len][]const u8 = blk:
 src/console/localcmd.zig: pub const COMMANDS = if (buildinfo.test_hooks)
 src/console/localcmd.zig: pub const NAMES: [COMMANDS.len][]const u8 = blk:
 src/console/localcmd.zig: pub fn lookup(cmd: []const u8) ?Command
@@ -266,7 +271,7 @@ src/console/redirect.zig: pub fn parse(line: []const u8) ?Parsed
 src/console/redirect.zig: pub const MAX_STAGES: usize = 8;
 src/console/redirect.zig: pub fn splitPipes(line: []const u8, out: *[MAX_STAGES][]const u8) usize
 src/console/redirect.zig: pub const Sink = struct
-src/console/session.zig: pub const ReqKind = enum(u8) { echo, backspace, run_line, complete, prompt };
+src/console/session.zig: pub const ReqKind = enum(u8) { echo, backspace, run_line, complete, prompt, move, interrupt };
 src/console/session.zig: pub const Request = struct
 src/console/session.zig: pub const Key = struct { ascii: u8 };
 src/console/session.zig: pub const REQ_RING_CAP = 256;
@@ -285,6 +290,7 @@ src/console/session.zig: pub fn taskEntry() void
 src/console/session.zig: pub fn run(sess: *Session) void
 src/console/session.zig: pub fn wakeTask(sess: *Session) void
 src/console/session.zig: pub fn cancelTask(sess: *Session) void
+src/console/session.zig: pub fn cancelCommand(sess: *Session) void
 src/console/shell.zig: pub const NAMES: [COMMANDS.len][]const u8 = blk:
 src/console/shell.zig: pub fn splitCommand(line: []const u8) struct { cmd: []const u8, args: []const u8 }
 src/console/shell.zig: pub fn execute(c: console.Console, line_in: []const u8) void
@@ -2019,6 +2025,7 @@ src/drivers/input/keyboard.zig: pub const KEY_UP: u8 = keymap.KEY_UP;
 src/drivers/input/keyboard.zig: pub const KEY_DOWN: u8 = keymap.KEY_DOWN;
 src/drivers/input/keyboard.zig: pub const KeyEvent = struct
 src/drivers/input/keyboard.zig: pub const hidToAscii = keymap.hidToAscii;
+src/drivers/input/keyboard.zig: pub const hidToAsciiMods = keymap.hidToAsciiMods;
 src/drivers/input/keyboard.zig: pub const hidToEvdev = keymap.hidToEvdev;
 src/drivers/input/keyboard.zig: pub const MOD_USAGE_FIRST = keymap.MOD_USAGE_FIRST;
 src/drivers/input/keyboard.zig: pub fn inject(ev: KeyEvent) bool
@@ -2028,7 +2035,17 @@ src/drivers/input/keymap.zig: pub const KEY_UP: u8 = 0x10;
 src/drivers/input/keymap.zig: pub const KEY_DOWN: u8 = 0x11;
 src/drivers/input/keymap.zig: pub const KEY_LEFT: u8 = 0x12;
 src/drivers/input/keymap.zig: pub const KEY_RIGHT: u8 = 0x13;
+src/drivers/input/keymap.zig: pub const KEY_HOME: u8 = 0x14;
+src/drivers/input/keymap.zig: pub const KEY_END: u8 = 0x15;
+src/drivers/input/keymap.zig: pub const KEY_PGUP: u8 = 0x16;
+src/drivers/input/keymap.zig: pub const KEY_PGDN: u8 = 0x17;
+src/drivers/input/keymap.zig: pub const KEY_SHIFT_PGUP: u8 = 0x18;
+src/drivers/input/keymap.zig: pub const KEY_SHIFT_PGDN: u8 = 0x19;
+src/drivers/input/keymap.zig: pub const KEY_CTRL_C: u8 = 0x03;
 src/drivers/input/keymap.zig: pub const KEY_BACKSPACE: u8 = 0x08;
+src/drivers/input/keymap.zig: pub const MOD_SHIFT_MASK: u8 = 0x22;
+src/drivers/input/keymap.zig: pub const MOD_CTRL_MASK: u8 = 0x11;
+src/drivers/input/keymap.zig: pub fn hidToAsciiMods(usage: u8, mods: u8) u8
 src/drivers/input/keymap.zig: pub fn hidToAscii(usage: u8, shift: bool) u8
 src/drivers/input/keymap.zig: pub fn hidToEvdev(usage: u8) u16
 src/drivers/input/keymap.zig: pub const MOD_USAGE_FIRST: u8 = 0xE0;
@@ -2810,8 +2827,8 @@ src/iface/ivirt.zig: pub fn setFetchProgress(id: Id, half: FetchHalf, done: u64,
 src/iface/ivirt.zig: pub fn fetchProgress(id: Id) FetchProgress
 src/iface/ivirt.zig: pub fn requestStop(id: Id) void
 src/iface/ivirt.zig: pub fn takeStop(id: Id) bool
-src/iface/ivirt.zig: pub const BootRequest = struct { image: u8 };
-src/iface/ivirt.zig: pub fn postBootRequest(image: u8) bool
+src/iface/ivirt.zig: pub const BootRequest = struct { image: u8, adopt_win: u32 };
+src/iface/ivirt.zig: pub fn postBootRequest(image: u8, adopt_win: u32) bool
 src/iface/ivirt.zig: pub fn takeBootRequest() ?BootRequest
 src/iface/ivirt.zig: pub fn stopRequested(id: Id) bool
 src/iface/ivirt.zig: pub fn conWrite(id: Id, b: u8) bool
@@ -3844,6 +3861,7 @@ src/ui/desktop/cursor.zig: pub const HOT_X: u32 = 0;
 src/ui/desktop/cursor.zig: pub const HOT_Y: u32 = 0;
 src/ui/desktop/cursor.zig: pub fn bake() [W * H * 4]u8
 src/ui/desktop/desktop.zig: pub const DockApp = struct { kind: Kind, accent: u32, icon: dock.Icon };
+src/ui/desktop/desktop.zig: pub const DOCK_WIN_SLOTS: usize = 12;
 src/ui/desktop/desktop.zig: pub const DOCK_APPS = [_]DockApp{
 src/ui/desktop/desktop.zig: pub const Desktop = struct
 src/ui/desktop/dock.zig: pub const DOCK_H: f32 = 68;
@@ -3854,14 +3872,20 @@ src/ui/desktop/dock.zig: pub const RADIUS: f32 = 20; // the slab's rounded corne
 src/ui/desktop/dock.zig: pub const Rect = struct { x: f32, y: f32, w: f32, h: f32 };
 src/ui/desktop/dock.zig: pub const Icon = enum(u8)
 src/ui/desktop/dock.zig: pub const Item = struct
-src/ui/desktop/dock.zig: pub fn slabRect(screen_w: f32, screen_h: f32, n: usize) Rect
+src/ui/desktop/dock.zig: pub const WinItem = struct
+src/ui/desktop/dock.zig: pub const Hit = union(enum) { launcher: usize, window: usize };
+src/ui/desktop/dock.zig: pub const SEP_W: f32 = 2;
+src/ui/desktop/dock.zig: pub const SEP_GAP: f32 = 14;
+src/ui/desktop/dock.zig: pub fn slabRect(screen_w: f32, screen_h: f32, n_launch: usize, n_win: usize) Rect
 src/ui/desktop/dock.zig: pub const MARGIN: f32 = 16; // gap between the slab and the screen bottom
 src/ui/desktop/dock.zig: pub fn iconRect(slab: Rect, i: usize) Rect
-src/ui/desktop/dock.zig: pub fn iconAt(screen_w: f32, screen_h: f32, n: usize, px: f32, py: f32) ?usize
+src/ui/desktop/dock.zig: pub fn sepRect(slab: Rect, n_launch: usize) Rect
+src/ui/desktop/dock.zig: pub fn winRect(slab: Rect, n_launch: usize, j: usize) Rect
+src/ui/desktop/dock.zig: pub fn hitAt(screen_w: f32, screen_h: f32, n_launch: usize, n_win: usize, px: f32, py: f32) ?Hit
 src/ui/desktop/dock.zig: pub fn lighten(c: u32, t: f32) u32
 src/ui/desktop/dock.zig: pub fn darken(c: u32, t: f32) u32
 src/ui/desktop/dock.zig: pub const ICON_GLYPH: f32 = 30;
-src/ui/desktop/dock.zig: pub fn draw(p: *kgl.Painter, icons_tex: u32, icons: kgl.Atlas, screen_w: f32, screen_h: f32, items: []const Item) void
+src/ui/desktop/dock.zig: pub fn draw(p: *kgl.Painter, icons_tex: u32, icons: kgl.Atlas, glyph_tex: u32, glyphs: kgl.Atlas, screen_w: f32, screen_h: f32, items: []const Item, wins: []const WinItem) void
 src/ui/desktop/hud.zig: pub const SAMPLE_MS = hudview.SAMPLE_MS;
 src/ui/desktop/hud.zig: pub fn visible() bool
 src/ui/desktop/hud.zig: pub fn toggle() void
@@ -3878,6 +3902,9 @@ src/ui/desktop/input.zig: pub fn drainFaults(d: *Desktop) bool
 src/ui/desktop/lifecycle.zig: pub fn spawnTerm(d: *Desktop, x: i32, y: i32, w: usize, h: usize, title: ?[]const u8, ai_mode: bool) !*Window
 src/ui/desktop/lifecycle.zig: pub fn spawnApp(d: *Desktop, kind: Kind) !void
 src/ui/desktop/lifecycle.zig: pub fn spawnVmWindow(d: *Desktop, id: ivirt.Id) !void
+src/ui/desktop/lifecycle.zig: pub const AdoptResult = enum { done, busy, gone };
+src/ui/desktop/lifecycle.zig: pub fn adoptVmWindow(d: *Desktop, win_id: u32, id: ivirt.Id) AdoptResult
+src/ui/desktop/lifecycle.zig: pub fn restoreTerminalWindow(d: *Desktop, i: usize) void
 src/ui/desktop/lifecycle.zig: pub fn spawnBlobWindow(d: *Desktop, req: iwindow.CreateReq) !void
 src/ui/desktop/lifecycle.zig: pub fn spawnAgent(d: *Desktop) !void
 src/ui/desktop/lifecycle.zig: pub fn focusRunning(d: *Desktop, kind: Kind) bool
@@ -3947,6 +3974,8 @@ src/ui/screen/kgl.zig: pub fn textWidth(atlas: Atlas, str: []const u8) f32
 src/ui/screen/kgl.zig: pub const Painter = struct
 src/ui/screen/kgl.zig: pub fn uploadAtlas(g: *gles.Context, w: u32, h: u32, bytes: []const u8) u32
 src/ui/screen/kgl.zig: pub fn uploadImage(g: *gles.Context, w: u32, h: u32, rgba: []const u8) u32
+src/ui/screen/kgl.zig: pub const LitMesh = struct
+src/ui/screen/kgl.zig: pub fn litMesh(g: *gles.Context, m: LitMesh) void
 src/ui/screen/surface.zig: pub const Color = u32; // 0xAARRGGBB, PREMULTIPLIED alpha. The alpha byte only
 src/ui/screen/surface.zig: pub fn premultiply(c: Color, a: u8) Color
 src/ui/screen/surface.zig: pub const Surface = struct
@@ -4018,11 +4047,19 @@ src/ui/wm/glcomp.zig: pub const Window = struct
 src/ui/wm/glcomp.zig: pub fn wallpaper(p: *kgl.Painter, w: f32, h: f32, top: u32, bottom: u32) void
 src/ui/wm/glcomp.zig: pub fn wallpaperImage(p: *kgl.Painter, w: f32, h: f32, tex: u32) void
 src/ui/wm/glcomp.zig: pub fn windowFrame(p: *kgl.Painter, win: Window, atlas_tex: u32, atlas: kgl.Atlas) void
-src/ui/wm/glcomp.zig: pub fn dockBar(p: *kgl.Painter, icons_tex: u32, icons: kgl.Atlas, screen_w: f32, screen_h: f32, items: []const dock.Item) void
+src/ui/wm/glcomp.zig: pub fn dockBar(p: *kgl.Painter, icons_tex: u32, icons: kgl.Atlas, glyph_tex: u32, glyphs: kgl.Atlas, screen_w: f32, screen_h: f32, items: []const dock.Item, wins: []const dock.WinItem) void
 src/ui/wm/square.zig: pub const SIZE: i32 = 50;
 src/ui/wm/square.zig: pub const STEP: i32 = 1;
 src/ui/wm/square.zig: pub const STEP_TICKS: u64 = 1;
 src/ui/wm/square.zig: pub const COLOR: u32 = 0xFF33DDEE;
+src/ui/wm/square.zig: pub const MATERIAL: [4]f32 = .{
+src/ui/wm/square.zig: pub const SPIN_DEG_PER_STEP: f64 = 0.9;
+src/ui/wm/square.zig: pub const TILT_DEG: f32 = 20.0;
+src/ui/wm/square.zig: pub fn angleDeg(phase: u64) f32
+src/ui/wm/square.zig: pub const CUBE_VERTS = 36;
+src/ui/wm/square.zig: pub const PROJ_HALF_EXTENT: f32 = @sqrt(3.0);
+src/ui/wm/square.zig: pub const VERTS: [CUBE_VERTS * 3]f32 = flat(cubeVertex);
+src/ui/wm/square.zig: pub const NORMS: [CUBE_VERTS * 3]f32 = flat(cubeNormal);
 src/ui/wm/square.zig: pub const Motion = struct
 src/ui/wm/window.zig: pub const BORDER: usize = 1;
 src/ui/wm/window.zig: pub const TITLE_H: usize = @as(usize, @intFromFloat(chrome.TITLE_H)) - BORDER;
