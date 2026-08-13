@@ -183,19 +183,6 @@ SOFT_VGA="-device VGA,vgamem_mb=$SOFT_VGAMEM,xres=$SOFT_W,yres=$SOFT_H"
 # QEMU's lifetime and runs its own netdebug capture, so the extra
 # tail + wrapper shell would only get in the way (and, orphaned, could leak the
 # VM). Explicit flag — no env-var back channel.
-# Direct --gui/--soft-display builds the image it needs, exactly as --auto
-# does — running a stale ISO from some earlier track is how "the bake is
-# missing" and "the desktop is black" happen. DRY_RUN skips it.
-if [ -n "${NEED_SOFT_BUILD:-}" ] && [ -z "${DRY_RUN:-}" ]; then
-    soft_smp=""
-    case " $* " in *" --smp "*) soft_smp="-smp" ;; esac
-    soft_bake=""
-    [ -f assets/virt/zigserver/bzImage ] && [ -f assets/virt/zigserver/initramfs.cpio.gz ] \
-        && soft_bake="-Dbake=zigserver"
-    zig build "iso$soft_smp" -Dsoft-display -Dtest-hooks $soft_bake \
-        -p "$BUILD_DIR" --cache-dir "$BUILD_DIR/.zig-cache"
-fi
-
 NO_TAIL=""
 # --no-stick / --require-stick: boot without the USB stick, or refuse to boot
 # without it. See the stick block below.
@@ -254,6 +241,19 @@ for arg in "$@"; do
         *) echo "usage: $0 [--gui] [--smp] [--passthrough] [--no-tail] [--no-stick] [--require-stick] [--soft-display]" >&2; exit 2 ;;
     esac
 done
+
+# Direct --gui/--soft-display builds the image it needs, exactly as --auto
+# does — running a stale ISO from some earlier track is how "the bake is
+# missing" and "the desktop is black" happen. DRY_RUN skips it.
+if [ -n "${NEED_SOFT_BUILD:-}" ] && [ -z "${DRY_RUN:-}" ]; then
+    soft_smp=""
+    case " $* " in *" --smp "*) soft_smp="-smp" ;; esac
+    soft_bake=""
+    [ -f assets/virt/zigserver/bzImage ] && [ -f assets/virt/zigserver/initramfs.cpio.gz ] \
+        && soft_bake="-Dbake=zigserver"
+    zig build "iso$soft_smp" -Dsoft-display -Dtest-hooks $soft_bake \
+        -p "$BUILD_DIR" --cache-dir "$BUILD_DIR/.zig-cache"
+fi
 
 # GTK (gl=off) renders the framebuffer correctly under Wayland. full-screen=on
 # opens the window covering the monitor (Ctrl-Alt-F toggles it off), and
@@ -319,7 +319,14 @@ done
 # N0_HOSTFWD (optional, e.g. ",hostfwd=udp:127.0.0.1:9515-:9515") appends port
 # forwards to the slirp NIC — the first NIC, the one kudos' net stack binds — so
 # a harness on the host can reach an in-guest UDP service (boot-3's KMR1
-# injection). Empty by default: the QEMU arguments are unchanged unless set.
+# injection). The soft/GUI modes DEFAULT to forwarding KMR1 on 19515: the
+# flow-controlled TEXT op is the ONLY reliable way to type into this machine
+# (QMP key bursts wedge the HID into phantom repeats — DIAG-019/020 exist for
+# exactly this), and a control channel that needs a relaunch to enable is one
+# nobody has when they need it.
+if [ -n "${NEED_SOFT_BUILD:-}" ] && [ -z "${N0_HOSTFWD:-}" ]; then
+    N0_HOSTFWD=",hostfwd=udp:127.0.0.1:19515-:9515"
+fi
 PERIPH="-netdev user,id=n0${N0_HOSTFWD:-} -device e1000,netdev=n0 -device qemu-xhci,id=xhci -device usb-kbd,bus=xhci.0 -device $POINTER,bus=xhci.0"
 MACHINE=""
 # THE stick: the physical 1 TB device (gpu/env.sh USB_STICK_VID/PID), passed

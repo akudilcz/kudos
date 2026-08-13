@@ -87,3 +87,4 @@ src/console/editline.zig | s/self\.loadLine\(self\.stash\[0\.\.self\.stash_len\]
 src/apps/terminal.zig | s/self\.view_off = @min\(self\.view_off \+ self\.rows, self\.scrollLimit\(\)\);/self.view_off = self.view_off + self.rows;/ | terminal | scrollback offset unclamped — the view pages off the retained grid
 src/console/editline.zig | s/std\.mem\.copyBackwards\(u8, self\.line\[self\.cursor \+ 1 \.\. self\.len \+ 1\], self\.line\[self\.cursor\.\.self\.len\]\);// | editline | mid-line insert overwrites the tail instead of shifting it
 src/ui/desktop/dock.zig | s/return .\{ .window = j \};/return .{ .window = j + 1 };/ | dock | a window-slot click focuses the NEIGHBOUR — the zone mapping is off by one (DSK-022)
+src/drivers/usb/hid_report.zig | s/if \(baseline\) \{/if (false) {/ | hid_report | a re-enumerated keyboard's held report replays as presses — six phantom characters per recovery cycle (the flood wedge)

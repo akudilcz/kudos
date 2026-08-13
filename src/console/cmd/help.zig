@@ -37,18 +37,8 @@ const HELP =
     \\  reboot          restart the machine
     \\  exit            close this terminal window
     \\
-    \\pipes and files (any command above):
-    \\  CMD | CMD       the left command's output is the right one's input
-    \\  CMD > FILE      write the output to FILE instead of the screen
-    \\  CMD >> FILE     add the output to the end of FILE
-    \\                  so a program can be typed and then compiled:
-    \\                  echo const abi = @import("abi.zig"); > app.zig
-    \\                  echo pub fn main(api: *const abi.Api) i32 { >> app.zig
-    \\  *  ?            glob in file arguments (ls *.zig); text elsewhere
-    \\
-    \\shortcuts (work anywhere):
-    \\  F12             open a new terminal
-    \\  F10             open the AI agent window
+    \\pipes `a | b`, redirects `> >>`, globs `* ?` work everywhere; F12 new
+    \\terminal, F10 the agent; Shift-PgUp scrolls back through this output.
     \\
 ;
 

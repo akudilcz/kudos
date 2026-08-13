@@ -1085,6 +1085,10 @@ const Hid = struct {
     mps: u32, // endpoint max packet size
     last_keys: [6]u8 = .{0} ** 6, // previous keyboard report, for the press/release diff
     last_mods: u8 = 0, // previous modifier bitmap, for the modifier edges
+    /// The next report seeds the diff instead of producing edges — true on a
+    /// FRESH configuration (this struct is replaced on re-init, which zeroes
+    /// the diff state while the device may still hold keys).
+    baseline_pending: bool = true,
     layout: hid_report.MouseLayout = .{}, // mouse report field offsets (boot layout default)
     // Per-endpoint recovery state (a composite device drives two endpoints — a
     // keyboard and a mouse — and each falls silent, halts, and self-heals on its
@@ -2682,7 +2686,8 @@ fn snapshotReport(report: usize) [HID_REPORT_BUF]u8 {
 fn processKeyboard(hid: *Hid) void {
     cnt_kbd_reports.inc();
     const rep = snapshotReport(hid.report);
-    const kp = hid_report.decodeKeyboard(rep[0..], hid.last_keys, hid.last_mods) orelse return;
+    const kp = hid_report.decodeKeyboard(rep[0..], hid.last_keys, hid.last_mods, hid.baseline_pending) orelse return;
+    hid.baseline_pending = false;
     for (kp.keys[0..kp.count]) |u| {
         const evdev = keyboard.hidToEvdev(u);
         // F1 (HID usage 0x3A) / F10 (0x43) / F12 (0x45): named keys with no ASCII,

@@ -460,14 +460,23 @@ pub const KeyPresses = struct {
 /// Diff one HID keyboard boot report `[mods, _, k0..k5]` against the previous
 /// report's keycode slots and modifier bitmap, so each key edge fires once.
 /// Returns null for a report shorter than the 8-byte boot format.
-pub fn decodeKeyboard(report: []const u8, last_keys: [6]u8, last_mods: u8) ?KeyPresses {
+/// Decode one boot-keyboard report against the previous one. `baseline` marks
+/// the FIRST report after a (re)configuration: it seeds the diff state and
+/// emits NO edges — the device reports what is already held, and treating that
+/// as presses is how a re-enumerated keyboard types six phantom characters per
+/// recovery cycle (the flood-wedge incident class).
+pub fn decodeKeyboard(report: []const u8, last_keys: [6]u8, last_mods: u8, baseline: bool) ?KeyPresses {
     if (report.len < 8) return null;
     const mods = report[0];
     var out = KeyPresses{
         .shift = (mods & 0x22) != 0, // left|right shift → uppercase
         .mods = mods,
-        .last_mods = last_mods,
+        .last_mods = if (baseline) mods else last_mods,
     };
+    if (baseline) {
+        @memcpy(&out.next_last, report[2..8]);
+        return out; // state, not edges: count/released_count stay zero
+    }
     for (report[2..8]) |u| {
         if (u == 0) continue;
         if (!holds(&last_keys, u)) {
