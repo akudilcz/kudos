@@ -773,7 +773,7 @@ pub fn build(b: *std.Build) void {
         .{ .n = "gltext", .s = "src/ui/screen/gltext.zig" }, // GPU text geometry: glyph quads + atlas texcoords
         .{ .n = "overlay_plane", .s = "src/drivers/gpu/present/overlay_plane.zig" }, // HW-plane arm/blank state machine (step 2b)
         .{ .n = "ui_wm", .s = "src/ui/wm_testroot.zig", .t = "test/ui/wm/wm_test.zig" }, // window-manager model: stacking/focus/mouse + damage coalescing
-        .{ .n = "square", .s = "src/ui/wm/square.zig" }, // bouncing-square integer edge reflection + no-escape invariant
+        .{ .n = "square", .s = "src/ui/wm/square.zig" }, // screensaver core: edge reflection/no-escape + cube spin phase and mesh
         .{ .n = "chrome", .s = "src/ui/wm/chrome.zig" }, // traffic-light hit-tests (draws through kgl)
         .{ .n = "dock", .s = "src/ui/desktop/dock.zig" }, // dock slab/icon layout + hit-tests (draws through kgl)
         .{ .n = "cursor", .s = "src/ui/desktop/cursor.zig" }, // software mouse pointer: baked arrow coverage/outline
