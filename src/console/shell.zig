@@ -192,7 +192,7 @@ fn expandGlobs(c: console.Console, args: []const u8) ?[]const u8 {
             return null;
         }
     }
-    return std.mem.trimRight(u8, expand_buf[0..used], " ");
+    return std.mem.trimEnd(u8, expand_buf[0..used], " ");
 }
 
 /// One glob expansion in progress: the directory prefix to restore, the

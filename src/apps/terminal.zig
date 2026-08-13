@@ -288,6 +288,18 @@ pub const Terminal = struct {
         session_mod.wakeTask(sess);
     }
 
+    /// Type `line` into this terminal as if at the keyboard, committed with a
+    /// newline (SMP; a no-op without a session). Every byte rides the same
+    /// path as a keystroke — routeKey → session editor → echo/commit — so the
+    /// line appears on the grid and dispatches exactly as a typed command; no
+    /// second dispatch path exists. The boot layout starts its tiles' commands
+    /// through this. The line must fit the key ring (KEY_RING_CAP) or the
+    /// overflow is counted in key.drops like any dropped keystroke.
+    pub fn autotype(self: *Terminal, line: []const u8) void {
+        for (line) |ch| self.routeKey(ch);
+        self.routeKey('\n');
+    }
+
     /// Signal this terminal's session to close WITHOUT releasing its slot (SMP
     /// path). Clears `alive` so the session's run loop returns and the command
     /// worker stops touching this (about-to-be-freed) Terminal, and cancels+wakes

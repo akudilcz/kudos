@@ -23,7 +23,9 @@ pub fn run(c: console.Console, args: []const u8) void {
         return;
     }
     for (words[0 .. n - 1]) |src| {
-        copyOne(c, src, dest, dest_is_dir);
+        // Each source copies independently, as in cp(1); a failure already
+        // printed its reason, so the result is not consulted here.
+        _ = copyOne(c, src, dest, dest_is_dir);
     }
 }
 
