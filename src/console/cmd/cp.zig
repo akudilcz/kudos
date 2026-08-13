@@ -23,7 +23,7 @@ pub fn run(c: console.Console, args: []const u8) void {
         return;
     }
     for (words[0 .. n - 1]) |src| {
-        copyOne(c, src, dest, dest_is_dir);
+        _ = copyOne(c, src, dest, dest_is_dir);
     }
 }
 

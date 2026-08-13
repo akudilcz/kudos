@@ -69,7 +69,15 @@ case " $* " in
         # this is the same guarantee for the branch that does not go there.
         smp_iso=""
         case " $newargs " in *" --smp "*) smp_iso="-smp" ;; esac
-        zig build "iso$smp_iso" -Dsoft-display \
+        # The compiler guest rides IN the image when its pair is built
+        # (assets/virt/zigserver/): `kudos vm 3` then boots with no image
+        # server and no fetch, so a fresh window compiles out of the box.
+        # Without the pair the flag is skipped, not failed — the shell and
+        # the catalog's HTTP path still work.
+        bake=""
+        [ -f assets/virt/zigserver/bzImage ] && [ -f assets/virt/zigserver/initramfs.cpio.gz ] \
+            && bake="-Dbake=zigserver"
+        zig build "iso$smp_iso" -Dsoft-display $bake \
             -p "${BUILD_DIR:-build}" --cache-dir "${BUILD_DIR:-build}/.zig-cache"
         # shellcheck disable=SC2086  # deliberate word-split of the rebuilt list
         exec "$0" $newargs

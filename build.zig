@@ -1470,6 +1470,18 @@ pub fn build(b: *std.Build) void {
         host_buildinfo.addOption(bool, "heartbeat", false);
         host_buildinfo.addOption([]const u8, "staged_guest", staged_guest_name);
         host_buildinfo.addOption(u32, "usb_max_gb", usb_max_gb);
+        // The terminal tests drive onKey → the SHELL, so the whole command
+        // table is analyzed here — including the agent's credential and the
+        // guest stage. Same fields and real-or-empty embeds the kernel gets.
+        host_buildinfo.addOption([]const u8, "agent_key", agent_key);
+        host_buildinfo.addOption([]const u8, "agent_password", agent_password);
+        host_buildinfo.addOption([]const u8, "guest_cmdline", guest_cmdline);
+        terminal_root_mod.addAnonymousImport("guest_bzimage", .{ .root_source_file = guest_bzimage_path });
+        terminal_root_mod.addAnonymousImport("guest_initramfs", .{ .root_source_file = guest_initramfs_path });
+        for (bakeable, 0..) |id, i| {
+            terminal_root_mod.addAnonymousImport(b.fmt("baked_{s}_bzimage", .{id}), .{ .root_source_file = baked_paths[i][0] });
+            terminal_root_mod.addAnonymousImport(b.fmt("baked_{s}_initramfs", .{id}), .{ .root_source_file = baked_paths[i][1] });
+        }
         terminal_root_mod.addOptions("buildinfo", host_buildinfo);
         const t = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("test/apps/terminal_test.zig"), .target = b.graph.host, .optimize = optimize }) });
         t.root_module.addImport("testroot", terminal_root_mod);

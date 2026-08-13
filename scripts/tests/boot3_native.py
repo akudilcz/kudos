@@ -287,7 +287,7 @@ def sweep(client, label, base):
 # and parsing early reads a truncated core table (observed: 4 of 8 rows).
 PS_COMPLETE = "(* = running;"
 _PS_ROW_RE = re.compile(r"^#(\d+)\s+\S+\s+(\d+)%\s+(.*)$", re.M)
-_MEM_RE = re.compile(r"free (\d+) MiB / (\d+) MiB total")
+_MEM_RE = re.compile(r"Mem:\s+(\d+)\s+(\d+)\s+(\d+)")
 _VM_ROW_RE = re.compile(r"^\s*vm (\d+)\s+core (\S+)\s+(\w+)(?: \(stopping\))?\s+exits (\d+)", re.M)
 _GUEST_UP_RE = re.compile(r"vm\d+: .*KUDOS-GUEST-UP")
 
@@ -302,21 +302,21 @@ def mem_free_mib(q):
     scoped, _ = obs_cmd(q, "free", ("Mem:",))
     m = _MEM_RE.search(scoped)
     if not m:
-        fail(f"`mem` output unparseable: {scoped!r}")
-    return int(m.group(1))
+        fail(f"`free` output unparseable: {scoped!r}")
+    return int(m.group(3))
 
 
 _HELD_RE = re.compile(r"sessions (\d+) holding (\d+) MiB")
 
 
 def sessions_held(q):
-    """(session count, MiB held) from `mem` — the per-address-space accounting
+    """(session count, MiB held) from `free` — the per-address-space accounting
     (MEM-008). Free RAM alone cannot tell a leaked session from ordinary churn;
     this is the figure that can."""
     scoped, _ = obs_cmd(q, "free", ("Mem:", "sessions "))
     m = _HELD_RE.search(scoped)
     if not m:
-        fail(f"`mem` reports no per-session accounting (MEM-008): {scoped!r}")
+        fail(f"`free` reports no per-session accounting (MEM-008): {scoped!r}")
     return int(m.group(1)), int(m.group(2))
 
 

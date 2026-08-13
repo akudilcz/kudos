@@ -173,21 +173,34 @@ src/console/cmd/cd.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/clear.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/clock.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/compile.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/cp.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/cp.zig: pub fn copyOne(c: console.Console, src: []const u8, dest: []const u8, dest_is_dir: bool) bool
+src/console/cmd/cp.zig: pub fn collect(args: []const u8, words: *[16][]const u8) usize
 src/console/cmd/crash.zig: pub fn run(out: Out, args: []const u8) void
+src/console/cmd/curl.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/echo.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/exit.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/feature.zig: pub fn dispatch(c: console.Console, name: []const u8, args: []const u8) bool
 src/console/cmd/feature.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/flipstat.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/free.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/grep.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/head.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/help.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/host.zig: pub fn run(c: console.Console, name: []const u8) void
+src/console/cmd/ip.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/kudos.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/lspci.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/ls.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/memfault.zig: pub fn run(out: Out, args: []const u8) void
-src/console/cmd/mem.zig: pub fn run(c: console.Console, _: []const u8) void
-src/console/cmd/net.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/mkdir.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/mv.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/ping.zig: pub fn run(c: console.Console, host: []const u8) void
 src/console/cmd/prime.zig: pub fn run(out: Out, args: []const u8) void
 src/console/cmd/ps.zig: pub fn run(c: console.Console, _: []const u8) void
+src/console/cmd/pwd.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/reboot.zig: pub fn run(_: console.Console, _: []const u8) void
+src/console/cmd/rmdir.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/rm.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/rt.zig: pub const RtResult = struct
 src/console/cmd/rt.zig: pub fn lastRt() RtResult
@@ -199,10 +212,14 @@ src/console/cmd/stats.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/system.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/term.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmdtoken.zig: pub const CmdToken = struct
+src/console/cmd/touch.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/uname.zig: pub fn run(c: console.Console, args: []const u8) void
+src/console/cmd/uptime.zig: pub fn run(c: console.Console, _: []const u8) void
 src/console/cmd/vm.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/cmd/vm.zig: pub fn writeList(w: anytype) void
 src/console/cmd/vm.zig: pub fn writeStop(w: anytype, arg: []const u8) void
 src/console/cmd/vm.zig: pub fn writeStatus(w: anytype) void
+src/console/cmd/wc.zig: pub fn run(c: console.Console, args: []const u8) void
 src/console/complete.zig: pub const ifilesys = @import("ifilesys");
 src/console/complete.zig: pub const BARE_ROOTS = [_][]const u8{ "/ramdisk", "/usbdisk" };
 src/console/complete.zig: pub const Dirs = struct
@@ -219,6 +236,8 @@ src/console/editline.zig: pub const Screen = struct
 src/console/editline.zig: pub const Action = enum { none, commit, complete, recalled, recall_empty };
 src/console/editline.zig: pub const Completion = enum { none, grew, ambiguous };
 src/console/editline.zig: pub const Editor = struct
+src/console/glob.zig: pub fn hasGlob(word: []const u8) bool
+src/console/glob.zig: pub fn match(pat: []const u8, name: []const u8) bool
 src/console/grants.zig: pub const Grant = enum
 src/console/grants.zig: pub const Row = struct
 src/console/grants.zig: pub const TABLE = [_]Row{
@@ -226,18 +245,28 @@ src/console/grants.zig: pub fn allows(grant: Grant, id: u32, version: u32) bool
 src/console/grants.zig: pub fn find(id: u32, version: u32) ?Row
 src/console/localcmd.zig: pub const Out = @import("out.zig").Out;
 src/console/localcmd.zig: pub const Command = struct
+src/console/localcmd.zig: pub const GROUP = "kudos";
 src/console/localcmd.zig: pub const COMMANDS = if (buildinfo.test_hooks)
 src/console/localcmd.zig: pub const NAMES: [COMMANDS.len][]const u8 = blk:
 src/console/localcmd.zig: pub fn lookup(cmd: []const u8) ?Command
+src/console/localcmd.zig: pub const Resolved = struct { c: Command, args: []const u8 };
+src/console/localcmd.zig: pub fn resolveLine(cmd: []const u8, args: []const u8) ?Resolved
 src/console/localcmd.zig: pub fn refusesRedirect(args: []const u8) bool
+src/console/network.zig: pub fn up(c: console.Console) ?inet.INet
+src/console/network.zig: pub fn any(c: console.Console) ?inet.INet
+src/console/network.zig: pub fn writeIp(c: console.Console, ip: [4]u8) void
+src/console/network.zig: pub fn prefixLen(mask: [4]u8) u8
 src/console/out.zig: pub const Out = struct
 src/console/patharg.zig: pub fn resolve(c: console.Console, arg: []const u8, buf: *[vfs.MAX_PATH]u8) ?[]const u8
+src/console/patharg.zig: pub fn writeErrorText(e: ifilesys.WriteError) []const u8
 src/console/redirect.zig: pub const MAX_BYTES: usize = 16 << 10;
 src/console/redirect.zig: pub const Mode = enum
 src/console/redirect.zig: pub const Parsed = struct
 src/console/redirect.zig: pub fn parse(line: []const u8) ?Parsed
+src/console/redirect.zig: pub const MAX_STAGES: usize = 8;
+src/console/redirect.zig: pub fn splitPipes(line: []const u8, out: *[MAX_STAGES][]const u8) usize
 src/console/redirect.zig: pub const Sink = struct
-src/console/session.zig: pub const ReqKind = enum(u8) { echo, backspace, run_line, complete };
+src/console/session.zig: pub const ReqKind = enum(u8) { echo, backspace, run_line, complete, prompt };
 src/console/session.zig: pub const Request = struct
 src/console/session.zig: pub const Key = struct { ascii: u8 };
 src/console/session.zig: pub const REQ_RING_CAP = 256;

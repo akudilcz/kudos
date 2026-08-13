@@ -22,7 +22,7 @@ fn listOne(c: console.Console, path: []const u8) void {
     if (vfs.kind(abs)) |k| {
         if (k == .file) {
             var line: [96]u8 = undefined;
-            const size = (vfs.read(abs) orelse "").len;
+            const size = if (vfs.read(abs)) |d| d.len else 0;
             c.write(std.fmt.bufPrint(&line, "{s}  ({d} bytes)\n", .{ path, size }) catch return);
             return;
         }
