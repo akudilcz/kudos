@@ -332,6 +332,12 @@ const Capture = struct {
     fn setInputMask(ctx: *anyopaque, on: bool) void {
         of(ctx).inner.setInputMask(on);
     }
+    /// A no-op, not a forward: the sink's bytes go to a file or the next pipe
+    /// stage, and color is grid presentation, not content (console.setColorFn).
+    fn setColor(ctx: *anyopaque, argb: u32) void {
+        _ = ctx;
+        _ = argb;
+    }
 
     /// The console to run the redirected command against: this capture's output,
     /// the original console's everything else (window, desktop, allocator, cwd).
@@ -346,6 +352,7 @@ const Capture = struct {
         out.setAiModeFn = setAiMode;
         out.holdPromptFn = holdPrompt;
         out.setInputMaskFn = setInputMask;
+        out.setColorFn = setColor;
         return out;
     }
 };

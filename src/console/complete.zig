@@ -5,7 +5,8 @@
 //!
 //! One Tab press does the most it can and says what it could not do. It
 //! completes the COMMAND word when the cursor is on the first word of the
-//! line and a PATH otherwise; it matches without regard to case when nothing
+//! line, a SUBCOMMAND when the cursor is on the second word of a group-word
+//! line (`kudos co`⇥), and a PATH otherwise; it matches without regard to case when nothing
 //! matches exactly, so a lower-case guess still finds a FAT volume's
 //! `Box.glb`; and when several entries match it grows the line to the text
 //! they share and reports how many matched, so the host can show them
@@ -37,6 +38,16 @@ pub const Dirs = struct {
     fn list(self: Dirs, abs: []const u8, cb: ifilesys.ListFn, cb_ctx: ?*anyopaque) ifilesys.Error!void {
         return self.listFn(self.ctx, abs, cb, cb_ctx);
     }
+};
+
+/// A group word's subcommands: when the line's FIRST word is exactly `word`
+/// and the token being completed is the SECOND, the token completes against
+/// `names` instead of the file system (`kudos co`⇥ → `kudos compile `). The
+/// host supplies both halves — the group's own tables stay the single source
+/// of what exists, and this core restates neither.
+pub const Group = struct {
+    word: []const u8,
+    names: []const []const u8,
 };
 
 /// Where every candidate goes when the host asks to SHOW them (`eachMatch`):
@@ -147,6 +158,25 @@ fn commandWord(s: []const u8) []const u8 {
     return t[0..end];
 }
 
+/// Whether the token starting at `start` is the line's SECOND word — only
+/// whitespace stands between it and the command word. The one argument
+/// position where a group word's subcommands are named.
+fn isSecondWord(s: []const u8, start: usize) bool {
+    const head = std.mem.trimStart(u8, s, " \t");
+    const cmd_end = (s.len - head.len) + (std.mem.indexOfAny(u8, head, " \t") orelse return false);
+    return std.mem.trim(u8, s[cmd_end..start], " \t").len == 0;
+}
+
+/// The name list the token completes against when it sits in a WORD position:
+/// the line's first word offers the command names, the second word of a
+/// `group.word` line offers the group's subcommand names, and any other token
+/// is a path (null).
+fn wordNames(t: Token, s: []const u8, cmds: []const []const u8, group: Group) ?[]const []const u8 {
+    if (t.first) return cmds;
+    if (isSecondWord(s, t.start) and std.mem.eql(u8, commandWord(s), group.word)) return group.names;
+    return null;
+}
+
 /// Enumerate the directory the token names — its own directory part when it
 /// has one, else the cwd and then the fixed mounts — folding every entry into
 /// `m`. An unlistable directory counts as empty-handed, not as a failure.
@@ -169,24 +199,26 @@ fn scanPath(m: *Matches, token: []const u8, cwd: []const u8, dirs: Dirs) void {
     };
 }
 
-/// Fold the command names — the first word's candidates. Commands have no
-/// kind; `.file` keeps them out of the directory-only path.
-fn scanCommands(m: *Matches, token: []const u8, cmds: []const []const u8) void {
+/// Fold a WORD position's candidates — command or subcommand names. Words
+/// have no kind; `.file` keeps them out of the directory-only path.
+fn scanWords(m: *Matches, token: []const u8, names: []const []const u8) void {
     m.prefix = token;
-    for (cmds) |name| onEntry(m, .{ .name = name, .kind = .file, .size = 0 });
+    for (names) |name| onEntry(m, .{ .name = name, .kind = .file, .size = 0 });
 }
 
 /// One gathering pass, then a case-folded RETRY when the exact pass found
 /// nothing: a lower-case guess still finds `Box.glb` on a FAT volume, and a
 /// volume that spells its names exactly as typed never pays for the retry.
-fn gather(m: *Matches, t: Token, s: []const u8, cwd: []const u8, dirs: Dirs, cmds: []const []const u8) void {
+/// `words` is the name list of a word-position token (wordNames), null for a
+/// path.
+fn gather(m: *Matches, t: Token, s: []const u8, cwd: []const u8, dirs: Dirs, words: ?[]const []const u8) void {
     for ([_]bool{ false, true }) |fold_case| {
         m.* = .{
             .fold_case = fold_case,
-            .dirs_only = !t.first and isDirOnly(commandWord(s)),
+            .dirs_only = words == null and isDirOnly(commandWord(s)),
             .each = m.each,
         };
-        if (t.first) scanCommands(m, t.text, cmds) else scanPath(m, t.text, cwd, dirs);
+        if (words) |names| scanWords(m, t.text, names) else scanPath(m, t.text, cwd, dirs);
         if (m.count != 0) return;
     }
 }
@@ -198,21 +230,24 @@ fn isDirOnly(cmd: []const u8) bool {
 
 /// Complete the last token of `buf[0..len]` in place (the cursor is at the end
 /// of the line). The first word completes against `cmds` — the command names
-/// the shell knows — and gains a trailing space when it completes to exactly
-/// one; any later word completes against the file system, a unique directory
-/// gaining a trailing '/'. Several matches grow the token to the text they all
-/// share. Nothing matching leaves the line untouched. The caller redraws by
-/// erasing `Result.erased` characters and echoing `buf[len - erased .. new]`.
-pub fn line(buf: []u8, len: usize, cwd: []const u8, dirs: Dirs, cmds: []const []const u8) Result {
+/// the shell knows — and the second word of a `group.word` line against the
+/// group's subcommand names, each gaining a trailing space when it completes
+/// to exactly one; any other word completes against the file system, a unique
+/// directory gaining a trailing '/'. Several matches grow the token to the
+/// text they all share. Nothing matching leaves the line untouched. The caller
+/// redraws by erasing `Result.erased` characters and echoing
+/// `buf[len - erased .. new]`.
+pub fn line(buf: []u8, len: usize, cwd: []const u8, dirs: Dirs, cmds: []const []const u8, group: Group) Result {
     const t = tokenOf(buf[0..len]);
+    const words = wordNames(t, buf[0..len], cmds, group);
     var m = Matches{};
-    gather(&m, t, buf[0..len], cwd, dirs, cmds);
+    gather(&m, t, buf[0..len], cwd, dirs, words);
     if (m.count == 0) return .{ .len = len };
 
     // Where the matched text starts on the line: the token itself, or the
     // segment after its last '/'.
     const keep = len - m.prefix.len;
-    const suffix: ?u8 = if (m.count != 1) null else if (t.first) ' ' else if (m.kind == .dir) @as(u8, '/') else null;
+    const suffix: ?u8 = if (m.count != 1) null else if (words != null) ' ' else if (m.kind == .dir) @as(u8, '/') else null;
     const grown = keep + m.name_len + @intFromBool(suffix != null);
     // A completion that cannot fit changes nothing — but the match count still
     // stands, so the host can show what it found.
@@ -230,7 +265,8 @@ pub fn line(buf: []u8, len: usize, cwd: []const u8, dirs: Dirs, cmds: []const []
 /// Hand every candidate for the same token to `each` — what a host shows when
 /// a Tab press could not finish the word. The scan is the one `line` did, so
 /// the list is exactly the set that produced its match count.
-pub fn eachMatch(text: []const u8, cwd: []const u8, dirs: Dirs, cmds: []const []const u8, each: Each) void {
+pub fn eachMatch(text: []const u8, cwd: []const u8, dirs: Dirs, cmds: []const []const u8, group: Group, each: Each) void {
     var m = Matches{ .each = each };
-    gather(&m, tokenOf(text), text, cwd, dirs, cmds);
+    const t = tokenOf(text);
+    gather(&m, t, text, cwd, dirs, wordNames(t, text, cmds, group));
 }

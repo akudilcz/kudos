@@ -102,7 +102,8 @@ pub const Editor = struct {
     }
 
     /// Complete the line's last token (Tab) against `cwd` over the injected
-    /// enumeration, `cmds` naming the commands a first word can complete to.
+    /// enumeration, `cmds` naming the commands a first word can complete to
+    /// and `group` the subcommands a second word can (complete.Group).
     /// The redraw is the core's own account of what it changed: erase what a
     /// case-corrected match rewrote, then echo the new tail — which for an
     /// ordinary append is exactly the appended bytes.
@@ -110,9 +111,9 @@ pub const Editor = struct {
     /// Says what the press could NOT do: `.ambiguous` means several entries
     /// match and the line already holds all the text they share, so the host
     /// SHOWS them (complete.eachMatch) rather than letting the key look dead.
-    pub fn completeLine(self: *Editor, cwd: []const u8, dirs: complete.Dirs, cmds: []const []const u8, scr: Screen) Completion {
+    pub fn completeLine(self: *Editor, cwd: []const u8, dirs: complete.Dirs, cmds: []const []const u8, group: complete.Group, scr: Screen) Completion {
         const before = self.len;
-        const r = complete.line(&self.line, self.len, cwd, dirs, cmds);
+        const r = complete.line(&self.line, self.len, cwd, dirs, cmds, group);
         for (0..r.erased) |_| scr.erase();
         for (self.line[before - r.erased .. r.len]) |ch| scr.echo(ch);
         self.len = r.len;
