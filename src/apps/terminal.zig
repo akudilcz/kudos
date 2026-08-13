@@ -213,15 +213,7 @@ pub const Terminal = struct {
                 .prompt => self.promptAfterCommand(),
                 .backspace => self.backspaceCell(),
                 .move => self.moveCursorCells(r.n),
-                .interrupt => {
-                    // Ctrl-C on an idle line: the editor already abandoned it;
-                    // acknowledge and prompt fresh. Clearing the hold covers a
-                    // command that ended by asking a question (`passphrase: `)
-                    // — the interrupt is the answer it will never get.
-                    self.hold_prompt = false;
-                    self.write("^C\n");
-                    self.prompt();
-                },
+                .interrupt => self.acknowledgeInterrupt(),
                 .run_line => {
                     // Hand the committed line to the command WORKER task (not
                     // run inline here): a slow command must not block the system
@@ -367,6 +359,24 @@ pub const Terminal = struct {
     pub fn autotype(self: *Terminal, line: []const u8) void {
         for (line) |ch| self.routeKey(ch);
         self.routeKey('\n');
+    }
+
+    /// Ctrl-C on an idle line: the editor already abandoned it; acknowledge
+    /// and prompt fresh. Clearing the hold covers a command that ended by
+    /// asking a question (`passphrase: `) — the interrupt is the answer it
+    /// will never get. In an agent SESSION (`kudos ai` in a shell terminal),
+    /// ^C is how you kill the REPL: it hands the terminal back to the shell.
+    /// The dedicated agent window keeps its conversation — it has no shell
+    /// behind it, and closing it is the close box's job.
+    fn acknowledgeInterrupt(self: *Terminal) void {
+        self.hold_prompt = false;
+        self.input_mask = false;
+        self.write("^C\n");
+        if (self.ai_mode and !self.agent_window) {
+            self.ai_mode = false;
+            self.write("left the agent - back to the shell\n");
+        }
+        self.prompt();
     }
 
     /// Cancel this terminal's in-flight command, if any (the ^C path). A local
@@ -662,14 +672,7 @@ pub const Terminal = struct {
                 self.promptAfterCommand();
             },
             .complete => self.completeFor(&self.ed),
-            .interrupt => {
-                // Ctrl-C: the editor abandoned the line; acknowledge and
-                // prompt fresh. On this single-core path commands run inline,
-                // so there is never an in-flight command to cancel.
-                self.hold_prompt = false;
-                self.write("^C\n");
-                self.prompt();
-            },
+            .interrupt => self.acknowledgeInterrupt(),
             .none, .recalled, .recall_empty => {},
         }
     }

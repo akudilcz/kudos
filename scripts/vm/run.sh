@@ -183,6 +183,19 @@ SOFT_VGA="-device VGA,vgamem_mb=$SOFT_VGAMEM,xres=$SOFT_W,yres=$SOFT_H"
 # QEMU's lifetime and runs its own netdebug capture, so the extra
 # tail + wrapper shell would only get in the way (and, orphaned, could leak the
 # VM). Explicit flag — no env-var back channel.
+# Direct --gui/--soft-display builds the image it needs, exactly as --auto
+# does — running a stale ISO from some earlier track is how "the bake is
+# missing" and "the desktop is black" happen. DRY_RUN skips it.
+if [ -n "${NEED_SOFT_BUILD:-}" ] && [ -z "${DRY_RUN:-}" ]; then
+    soft_smp=""
+    case " $* " in *" --smp "*) soft_smp="-smp" ;; esac
+    soft_bake=""
+    [ -f assets/virt/zigserver/bzImage ] && [ -f assets/virt/zigserver/initramfs.cpio.gz ] \
+        && soft_bake="-Dbake=zigserver"
+    zig build "iso$soft_smp" -Dsoft-display -Dtest-hooks $soft_bake \
+        -p "$BUILD_DIR" --cache-dir "$BUILD_DIR/.zig-cache"
+fi
+
 NO_TAIL=""
 # --no-stick / --require-stick: boot without the USB stick, or refuse to boot
 # without it. See the stick block below.
@@ -198,10 +211,10 @@ for arg in "$@"; do
         # guest framebuffer up to fill it, so the desktop is monitor-sized even
         # while the guest renders (cheaply) at 1280x800. RES=native (above) is
         # the honest alternative: real native pixels, at the rasteriser's cost.
-        --gui) DISPLAY_ARG="gtk,gl=off,zoom-to-fit=on,full-screen=on"; VGA="$SOFT_VGA"; POINTER="usb-tablet" ;;
+        --gui) DISPLAY_ARG="gtk,gl=off,zoom-to-fit=on,full-screen=on"; VGA="$SOFT_VGA"; POINTER="usb-tablet"; NEED_SOFT_BUILD=1 ;;
         --no-tail) NO_TAIL="1" ;;
         # --soft-display: the same geometry for a HEADLESS soft-rasteriser run.
-        --soft-display) VGA="$SOFT_VGA"; POINTER="usb-tablet" ;;
+        --soft-display) VGA="$SOFT_VGA"; POINTER="usb-tablet"; NEED_SOFT_BUILD=1 ;;
         # SMP_CORES env overrides the vCPU count (like MEM_GB): the default 4
         # exercises AP bring-up; the kernel itself accepts up to acpi.MAX_CPUS.
         --smp) ISO="$BUILD_DIR/kudos-smp.iso"; SMP="${SMP_CORES:-4}" ;;

@@ -155,11 +155,18 @@ pub fn onMouse(d: *Desktop, ev: imouse.MouseEvent) bool {
                     klog.puts(@errorName(e));
                     klog.puts(")\n");
                 },
-                // A window slot focuses its window, restoring it out of the
-                // dock first when minimised.
+                // A window slot TOGGLES its window, the way a taskbar does:
+                // minimised or unfocused comes forward; clicking the slot of
+                // the window that already has focus puts it in the dock.
                 .window => |j| if (d.dockWindowAt(j)) |win| {
-                    if (win.minimized) d.wm.unminimise(win);
-                    d.wm.focus(win);
+                    if (win.minimized) {
+                        d.wm.unminimise(win);
+                        d.wm.focus(win);
+                    } else if (d.wm.focused == win) {
+                        d.wm.minimise(win);
+                    } else {
+                        d.wm.focus(win);
+                    }
                     d.wm.markFull();
                 },
             }
