@@ -7,6 +7,15 @@
 #
 # Usage: scripts/vm/run.sh [--auto | --gui | --passthrough] [--smp]
 #                          [--no-stick] [--soft-display]
+#   Environment:
+#     RES=native   drive the soft-display modes (--gui / --soft-display) at the
+#                  host monitor's native resolution instead of 1280x800. Opt-in
+#                  because the CPU soft-rasteriser pays per PIXEL: the per-frame
+#                  render cost multiplies by the pixel ratio (2560x1440 is ~3.7x
+#                  the pixels of 1280x800, and a full-frame render already costs
+#                  several ms at 1280x800 — see the ui.soft.frame_us trace).
+#     DRY_RUN=1    print the exact QEMU command this invocation would run, then
+#                  exit — no sockets touched, no stick unmounted, no QEMU.
 #   --auto         pick by environment: over SSH ($SSH_CONNECTION set) run the
 #                  full crash-safe 4090 passthrough (scripts/vm/passthrough.sh
 #                  --manage-vfio); locally open the interactive GUI window. This is
@@ -116,7 +125,51 @@ VGA="-device VGA,vgamem_mb=32,xres=2560,yres=1440"
 # The screen size a CPU rasteriser can actually drive: 1280x800 is a third of the
 # 2560x1440 default's pixel count, and is the size the desktop's own host-rendered
 # screenshot test uses. Taken by --gui and --soft-display alike.
-SOFT_VGA="-device VGA,vgamem_mb=32,xres=1280,yres=800"
+#
+# RES=native (opt-in) replaces it with the host monitor's native mode, detected
+# via xrandr (the " connected primary WxH+X+Y" line) or, on a wlroots desktop
+# without xrandr, swaymsg + jq. Detection failure keeps 1280x800 and says so —
+# never a silent guess. Opt-in because every extra pixel is CPU rasteriser time
+# (see the usage comment above).
+SOFT_W=1280
+SOFT_H=800
+if [ "${RES:-}" = "native" ]; then
+    native=""
+    if command -v xrandr >/dev/null 2>&1; then
+        native="$(xrandr --query 2>/dev/null \
+            | sed -n 's/^.* connected primary \([0-9][0-9]*x[0-9][0-9]*\)+.*$/\1/p' \
+            | head -n 1)"
+        # No output is marked primary: take the first connected one.
+        [ -n "$native" ] || native="$(xrandr --query 2>/dev/null \
+            | sed -n 's/^.* connected \([0-9][0-9]*x[0-9][0-9]*\)+.*$/\1/p' \
+            | head -n 1)"
+    fi
+    if [ -z "$native" ] && command -v swaymsg >/dev/null 2>&1 \
+        && command -v jq >/dev/null 2>&1; then
+        native="$(swaymsg -t get_outputs 2>/dev/null \
+            | jq -r '[.[] | select(.active)][0].current_mode | "\(.width)x\(.height)"' \
+            2>/dev/null)"
+    fi
+    case "$native" in
+        [0-9]*x[0-9]*)
+            SOFT_W="${native%x*}"
+            SOFT_H="${native#*x}"
+            ;;
+        *)
+            echo "run.sh: RES=native: could not detect the monitor's resolution" >&2
+            echo "        (no usable xrandr, no swaymsg+jq) — keeping ${SOFT_W}x${SOFT_H}" >&2
+            ;;
+    esac
+fi
+# vgamem must cover one 32 bpp frame at the chosen mode: ceil(w*h*4 / 1 MiB),
+# rounded up to a power of two, floor 32 (the tested default; 1280x800x32bpp
+# is ~3.9 MB, so the floor always covers it).
+soft_fb_mb=$(( (SOFT_W * SOFT_H * 4 + 1048575) / 1048576 ))
+SOFT_VGAMEM=32
+while [ "$SOFT_VGAMEM" -lt "$soft_fb_mb" ]; do
+    SOFT_VGAMEM=$((SOFT_VGAMEM * 2))
+done
+SOFT_VGA="-device VGA,vgamem_mb=$SOFT_VGAMEM,xres=$SOFT_W,yres=$SOFT_H"
 # --no-tail: exec QEMU directly instead of backgrounding it under a live
 # background wrapper. The caller (passthrough.sh, the integration harness) owns
 # QEMU's lifetime and runs its own netdebug capture, so the extra
@@ -133,7 +186,11 @@ for arg in "$@"; do
         # the CPU (no GPU reaches a guest except by passthrough, which has its own
         # display), so it takes the soft-display geometry too — a window built at
         # the 2560x1440 default would ask the rasteriser for 3.7 Mpixel a frame.
-        --gui) DISPLAY_ARG="gtk,gl=off,zoom-to-fit=on"; VGA="$SOFT_VGA"; POINTER="usb-tablet" ;;
+        # full-screen=on opens it covering the monitor; zoom-to-fit=on scales the
+        # guest framebuffer up to fill it, so the desktop is monitor-sized even
+        # while the guest renders (cheaply) at 1280x800. RES=native (above) is
+        # the honest alternative: real native pixels, at the rasteriser's cost.
+        --gui) DISPLAY_ARG="gtk,gl=off,zoom-to-fit=on,full-screen=on"; VGA="$SOFT_VGA"; POINTER="usb-tablet" ;;
         --no-tail) NO_TAIL="1" ;;
         # --soft-display: the same geometry for a HEADLESS soft-rasteriser run.
         --soft-display) VGA="$SOFT_VGA"; POINTER="usb-tablet" ;;
@@ -177,9 +234,10 @@ for arg in "$@"; do
     esac
 done
 
-# GTK (gl=off) renders the framebuffer correctly under Wayland. zoom-to-fit=on
-# lets you freely resize the window: GTK scales the guest framebuffer to fill it,
-# so the display is as large (or small) as you drag it — the readable-on-a-big-
+# GTK (gl=off) renders the framebuffer correctly under Wayland. full-screen=on
+# opens the window covering the monitor (Ctrl-Alt-F toggles it off), and
+# zoom-to-fit=on scales the guest framebuffer to fill whatever size the window
+# is — full screen or dragged smaller — the readable-on-a-big-
 # monitor path. Unlike SDL's fullscreen surface (which rescales the usb-tablet's
 # absolute coords by window size and flings the cursor into a corner), GTK keeps
 # the absolute-pointer mapping correct under its own scaling, so the tablet stays
@@ -196,7 +254,7 @@ done
 # than fail with an opaque "Could not access KVM kernel module: Permission denied",
 # self-elevate via sudo (preserving the invoking user in SUDO_USER so we can hand
 # Non-passthrough runs stay unprivileged.
-if [ -n "$PASSTHROUGH" ] && [ "$(id -u)" -ne 0 ]; then
+if [ -n "$PASSTHROUGH" ] && [ "$(id -u)" -ne 0 ] && [ -z "${DRY_RUN:-}" ]; then
     echo "run.sh --passthrough needs root (KVM + VFIO); re-running under sudo…" >&2
     exec sudo SUDO_USER="$(id -un)" "$0" "$@"
 fi
@@ -215,8 +273,9 @@ fi
 # Clear the previous run's sockets. A passthrough run creates them as ROOT, so a run
 # that wedged or was killed hard can leave a stale root-owned socket a later non-root
 # actor cannot rm — QEMU then fails to bind. Remove robustly: rm as ourselves, and
-# escalate to sudo if it is root-owned.
-for f in /tmp/mon.sock /tmp/qmp.sock; do
+# escalate to sudo if it is root-owned. Skipped under DRY_RUN: a live QEMU (a
+# gate run) may own those sockets, and a dry run must not break it.
+[ -n "${DRY_RUN:-}" ] || for f in /tmp/mon.sock /tmp/qmp.sock; do
     [ -e "$f" ] || continue
     rm -f "$f" 2>/dev/null && continue
     sudo rm -f "$f" 2>/dev/null && continue
@@ -272,7 +331,7 @@ no_stick_notice() {
     echo "        and the USB mass-storage path is not exercised on this run)" >&2
 }
 NO_STICK="${NO_STICK:-}"
-if [ -z "$NO_STICK" ] && stick_mounted; then
+if [ -z "$NO_STICK" ] && [ -z "${DRY_RUN:-}" ] && stick_mounted; then
     udisksctl unmount -b /dev/disk/by-label/KUDOSUSB >/dev/null 2>&1 || true
 fi
 if [ -n "$NO_STICK" ]; then
@@ -336,6 +395,16 @@ QEMU="qemu-system-x86_64 \
     -monitor unix:/tmp/mon.sock,server,nowait \
     -qmp unix:/tmp/qmp.sock,server,nowait \
     -no-reboot -no-shutdown"
+
+# DRY_RUN=1: print the exact QEMU invocation this run would exec, then stop.
+# The argument assembly above (mode, resolution, vgamem, peripherals) is real;
+# only the launch is withheld — so the command line is inspectable and testable
+# without touching the machine's QEMU instance.
+if [ -n "${DRY_RUN:-}" ]; then
+    # shellcheck disable=SC2086  # word-split collapses the assembly whitespace
+    echo $QEMU
+    exit 0
+fi
 
 if [ -n "$NO_TAIL" ]; then
     # shellcheck disable=SC2086  # deliberate word-split of the assembled arg list
