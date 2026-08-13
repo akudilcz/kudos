@@ -46,8 +46,8 @@ test "hitAt finds the launcher under a point, and misses the gaps and the void" 
     try expect(hitAt(w, h, 3, 0, s.x + PAD + ICON + GAP * 0.5, r1.y + 2) == null);
 }
 
-// DSK-021: one slot per open window, in its own zone past the separator.
-test "the window zone widens the slab and sits past the separator (DSK-021)" {
+// DSK-022: one slot per open window, in its own zone past the separator.
+test "the window zone widens the slab and sits past the separator (DSK-022)" {
     const s0 = slabRect(1000, 800, 3, 0);
     const s2 = slabRect(1000, 800, 3, 2);
     // 2 slots add: SEP_GAP + SEP_W + SEP_GAP + 2*ICON + GAP.
@@ -58,7 +58,7 @@ test "the window zone widens the slab and sits past the separator (DSK-021)" {
     try expect(w0.x > sep.x + dock.SEP_W);
 }
 
-test "hitAt maps window slots to their own zone, never a launcher index (DSK-021)" {
+test "hitAt maps window slots to their own zone, never a launcher index (DSK-022)" {
     const w = 1000.0;
     const h = 800.0;
     const s = slabRect(w, h, 3, 2);

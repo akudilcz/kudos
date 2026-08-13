@@ -226,6 +226,25 @@ fn uploadTypeface(g: *gles.Context, alloc: std.mem.Allocator) u32 {
     return kgl.uploadAtlas(g, typeface.SHEET_W, typeface.sheetHeight(), la);
 }
 
+/// The dock: launcher tiles from DOCK_APPS, one slot per open window
+/// (DSK-022), in app-list order.
+fn drawDock(d: *desktop_mod.Desktop, gc: *GlesComp, wf: f32, hf: f32) void {
+    var dock_items: [desktop_mod.DOCK_APPS.len]dock.Item = undefined;
+    for (desktop_mod.DOCK_APPS, 0..) |da, i| dock_items[i] = .{
+        .accent = da.accent,
+        .icon = da.icon,
+        .running = d.kindRunning(da.kind),
+    };
+    const n_wins = d.dockWinItems(&g_win_items);
+    glcomp.dockBar(&gc.painter, gc.icons_tex, gc.icons, gc.atlas_tex, gc.atlas, wf, hf, &dock_items, g_win_items[0..n_wins]);
+}
+
+// The dock's window-slot scratch. STATIC, not a render-frame local: the frame
+// is debt-listed at its ceiling and the render runs single-threaded on core 0,
+// so one buffer is the honest home (Desktop.render's 57.7 KiB is the debt,
+// not a budget to grow into).
+var g_win_items: [desktop_mod.DOCK_WIN_SLOTS]dock.WinItem = undefined;
+
 /// Render the whole desktop as ONE GL frame — wallpaper, screensaver cube, every
 /// window's frosted chrome and content (2D apps as batched painter draws, 3D models
 /// inline), then the dock — through `kgl → gles → idraw` onto the GPU. The backend
@@ -349,16 +368,8 @@ fn renderGles(d: *Desktop) void {
         }
     }
     // The dock, over the wallpaper and windows — the launcher tiles, then one
-    // slot per open window (DSK-021), in app-list order.
-    var dock_items: [desktop_mod.DOCK_APPS.len]dock.Item = undefined;
-    for (desktop_mod.DOCK_APPS, 0..) |da, i| dock_items[i] = .{
-        .accent = da.accent,
-        .icon = da.icon,
-        .running = d.kindRunning(da.kind),
-    };
-    var win_items: [desktop_mod.DOCK_WIN_SLOTS]dock.WinItem = undefined;
-    const n_wins = d.dockWinItems(&win_items);
-    glcomp.dockBar(&gc.painter, gc.icons_tex, gc.icons, gc.atlas_tex, gc.atlas, wf, hf, &dock_items, win_items[0..n_wins]);
+    // slot per open window (DSK-022), in app-list order.
+    drawDock(d, gc, wf, hf);
 
     // The heads-up display goes over everything, including the dock (spec
     // HUD-003): it is a view of the machine, not another window in it.

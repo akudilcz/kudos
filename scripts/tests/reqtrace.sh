@@ -21,6 +21,15 @@ cd "$(dirname "$0")/../.."
 ID_RE='\b[A-Z]{2,4}-[0-9]{3}\b'
 RATCHET=scripts/tests/reqtrace_uncited.txt
 
+# An ID may be REFERENCED many times but DEFINED once: definitions are the
+# bold "**ID.**" form. Two definitions of one ID collapse under sort -u and
+# every later check silently reads the wrong requirement — fail here instead.
+dup_defs="$(grep -ohE "\*\*[A-Z]{2,4}-[0-9]{3}\.\*\*" specs/*.md | sort | uniq -d)"
+if [ -n "$dup_defs" ]; then
+    echo "  ✗ requirement ID defined more than once:" >&2
+    echo "$dup_defs" | sed 's/^/      /' >&2
+    exit 1
+fi
 spec_ids="$(grep -ohE "$ID_RE" specs/*.md | sort -u)"
 prefixes="$(echo "$spec_ids" | sed 's/-.*//' | sort -u | paste -sd'|')"
 # scripts/agent/ holds the agent-pipeline tests check.sh runs; its samples/ are

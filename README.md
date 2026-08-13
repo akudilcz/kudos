@@ -22,9 +22,9 @@ The code was written with the help of Anthropic's Claude Code.
 ![kudos desktop](assets/media/screenshot.png)
 
 *The kudos desktop, composited live by the RTX 4090: a terminal downloading a
-page from the dev host over the from-scratch TCP/IP stack (`net fetch`) and
-saving it to the in-RAM ramdisk, beside a GPU-rendered `teapot.glb` model
-window.*
+page from the dev host over the from-scratch TCP/IP stack (`curl`) and saving
+it to the in-RAM ramdisk, beside a GPU-rendered `teapot.glb` model window.
+(Screenshot predates the current 4-pane boot layout.)*
 
 ---
 
@@ -376,7 +376,7 @@ actually passed against the current tree is what `make status` reports:
 | M5 | window manager + double-buffered compositor | drag/raise |
 | M6 | terminal grid + shell | typed commands |
 | M7 | PCI enumeration + ramdisk (`ls`/`cat`/`lspci`) | screenshot |
-| M8 | network stack + `net fetch` (e1000/igc→ARP→IPv4→TCP→HTTP) | downloaded a file |
+| M8 | network stack + `curl` (e1000/igc→ARP→IPv4→TCP→HTTP) | downloaded a file |
 
 Beyond those milestones the tree grew the things the intro describes: GPU bring-up
 and OpenGL rendering on the real 4090, the in-kudos agent with its off-target build
@@ -384,11 +384,23 @@ factory, and a VMX hypervisor that boots Linux in a window. Those are covered by
 the boot-2/boot-3, `test-agent` and `test-guest-qemu` tracks rather than by a
 milestone row.
 
-**Shell commands:** `help`, `clear`, `echo`, `cd`, `ls`, `cat`, `lspci`, `net`,
-`mem`, `ps`, `term`, `system`, `show`, `stats`, `flipstat`, `calc`, `clock`, `rt`
-(a drift-free 10 Hz real-time task reporting its own wake jitter), `prime`,
-`background`, `exit`, `reboot`, `shutdown` — plus the ones this system exists for:
-`ai` (talk to the agent), `run` (execute a `.kudos` module the factory built),
-`feature` (hot-load one), and `vm` (boot a guest). `crash` and `memfault` are
-deliberate fault injectors the containment tracks use. `net` is the front door to
-the network: `net ip | dns NAME | ping HOST | fetch URL [NAME]`.
+**The shell is Linux-shaped.** The top level is the command set a Linux hand
+already knows — `ls`, `cat`, `grep`, `head`, `wc`, `cp`, `mv`, `rm`, `mkdir`,
+`rmdir`, `touch`, `pwd`, `cd`, `echo`, `ps`, `free`, `uname`, `uptime`, `lspci`,
+`ip`, `ping`, `host`, `curl`, `history`, `clear`, `exit`, `reboot`, `shutdown` —
+with pipes (`ps | grep term | wc`), `*`/`?` globbing on file arguments, `>`/`>>`
+redirection, a 32-line history ring, in-line cursor editing, Shift-PgUp
+scrollback, and Ctrl-C. Everything kudos-specific lives under one word:
+`kudos ai` (talk to the agent), `kudos compile` (build a `.kudos` module),
+`kudos run` (execute one), `kudos vm` (boot a guest — it takes over the
+terminal it is typed in), `kudos feature`, `kudos show`, `kudos caps`,
+`kudos stats`, `kudos flipstat`, `kudos background`, `kudos term`/`system`/
+`clock`/`calc`, `kudos prime`, `kudos rt`. `crash` and `memfault` are deliberate
+fault injectors the containment tracks use (instrumented builds only).
+
+**The desktop is ready when it appears:** four terminals tiled 2×2 — one
+running the agent, one booting the baked compiler guest, two at the prompt —
+over a dock whose launcher tiles spawn new windows and whose window slots (one
+per open window, past the separator) switch to running ones. Guests register
+their names as they lease: `kudos compile factory zigserver:8623` needs no
+config file.

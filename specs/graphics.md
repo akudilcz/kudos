@@ -111,7 +111,7 @@ bottom of the desktop that launches applications.
 **DSK-017.** The Kudos system shall mark, on its dock tile (DSK-016), each application
 that is running.
 
-**DSK-021.** The Kudos system shall show, on the dock (DSK-016), one slot per open
+**DSK-022.** The Kudos system shall show, on the dock (DSK-016), one slot per open
 window, visually separated from the launcher tiles; activating a slot shall focus its
 window, restoring it if minimised.
 

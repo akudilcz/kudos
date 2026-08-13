@@ -51,11 +51,11 @@ const WmSnap = struct { id: u32, x: i32, y: i32, w: usize, h: usize, max: bool, 
 
 /// The dock's launcher tiles — a fixed set of apps, each a rounded accent tile with a
 /// glyph; `running` is filled per frame from the open windows. Clicking a tile SPAWNS a
-/// new window (DSK-016); reaching a running one is the window zone's job (DSK-021).
+/// new window (DSK-016); reaching a running one is the window zone's job (DSK-022).
 /// The dock is drawn only on the gles/GPU compositor path.
 /// Shared home for its two users: input.zig hit-tests the tiles, render.zig draws them.
 pub const DockApp = struct { kind: Kind, accent: u32, icon: dock.Icon };
-/// Most window slots the dock shows (DSK-021) — past this the newest windows
+/// Most window slots the dock shows (DSK-022) — past this the newest windows
 /// go slot-less rather than shrinking the tiles below hit size.
 pub const DOCK_WIN_SLOTS: usize = 12;
 
@@ -332,7 +332,7 @@ pub const Desktop = struct {
         return false;
     }
 
-    /// Fill `out` with one dock slot per open window (DSK-021), in app-list
+    /// Fill `out` with one dock slot per open window (DSK-022), in app-list
     /// order — the SAME order input.zig maps a slot click back through
     /// (dockWindowAt). Returns the count; past out.len the tail is dropped and
     /// the drop is visible as a slot-less window, never a shifted mapping.

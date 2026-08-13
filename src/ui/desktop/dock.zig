@@ -43,7 +43,7 @@ pub const Item = struct {
     running: bool,
 };
 
-/// One RUNNING-window slot (DSK-021): every open window holds one, visible or
+/// One RUNNING-window slot (DSK-022): every open window holds one, visible or
 /// minimised. The slot draws the window title's initial rather than an app
 /// icon — the letter is what visually separates "switch to this window" from
 /// the launcher zone's "spawn a new one", beside the separator bar.
@@ -56,7 +56,7 @@ pub const WinItem = struct {
 };
 
 /// Where a dock click landed: a LAUNCHER tile (spawn a new window of that
-/// app, DSK-016) or a WINDOW slot (focus/restore that window, DSK-021).
+/// app, DSK-016) or a WINDOW slot (focus/restore that window, DSK-022).
 pub const Hit = union(enum) { launcher: usize, window: usize };
 
 /// The separator between the zones, and its breathing room.
@@ -165,7 +165,7 @@ pub fn darken(c: u32, t: f32) u32 {
 pub const ICON_GLYPH: f32 = 30;
 
 /// Paint the dock: the launcher zone, the separator, then one slot per open
-/// window (DSK-021). `icons_tex`/`icons` is the uploaded dockicons atlas (one
+/// window (DSK-022). `icons_tex`/`icons` is the uploaded dockicons atlas (one
 /// cell per Icon, in enum order); `glyph_tex`/`glyphs` is the TEXT atlas the
 /// window slots draw their title initial from. The painter's projection must
 /// already be the whole desktop.

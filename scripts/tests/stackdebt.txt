@@ -28,8 +28,10 @@ drivers.gpu.rm.pngenc.initCompressInto 99328
 # The desktop's whole-scene GL frame (renderGles, inlined into its only caller).
 # No single allocation is large: the frame is spill slots for the per-window
 # content paths inlined into the loop. Shrinking it means lifting that dispatch
-# out of the loop.
-ui.desktop.desktop.Desktop.render 57704
+# out of the loop. The wave-2 dock/scrollback work moved it +16 bytes; a
+# never_inline experiment on the dock draw ADDED 16 more (the call boundary
+# itself spills), confirming the growth is register pressure, not a local.
+ui.desktop.desktop.Desktop.render 57720
 ui.desktop.render.GlesComp.init 49152
 crypto.ml_kem.Kyber(...).SecretKey.decaps 45056
 main_root.run 41984
