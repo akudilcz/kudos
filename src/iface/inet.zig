@@ -72,6 +72,10 @@ pub const FetchError = error{
     BadStatus,
     /// A backgrounded fetch is already in flight (there is one TCP connection).
     Busy,
+    /// The requesting task was told to stop (^C): the transfer was abandoned
+    /// mid-flight, connection closed. What was already delivered stays
+    /// delivered; nothing further comes.
+    Cancelled,
     OutOfMemory,
 };
 

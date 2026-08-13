@@ -293,11 +293,12 @@ fn routeTickToAllCores() void {
 }
 
 /// Turn the BSP (core 0) into a scheduled core, symmetric with the APs: per-CPU
-/// block, idle task, the SYSTEM task (`system_entry`, the system process loop),
-/// and the command worker. Terminal tasks belong to sessions (session.open())
-/// and float across cores like everything else (KRN-009). Never returns. Called
-/// by the SMP root after bringUpAps.
-pub fn startBspScheduler(system_entry: *const fn () void, command_worker: *const fn () void) noreturn {
+/// block, idle task, and the SYSTEM task (`system_entry`, the system process
+/// loop). Terminal tasks — the line editor and the command worker of each
+/// session — belong to sessions (session.open(), cmdworker.ensure) and float
+/// across cores like everything else (KRN-009). Never returns. Called by the SMP
+/// root after bringUpAps.
+pub fn startBspScheduler(system_entry: *const fn () void) noreturn {
     // Interrupts OFF for the whole bring-up, exactly like an AP (which arrives
     // from the trampoline with IF=0): the APs are already online, so from the
     // moment sched.start publishes this core in the masks a wakeup IPI could
@@ -325,12 +326,9 @@ pub fn startBspScheduler(system_entry: *const fn () void, command_worker: *const
     const sys = sched.spawn("system", system_entry) catch @panic("smp: failed to spawn system task");
     sched.dispatch(sys);
 
-    // The command worker: runs pending shell commands for every terminal,
-    // yielding during command waits so the system task keeps rendering. Floats
-    // for the same reason.
-    const worker = sched.spawn("cmd-worker", command_worker) catch @panic("smp: failed to spawn cmd-worker task");
-    sched.dispatch(worker);
-
+    // No command worker is spawned here: each terminal brings its own
+    // (ui/desktop/cmdworker.zig), started when it takes a session slot, so the
+    // shells are independent of one another (spec APP-031).
     klog.puts("smp/diag: core-0 tasks spawned; starting LAPIC timer + scheduler\n");
     routeTickToAllCores();
     armCoreTimer();

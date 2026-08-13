@@ -141,6 +141,47 @@ var in_use: [MAX_SESSIONS]bool = [_]bool{false} ** MAX_SESSIONS;
 // to both — two Terminals sharing one Session.
 var table_lock: SpinLock = .{};
 
+/// The command-worker task serving each SLOT: the task that runs the committed
+/// command lines of whatever terminal currently holds it (spawned by
+/// ui/desktop/cmdworker.zig, which owns their bodies — a session knows only how
+/// to wake one). One per slot is what makes a long command in one terminal cost
+/// no other terminal anything (spec APP-031).
+///
+/// Kept BESIDE the slot table rather than in the Session, and never exited: a
+/// worker outlives the terminals it serves, where `claim` re-initializes the
+/// Session wholesale and would wipe the pointer. Permanent also means a waker
+/// can hold a raw pointer without the ceremony `Session.task` needs — the task
+/// it names cannot have been reaped and its memory reissued.
+var cmd_workers: [MAX_SESSIONS]?*sched.Task = [_]?*sched.Task{null} ** MAX_SESSIONS;
+
+/// This slot's command worker, or null when none has been started for it yet.
+pub fn commandWorker(id: u32) ?*sched.Task {
+    if (id >= MAX_SESSIONS) return null;
+    return @atomicLoad(?*sched.Task, &cmd_workers[id], .acquire);
+}
+
+/// Record the task that will run slot `id`'s commands. Called once per slot,
+/// before the task is dispatched, so the first posted command already has
+/// someone to wake.
+pub fn setCommandWorker(id: u32, t: *sched.Task) void {
+    if (id >= MAX_SESSIONS) return;
+    @atomicStore(?*sched.Task, &cmd_workers[id], t, .release);
+}
+
+/// Wake this session's command worker: it sleeps (off the run queue) whenever
+/// its terminal has nothing to run, so a posted command that skipped this would
+/// sit unclaimed until something else happened to wake the task.
+pub fn wakeCommandWorker(sess: *Session) void {
+    if (commandWorker(sess.id)) |t| sched.wake(t);
+}
+
+/// Whether slot `id` has a command posted and not yet claimed — the worker's
+/// block predicate, and the only thing it wakes for.
+pub fn commandPending(id: u32) bool {
+    if (id >= MAX_SESSIONS) return false;
+    return sessions[id].cmd.isPending();
+}
+
 /// Claim the lowest free session slot, or null when every one is taken. Called by
 /// the system task when it opens a terminal.
 pub fn claim() ?*Session {

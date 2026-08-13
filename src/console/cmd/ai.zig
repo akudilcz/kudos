@@ -219,8 +219,26 @@ fn lockedMessage() []const u8 {
         "no credential: seal one into the build (scripts/agent/sealkey.sh) or set key= in " ++ agenttools.CFG_PATH ++ "\n";
 }
 
-/// `ai ...` — the shell command entry (core-0 table).
+/// Whether a turn (or any other `ai` invocation) is in flight. There is ONE
+/// agent (AGT-001) and one conversation, but terminals run their commands at the
+/// same time (APP-031), so a second terminal can reach this command while a
+/// reply is streaming to the first. Everything below it is that one agent's —
+/// the history, the model, the credential, the terminal the reply streams to —
+/// so a second caller is REFUSED with the reason (APP-032) rather than
+/// interleaved into the first, which would splice two conversations into one
+/// history and stream both replies into whichever terminal asked last.
+///
+/// It also stops the agent from calling itself: a `kudos ai ...` line run by the
+/// model's own `shell` tool arrives here on the very task holding the turn.
+var g_running: bool = false;
+
+/// `ai ...` — the shell command entry.
 pub fn run(c: console.Console, args: []const u8) void {
+    if (@atomicRmw(bool, &g_running, .Xchg, true, .acq_rel)) {
+        c.write("the agent is busy with a turn in another terminal — one conversation at a time\n");
+        return;
+    }
+    defer @atomicStore(bool, &g_running, false, .release);
     g_console = c;
     agenttools.shell_console = c;
     announceOnConsole();

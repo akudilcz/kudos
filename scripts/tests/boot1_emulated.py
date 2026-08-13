@@ -668,6 +668,58 @@ def phase_smp(q):
              f"({mirror1.count(marker)} occurrences on term.1)", context_grep="term.1 = ")
     ok("keystrokes routed to core 1 and its shell ran the command (term.1)")
 
+    # APP-031: the two terminals run their commands AT THE SAME TIME.
+    #
+    # The proof is a clock, because that is what the defect stole: with one
+    # command worker serving every terminal, a long command in this window left
+    # every other window's committed line unrun until it finished — the machine
+    # looked hung and said nothing. So: start a long `sleep` here (this terminal
+    # is now busy for SLEEP_S), move focus back to the boot terminal, and time
+    # how long ITS `echo` takes to answer. Serialized, the echo could not appear
+    # before the sleep ended; concurrent, it lands in well under a second.
+    SLEEP_S = 10
+    BUDGET_S = SLEEP_S / 2  # generous: the echo path is milliseconds
+    q.type_str(f"sleep {SLEEP_S}")
+    q.key("ret")
+    time.sleep(0.5)  # let the line commit and this terminal's worker take it
+    started = time.monotonic()
+
+    # A SECOND terminal, opened while the first is busy: F12 is the hotkey the
+    # system task serves, so it works whatever a terminal is doing, and the new
+    # window takes focus — which is what puts the next keystrokes in it.
+    n_busy = wm()["nwins"]
+    q.key("f12")
+    st = wm_wait(lambda s2: s2["nwins"] == n_busy + 1)
+    if st["nwins"] != n_busy + 1:
+        fail(f"F12 opened no terminal while another was busy (nwins {n_busy} -> {st['nwins']})")
+    busy_peer_id = st["focus"][0] if st["focus"] else None
+    peer_core = active_core()
+
+    concurrent = "concurrent-ok"
+    q.type_str(f"echo {concurrent}")
+    q.key("ret")
+    while time.monotonic() < started + BUDGET_S:
+        if concurrent in cases.mirror_text(read_serial(), core=peer_core):
+            break
+        time.sleep(0.2)
+    elapsed = time.monotonic() - started
+    if concurrent not in cases.mirror_text(read_serial(), core=peer_core):
+        fail(f"the second terminal did not run `echo` within {BUDGET_S:.0f}s while the "
+             f"first slept — the terminals are serialized on one command worker (APP-031)",
+             context_grep=f"term.{peer_core} = ")
+    ok(f"a busy terminal does not hold up another one ({elapsed:.1f}s < {SLEEP_S}s sleep, APP-031)")
+
+    # Close the second terminal, then wait the sleep out so the AP terminal is
+    # settled before it is asked to exit (its worker must be idle first).
+    q.type_str("exit")
+    q.key("ret")
+    if busy_peer_id is not None:
+        wm_wait(lambda s2: busy_peer_id in s2["closed"])
+    time.sleep(max(0.0, SLEEP_S - (time.monotonic() - started)) + 0.5)
+    wait_quiescent()
+    if cases.win_by_title(wm(), "term #1") is None:
+        fail("the sleeping terminal did not survive its neighbour's open/close")
+
     # Close the AP terminal (it holds focus): the window set returns to the boot
     # layout, so phase 3 starts from a clean term #0-focused state. `exit` mirrors
     # on term.1.

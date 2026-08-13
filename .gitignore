@@ -5,10 +5,13 @@ build/
 
 *.o
 
-# Claude Code local state stays out of the tree — but the project's agent
-# definitions (.claude/agents/) are shared, versioned config.
-.claude/*
-!.claude/agents/
+# The Claude setup ships with the code it polices: rules, skills, workflows,
+# agents and settings are versioned config, reviewed like any other rail. Only
+# genuinely transient or per-machine state is ignored.
+.claude/worktrees/
+.claude/drift/queue
+.claude/drift/*.lock
+.claude/settings.local.json
 
 # Zig's default install prefix / cache when someone runs bare `zig build` instead
 # of `make build` (which redirects both under build/ via -p build --cache-dir).

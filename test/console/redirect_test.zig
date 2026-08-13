@@ -1,8 +1,48 @@
 //! Host tests of src/console/redirect.zig — the redirection grammar (APP-028,
-//! APP-029) and the capture budget (APP-030).
+//! APP-029), the `;` command list, the quote rules, and the capture budget
+//! (APP-030).
 
 const std = @import("std");
 const redirect = @import("redirect");
+
+test "`;` splits a line into commands, spaces optional" {
+    var out: [redirect.MAX_LIST][]const u8 = undefined;
+    try std.testing.expectEqual(@as(?usize, 2), redirect.splitList("echo a; echo b", &out));
+    try std.testing.expectEqualStrings("echo a", out[0]);
+    try std.testing.expectEqualStrings("echo b", out[1]);
+    try std.testing.expectEqual(@as(?usize, 2), redirect.splitList("cd /x;ls", &out));
+}
+
+test "empty `;` items drop: trailing and doubled semicolons run what is there" {
+    var out: [redirect.MAX_LIST][]const u8 = undefined;
+    try std.testing.expectEqual(@as(?usize, 1), redirect.splitList("echo a;", &out));
+    try std.testing.expectEqual(@as(?usize, 2), redirect.splitList("a;;b", &out));
+    try std.testing.expectEqual(@as(?usize, 0), redirect.splitList(";;;", &out));
+    try std.testing.expectEqual(@as(?usize, 1), redirect.splitList("just one", &out));
+}
+
+test "a quoted `;` is text — the line that types Zig into a file stays whole" {
+    var out: [redirect.MAX_LIST][]const u8 = undefined;
+    try std.testing.expectEqual(@as(?usize, 1), redirect.splitList("echo 'const a = 1;' >> f.zig", &out));
+    try std.testing.expectEqualStrings("echo 'const a = 1;' >> f.zig", out[0]);
+    try std.testing.expectEqual(@as(?usize, 2), redirect.splitList("echo \"a;b\"; echo c", &out));
+}
+
+test "past MAX_LIST is a refusal, not a truncation" {
+    var out: [redirect.MAX_LIST][]const u8 = undefined;
+    try std.testing.expectEqual(@as(?usize, null), redirect.splitList("a;b;c;d;e;f;g;h;i", &out));
+}
+
+test "a quoted `>` or `|` is text to the redirect and pipe grammar" {
+    try std.testing.expect(redirect.parse("echo 'a > b' ") == null);
+    const r = redirect.parse("echo 'a > b' > out.txt").?;
+    try std.testing.expectEqualStrings("echo 'a > b'", r.command);
+    try std.testing.expectEqualStrings("out.txt", r.path);
+
+    var stages: [redirect.MAX_STAGES][]const u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 1), redirect.splitPipes("echo 'a | b'", &stages));
+    try std.testing.expectEqual(@as(usize, 2), redirect.splitPipes("echo 'a | b' | wc", &stages));
+}
 
 test "a line with no redirection is not one (APP-028)" {
     try std.testing.expect(redirect.parse("echo hello") == null);

@@ -14,6 +14,7 @@ const std = @import("std");
 const tcp = @import("tcp.zig");
 const tls = @import("tls.zig");
 const net = @import("net.zig");
+const sched = @import("../../../kernel/sched/sched.zig");
 const timer = @import("../../../kernel/timer/timer.zig");
 const http_wire = @import("http_wire.zig");
 const inet = @import("inet");
@@ -84,6 +85,10 @@ const Plain = struct {
             if (tcp.finished()) return 0; // orderly FIN — end of a close-delimited body
             if (tcp.wasReset()) return error.ConnectionReset; // peer aborted
             if (timer.millis() >= self.deadline_ms) return error.Timeout;
+            // ^C: the ONLY unbounded wait in a request is a peer that keeps
+            // trickling bytes (an agent stream renews the stall budget for
+            // minutes) — the requesting task's cancel is what ends it early.
+            if (sched.cancelled()) return error.Cancelled;
             _ = tcp.pumpUntil(self.consumed, self.deadline_ms);
         }
         const src = tcp.received()[self.consumed..];

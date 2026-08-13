@@ -27,7 +27,7 @@ none restates another.
 
 | artifact | role |
 | --- | --- |
-| `specs/*.md` | requirements: atomic, testable, what-not-how; `spec.md` is the index |
+| `specs/*.md` | requirements: atomic, testable, what-not-how; `specs/README.md` is the index |
 | `CLAUDE.md` | development standards: architecture and coding rails |
 | `process.md` | this file: objectives, blast radius, traceability, verification, the review rubric |
 | `build.zig` module table + `scripts/tests/` | the enforced structure and the gate inventory |
@@ -104,8 +104,8 @@ enforced boundaries. That partitioning argument carries three obligations:
 
 `specs/README.md` owns the format rules: stable `PREFIX-NNN` identifiers, one testable
 assertion per "shall", function and performance only — never mechanism. The
-requirements themselves live one file per package in `specs/`; `spec.md` is
-the index over them. This section owns the lifecycle around them:
+requirements themselves live one file per package in `specs/`; `specs/README.md`
+is the index over them. This section owns the lifecycle around them:
 
 - **A behavior change lands with its requirement.** New behavior either
   implements an existing requirement (name the ID in the commit) or arrives
@@ -448,7 +448,7 @@ growth, the source/test split, and structure enforced by gates.
     and a location that matches its purpose; a script nobody can run from
     its header alone is a finding.
 55. **The repository root stays canonical.** The root holds only the entry
-    points someone new needs (README, spec, rails, process, build, license);
+    points someone new needs (README, `specs/`, rails, process, build, license);
     everything else lives in its group; stray outputs, scratch files, and
     one-off artifacts never land in the tree.
 56. **Structure is enforced by gates, not vigilance.** The layer graph and

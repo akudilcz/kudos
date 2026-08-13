@@ -63,6 +63,7 @@ pub fn dnsResolve(host: []const u8) ?[4]u8 {
     while (timer.millis() < deadline) {
         net.pump();
         if (got) break;
+        if (sched.cancelled()) return null; // ^C: the asker stopped wanting the answer
         sched.waitYield(); // SMP: yield to core 0's system task between polls
     }
     if (!got) return null;

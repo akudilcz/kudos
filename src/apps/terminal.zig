@@ -62,6 +62,11 @@ pub const Terminal = struct {
     cols: usize,
     rows: usize,
     cells: []Cell,
+    /// This terminal's shell working space (console/scratch.zig): the buffers a
+    /// command line's pipes, redirection and glob expansion run through. Owned
+    /// here and handed to every Console this terminal builds, so two terminals
+    /// running commands at the same time (APP-031) never share one.
+    scratch: *console_mod.Scratch,
     cx: usize = 0,
     cy: usize = 0,
     fg: Color = FG,
@@ -130,7 +135,8 @@ pub const Terminal = struct {
     mirror_len: usize = 0,
 
     /// Allocate a terminal: the FIXED max-size cell grid (~0.5 MB; resize never
-    /// reallocs it), the visible cols/rows from the window's content area, bind it
+    /// reallocs it), the shell working space its command lines run through, the
+    /// visible cols/rows from the window's content area, bind it
     /// to its session id and (SMP) its shared `session`, and print the greeting + first
     /// prompt. `close` is the symmetric teardown — it frees everything taken here.
     pub fn create(a: std.mem.Allocator, win: *Window, desktop: console_mod.Desktop, id: u32, session: ?*Session, ai_mode: bool) !*Terminal {
@@ -138,8 +144,14 @@ pub const Terminal = struct {
         const rows = win.contentH() / font.HEIGHT;
         const cells = try a.alloc(Cell, MAX_COLS * MAX_ROWS);
         errdefer a.free(cells);
+        // This terminal's own pipe/redirect/glob space (console/scratch.zig).
+        // Per terminal because every terminal runs its commands at the same time
+        // as every other (APP-031), and it lives as long as the window because
+        // that is the lifetime the Console contract promises a command.
+        const scratch = try a.create(console_mod.Scratch);
+        errdefer a.destroy(scratch);
         const t = try a.create(Terminal);
-        t.* = .{ .a = a, .win = win, .desktop = desktop, .cols = cols, .rows = rows, .cells = cells, .id = id, .session = session, .ai_mode = ai_mode, .agent_window = ai_mode };
+        t.* = .{ .a = a, .win = win, .desktop = desktop, .cols = cols, .rows = rows, .cells = cells, .scratch = scratch, .id = id, .session = session, .ai_mode = ai_mode, .agent_window = ai_mode };
         counter.register(&cnt_key_drops); // idempotent — first terminal wins
         t.setCwd("/ramdisk");
         t.clearGrid();
@@ -215,12 +227,16 @@ pub const Terminal = struct {
                 .move => self.moveCursorCells(r.n),
                 .interrupt => self.acknowledgeInterrupt(),
                 .run_line => {
-                    // Hand the committed line to the command WORKER task (not
-                    // run inline here): a slow command must not block the system
-                    // task's render/input/ring-drain. The worker runs shell.execute
-                    // (yielding during waits), re-prompts, clears busy.
+                    // Hand the committed line to THIS TERMINAL's command worker
+                    // task (not run inline here): a slow command must not block
+                    // the system task's render/input/ring-drain, nor any other
+                    // terminal (APP-031) — each session has a worker of its own.
+                    // The worker runs shell.execute (yielding during waits),
+                    // re-prompts, clears busy. It is asleep until woken, so the
+                    // wake is part of posting, not an optimisation.
                     self.putChar('\n');
                     sess.cmd.post();
+                    session_mod.wakeCommandWorker(sess);
                 },
                 .complete => {
                     // Tab: the session's editor task is parked on `busy`
@@ -431,6 +447,7 @@ pub const Terminal = struct {
             if (self.session) |sess| session_mod.release(sess);
         }
         a.free(self.cells);
+        a.destroy(self.scratch);
         a.destroy(self);
     }
 
@@ -782,6 +799,15 @@ pub const Terminal = struct {
         return ed.historyAt(i);
     }
 
+    /// Console clearHistoryFn: forget every line this terminal's editor recalls
+    /// (`history -c`). Reaches the same editor conReadHistory reads, under the
+    /// same parked-editor handoff.
+    fn conClearHistory(ctx: *anyopaque) void {
+        const t: *Terminal = @ptrCast(@alignCast(ctx));
+        const ed = if (t.session) |sess| &sess.ed else &t.ed;
+        ed.clearHistory();
+    }
+
     /// The console surface over this terminal — what shell.execute hands each
     /// command: the grid half bound to this terminal, plus the desktop half
     /// and window handle this terminal was given at spawn.
@@ -797,6 +823,7 @@ pub const Terminal = struct {
             .win = self.win,
             .win_id = self.win.id,
             .a = self.a,
+            .scratch = self.scratch,
             .ai_mode = self.ai_mode,
             .agent_window = self.agent_window,
             .setAiModeFn = conSetAiMode,
@@ -804,6 +831,7 @@ pub const Terminal = struct {
             .setInputMaskFn = conSetInputMask,
             .setColorFn = conSetColor,
             .readHistoryFn = conReadHistory,
+            .clearHistoryFn = conClearHistory,
         };
     }
 

@@ -144,10 +144,11 @@ fn minSystemTask() void {
             si += 1;
         }
 
-        // Drain rings + run any pending command + render (what the real system
-        // task + command worker do, here folded into one loop for the scaffold).
+        // Drain rings + render (what the real system task does). Committed
+        // command lines are run by each terminal's OWN command worker
+        // (ui/desktop/cmdworker.zig), started with the terminal — this loop
+        // neither claims nor dispatches them.
         _ = desktop.tick();
-        _ = desktop.runPendingCommands();
         desktop.render();
 
         if (ticks % 20 == 0) {

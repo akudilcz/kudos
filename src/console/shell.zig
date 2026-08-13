@@ -1,9 +1,14 @@
 //! Shell command interpreter. Parses a line and dispatches to a built-in
 //! command; each command's body lives in its own file under cmd/. The table
-//! below is the single source of truth for the BUILT-IN commands on the
-//! core-0 worker; cmd/help.zig prints the user-facing summary. A word the table does
-//! not know is then offered to the runtime feature-command registry
+//! below is the single source of truth for the BUILT-IN commands a terminal's
+//! command worker runs; cmd/help.zig prints the user-facing summary. A word the
+//! table does not know is then offered to the runtime feature-command registry
 //! (kernel/loader/features.zig) before it is reported unknown.
+//!
+//! REENTRANT: every terminal runs its own commands, all at the same time (spec
+//! APP-031), so this file holds no per-line state of its own. The buffers a line
+//! needs while it runs belong to the terminal and arrive on the console
+//! (`c.scratch`, scratch.zig).
 //!
 //! Output goes to the terminal unless the line redirects it to a file with `>` or
 //! `>>` (APP-028, APP-029), which is handled HERE rather than in any command: one
@@ -14,6 +19,7 @@
 const std = @import("std");
 const console = @import("console.zig");
 const glob = @import("glob.zig");
+const opt = @import("opt.zig");
 const redirect = @import("redirect.zig");
 const vfs = @import("vfs");
 
@@ -50,6 +56,24 @@ const COMMANDS = [_]Command{
     .{ .name = "grep", .run = @import("cmd/grep.zig").run, .globs = true },
     .{ .name = "wc", .run = @import("cmd/wc.zig").run, .globs = true },
     .{ .name = "head", .run = @import("cmd/head.zig").run, .globs = true },
+    .{ .name = "tail", .run = @import("cmd/tail.zig").run, .globs = true },
+    .{ .name = "more", .run = @import("cmd/pager.zig").run, .globs = true },
+    .{ .name = "less", .run = @import("cmd/pager.zig").run, .globs = true },
+    .{ .name = "nl", .run = @import("cmd/nl.zig").run, .globs = true },
+    .{ .name = "sort", .run = @import("cmd/sort.zig").run, .globs = true },
+    .{ .name = "uniq", .run = @import("cmd/uniq.zig").run, .globs = true },
+    .{ .name = "cut", .run = @import("cmd/cut.zig").run, .globs = true },
+    .{ .name = "tee", .run = @import("cmd/tee.zig").run },
+    .{ .name = "diff", .run = @import("cmd/diff.zig").run, .globs = true },
+    .{ .name = "xxd", .run = @import("cmd/xxd.zig").run, .globs = true },
+    .{ .name = "find", .run = @import("cmd/find.zig").run },
+    .{ .name = "stat", .run = @import("cmd/stat.zig").run, .globs = true },
+    .{ .name = "du", .run = @import("cmd/du.zig").run, .globs = true },
+    .{ .name = "df", .run = @import("cmd/df.zig").run },
+    .{ .name = "basename", .run = @import("cmd/basename.zig").runBase },
+    .{ .name = "dirname", .run = @import("cmd/basename.zig").runDir },
+    .{ .name = "seq", .run = @import("cmd/seq.zig").run },
+    .{ .name = "sleep", .run = @import("cmd/sleep.zig").run },
     .{ .name = "history", .run = @import("cmd/history.zig").run },
     .{ .name = "lspci", .run = @import("cmd/lspci.zig").run },
     .{ .name = "ip", .run = @import("cmd/ip.zig").run },
@@ -87,13 +111,25 @@ pub fn splitCommand(line: []const u8) struct { cmd: []const u8, args: []const u8
     };
 }
 
-/// Parse a command line and run it: split at the redirect (APP-028, APP-029) and
+/// Parse a command line and run it: split the unquoted `;` list and run each
+/// command left to right, as bash does. Empty lines are ignored. This is the
+/// core-0 command path (local commands are dispatched earlier by the editor —
+/// see terminal.zig/session.zig).
+pub fn execute(c: console.Console, line_in: []const u8) void {
+    var cmds: [redirect.MAX_LIST][]const u8 = undefined;
+    const n = redirect.splitList(line_in, &cmds) orelse {
+        var buf: [48]u8 = undefined;
+        c.write(std.fmt.bufPrint(&buf, "shell: at most {d} commands on a line\n", .{redirect.MAX_LIST}) catch "shell: too many commands\n");
+        return;
+    };
+    for (cmds[0..n]) |cmd| executeOne(c, cmd);
+}
+
+/// Run ONE command of the list: split at the redirect (APP-028, APP-029) and
 /// the pipes, glob-expand each stage's arguments, then run the stages left to
 /// right — each stage's captured output is the next stage's `Console.stdin`, and
-/// the last stage writes to the terminal or the redirect target. Empty lines are
-/// ignored. This is the core-0 command path (local commands are dispatched
-/// earlier by the editor — see terminal.zig/session.zig).
-pub fn execute(c: console.Console, line_in: []const u8) void {
+/// the last stage writes to the terminal or the redirect target.
+fn executeOne(c: console.Console, line_in: []const u8) void {
     const r = redirect.parse(line_in);
     const body = if (r) |red| red.command else line_in;
 
@@ -119,7 +155,7 @@ pub fn execute(c: console.Console, line_in: []const u8) void {
     for (stages[0 .. n - 1], 0..) |stage, i| {
         var inner = c;
         inner.stdin = stdin;
-        var sink = redirect.Sink{ .buf = &pipe_bufs[i & 1] };
+        var sink = redirect.Sink{ .buf = &c.scratch.pipe[i & 1] };
         var capture = Capture{ .inner = inner, .sink = &sink };
         dispatch(capture.asConsole(), stage);
         if (sink.overflowed()) {
@@ -167,50 +203,51 @@ pub fn executeCaptured(base: console.Console, line: []const u8, buf: []u8) redir
     return sink;
 }
 
-// Static for LIFETIME, not allocation: a command can outlive its invocation
-// (`curl` keeps the Console by value and completes on a later core-0 pass),
-// so a stack buffer would be a dangling write once the fetch retired. A late
-// write lands here and is dropped. These suffice — this is the single-threaded
-// core-0 worker.
-var capture_buf: [redirect.MAX_BYTES]u8 = undefined;
-var pipe_bufs: [2][redirect.MAX_BYTES]u8 = undefined;
-var expand_buf: [4096]u8 = undefined;
-
-/// Glob-expand `args` into expand_buf, or return `args` untouched when no word
-/// globs. Null (with the complaint printed) when the expansion does not fit —
-/// running a command on a silently truncated file list is how a glob deletes
-/// the wrong files.
+/// Glob-expand `args` into this terminal's expansion buffer, or return `args`
+/// untouched when no word globs. Null (with the complaint printed) when the
+/// expansion does not fit — running a command on a silently truncated file list
+/// is how a glob deletes the wrong files.
+///
+/// The buffer is the CONSOLE's, not this file's: terminals run their commands at
+/// the same time (APP-031), and it outlives the command for the reason
+/// scratch.zig states.
 fn expandGlobs(c: console.Console, args: []const u8) ?[]const u8 {
     if (!glob.hasGlob(args)) return args;
+    const buf: []u8 = &c.scratch.expand;
     var used: usize = 0;
     var overflowed = false;
-    var it = std.mem.tokenizeAny(u8, args, " \t");
+    var it = opt.Words{ .s = args };
     while (it.next()) |word| {
         const before = used;
-        if (glob.hasGlob(word)) {
+        if (word[0] == '\'' or word[0] == '"') {
+            // A quoted word never globs (bash: quoting suppresses expansion) —
+            // the quotes stay on for the command's own operand pass to strip.
+            appendWord(buf, word, &used, &overflowed);
+        } else if (glob.hasGlob(word)) {
             // The pattern is the last path component; what precedes it names
             // the directory, kept verbatim on every expanded name.
             const cut = if (std.mem.lastIndexOfScalar(u8, word, '/')) |i| i + 1 else 0;
             var pathbuf: [vfs.MAX_PATH]u8 = undefined;
             const dir = vfs.normalize(c.cwd(), if (cut == 0) "." else word[0..cut], &pathbuf);
-            var m = GlobMatches{ .prefix = word[0..cut], .pat = word[cut..], .used = &used, .overflowed = &overflowed };
+            var m = GlobMatches{ .buf = buf, .prefix = word[0..cut], .pat = word[cut..], .used = &used, .overflowed = &overflowed };
             if (dir) |d| vfs.list(d, GlobMatches.cb, &m) catch {};
-            if (used == before) appendWord(word, &used, &overflowed); // no match: the word as typed
+            if (used == before) appendWord(buf, word, &used, &overflowed); // no match: the word as typed
         } else {
-            appendWord(word, &used, &overflowed);
+            appendWord(buf, word, &used, &overflowed);
         }
         if (overflowed) {
-            var buf: [56]u8 = undefined;
-            c.write(std.fmt.bufPrint(&buf, "glob: expansion exceeds {d} bytes — not run\n", .{expand_buf.len}) catch "glob: expansion too long\n");
+            var msg: [56]u8 = undefined;
+            c.write(std.fmt.bufPrint(&msg, "glob: expansion exceeds {d} bytes — not run\n", .{buf.len}) catch "glob: expansion too long\n");
             return null;
         }
     }
-    return std.mem.trimEnd(u8, expand_buf[0..used], " ");
+    return std.mem.trimEnd(u8, buf[0..used], " ");
 }
 
 /// One glob expansion in progress: the directory prefix to restore, the
 /// pattern, and where matches accumulate.
 const GlobMatches = struct {
+    buf: []u8,
     prefix: []const u8,
     pat: []const u8,
     used: *usize,
@@ -219,24 +256,24 @@ const GlobMatches = struct {
     fn cb(ctx: ?*anyopaque, e: vfs.ifilesys.Entry) void {
         const m: *GlobMatches = @ptrCast(@alignCast(ctx.?));
         if (!glob.match(m.pat, e.name)) return;
-        appendParts(m.prefix, e.name, m.used, m.overflowed);
+        appendParts(m.buf, m.prefix, e.name, m.used, m.overflowed);
     }
 };
 
-fn appendWord(word: []const u8, used: *usize, overflowed: *bool) void {
-    appendParts("", word, used, overflowed);
+fn appendWord(buf: []u8, word: []const u8, used: *usize, overflowed: *bool) void {
+    appendParts(buf, "", word, used, overflowed);
 }
 
-/// Append `prefix ++ name ++ ' '` to expand_buf, latching the overflow.
-fn appendParts(prefix: []const u8, name: []const u8, used: *usize, overflowed: *bool) void {
+/// Append `prefix ++ name ++ ' '` to the expansion buffer, latching the overflow.
+fn appendParts(buf: []u8, prefix: []const u8, name: []const u8, used: *usize, overflowed: *bool) void {
     const need = prefix.len + name.len + 1;
-    if (used.* + need > expand_buf.len) {
+    if (used.* + need > buf.len) {
         overflowed.* = true;
         return;
     }
-    @memcpy(expand_buf[used.*..][0..prefix.len], prefix);
-    @memcpy(expand_buf[used.* + prefix.len ..][0..name.len], name);
-    expand_buf[used.* + prefix.len + name.len] = ' ';
+    @memcpy(buf[used.*..][0..prefix.len], prefix);
+    @memcpy(buf[used.* + prefix.len ..][0..name.len], name);
+    buf[used.* + prefix.len + name.len] = ' ';
     used.* += need;
 }
 
@@ -267,7 +304,7 @@ fn toFile(c: console.Console, r: redirect.Parsed, stage: []const u8) void {
         return;
     };
 
-    var sink = redirect.Sink{ .buf = &capture_buf };
+    var sink = redirect.Sink{ .buf = &c.scratch.capture };
     // `>>` prefills the existing content, so the append needs no second buffer
     // and the budget covers the whole file, not just the new part.
     if (r.mode == .append) {
@@ -354,6 +391,9 @@ const Capture = struct {
     fn readHistory(ctx: *anyopaque, i: usize) ?[]const u8 {
         return of(ctx).inner.history(i);
     }
+    fn clearHistory(ctx: *anyopaque) void {
+        of(ctx).inner.clearHistory();
+    }
 
     /// The console to run the redirected command against: this capture's output,
     /// the original console's everything else (window, desktop, allocator, cwd).
@@ -370,6 +410,7 @@ const Capture = struct {
         out.setInputMaskFn = setInputMask;
         out.setColorFn = setColor;
         out.readHistoryFn = readHistory;
+        out.clearHistoryFn = clearHistory;
         return out;
     }
 };

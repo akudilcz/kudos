@@ -2,12 +2,18 @@
 
 const console = @import("../console.zig");
 const network = @import("../network.zig");
+const opt = @import("../opt.zig");
 
-pub fn run(c: console.Console, name: []const u8) void {
-    if (name.len == 0) {
-        c.write("usage: host NAME\n");
+const USAGE = "usage: host NAME\n";
+
+pub fn run(c: console.Console, args: []const u8) void {
+    var sc = opt.Scan.init("", args);
+    while (sc.next()) |o| return opt.refuse(c, "host", o, USAGE);
+    var ops = opt.Operands.init("", args);
+    const name = ops.next() orelse {
+        c.write(USAGE);
         return;
-    }
+    };
     const n = network.up(c) orelse return;
     if (n.resolve(name)) |ip| {
         c.write(name);

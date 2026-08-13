@@ -10,9 +10,39 @@
 //! netdebug file mirror walks) sees exactly the files, unchanged, while the
 //! `ifilesys` seam below presents the same names as a tree.
 
+//! CONCURRENCY. The store is written from tasks that genuinely run at the same
+//! time — every terminal runs its own commands (spec APP-031), and the trace's
+//! file mirror walks the store from the system task. Every MUTATION therefore
+//! takes `store_lock`, which is what keeps two `>` redirections from tearing the
+//! entry list itself (an append and a remove interleaving is a corrupt list, not
+//! a lost file). Functions named `…Locked` assume the caller holds it.
+//!
+//! Reads (get/list/kindOf and the two seams' read paths) do NOT take it, and the
+//! bytes they return stay valid only until the next write to that same name: a
+//! reader that means to keep them copies them. Locking a read would not change
+//! that — the slice outlives any lock a lookup could hold — so the contract is
+//! stated rather than half-enforced.
+
 const std = @import("std");
+const buildinfo = @import("buildinfo");
+const SpinLock = @import("../../kernel/sync/spinlock.zig").SpinLock;
 
 const crc32 = @import("crc32.zig");
+
+/// Serializes every mutation of `files` and `empty_dirs` (see the header).
+var store_lock: SpinLock = .{};
+
+/// Take the store lock in the SMP build (IRQ-safe); a no-op returning false in
+/// the single-core build, where there is one thread of control and the lock
+/// compiles out. Pair with `unlockStore`.
+inline fn lockStore() bool {
+    return if (buildinfo.smp) store_lock.acquireIrqSave() else false;
+}
+
+/// Release the store lock and restore the interrupt flag `lockStore` captured.
+inline fn unlockStore(if_was: bool) void {
+    if (buildinfo.smp) store_lock.releaseIrqRestore(if_was);
+}
 
 /// One ramdisk file: its name and its heap-owned contents. `generation`
 /// bumps on every put() to the name; `crc` is the lazily-computed CRC-32 of
@@ -167,11 +197,20 @@ fn fsKind(_: *anyopaque, path: []const u8) ?ifilesys.Kind {
     return kindOf(path);
 }
 fn fsWrite(_: *anyopaque, path: []const u8, data: []const u8) ifilesys.WriteError!void {
+    // Copy first, check second: the copy is the expensive part and must stay
+    // outside the lock (see `put`), and a refused write frees it again — a
+    // wasted copy on the error path, never a torn store on the good one.
+    const copy = alloc.dupe(u8, data) catch return ifilesys.WriteError.NoSpace;
+    const if_was = lockStore();
+    defer unlockStore(if_was);
+    errdefer alloc.free(copy);
     if (kindOf(path) == .dir) return ifilesys.WriteError.IsADirectory;
     if (!parentsAreDirs(path)) return ifilesys.WriteError.NotADirectory;
-    put(path, data) catch return ifilesys.WriteError.NoSpace;
+    placeLocked(path, copy, false) catch return ifilesys.WriteError.NoSpace;
 }
 fn fsRemove(_: *anyopaque, path: []const u8) ifilesys.WriteError!void {
+    const if_was = lockStore();
+    defer unlockStore(if_was);
     for (files.items, 0..) |f, i| {
         if (!std.mem.eql(u8, f.name, path)) continue;
         alloc.free(f.name);
@@ -184,6 +223,8 @@ fn fsRemove(_: *anyopaque, path: []const u8) ifilesys.WriteError!void {
     return ifilesys.WriteError.NotFound;
 }
 fn fsMkdir(_: *anyopaque, path: []const u8) ifilesys.WriteError!void {
+    const if_was = lockStore();
+    defer unlockStore(if_was);
     if (kindOf(path) != null) return ifilesys.WriteError.Exists;
     if (!parentsAreDirs(path)) return ifilesys.WriteError.NotADirectory;
     const copy = alloc.dupe(u8, path) catch return ifilesys.WriteError.NoSpace;
@@ -193,6 +234,8 @@ fn fsMkdir(_: *anyopaque, path: []const u8) ifilesys.WriteError!void {
     };
 }
 fn fsRmdir(_: *anyopaque, path: []const u8) ifilesys.WriteError!void {
+    const if_was = lockStore();
+    defer unlockStore(if_was);
     if (path.len == 0) return ifilesys.WriteError.ReadOnly; // the mount root is not ours to delete
     switch (kindOf(path) orelse return ifilesys.WriteError.NotFound) {
         .file => return ifilesys.WriteError.NotADirectory,
@@ -243,24 +286,40 @@ pub fn init(a: std.mem.Allocator) void {
     iramdisk.instance = fs(); // anything above the driver layer reaches us through here
 }
 
-/// Create or replace a file. `data` is copied into the heap so callers may free
-/// their buffer afterwards.
-pub fn put(name: []const u8, data: []const u8) !void {
-    const copy = try alloc.dupe(u8, data);
+/// Create or replace `name` with heap-owned (or, for `static`, borrowed) bytes
+/// the store TAKES OWNERSHIP OF. The caller holds the store lock; on error the
+/// bytes are still the caller's to free.
+fn placeLocked(name: []const u8, data: []const u8, static: bool) !void {
     for (files.items) |*f| {
         if (std.mem.eql(u8, f.name, name)) {
             // Borrowed bytes belong to the kernel image, not the heap: replacing
             // such a file is allowed, freeing what it pointed at is not.
             if (!f.static) alloc.free(f.data);
-            f.static = false;
-            f.data = copy;
+            f.static = static;
+            f.data = data;
             f.generation +%= 1;
             f.crc_valid = false;
             return;
         }
     }
     const name_copy = try alloc.dupe(u8, name);
-    try files.append(.{ .name = name_copy, .data = copy });
+    errdefer alloc.free(name_copy);
+    try files.append(.{ .name = name_copy, .data = data, .static = static });
+}
+
+/// Create or replace a file. `data` is copied into the heap so callers may free
+/// their buffer afterwards.
+///
+/// The copy is made BEFORE the lock: a file can be megabytes, and a copy that
+/// size inside an interrupts-off critical section is a dropped frame and a
+/// missed tick, for no gain — the store cannot see the bytes until they are
+/// placed.
+pub fn put(name: []const u8, data: []const u8) !void {
+    const copy = try alloc.dupe(u8, data);
+    const if_was = lockStore();
+    defer unlockStore(if_was);
+    errdefer alloc.free(copy);
+    try placeLocked(name, copy, false);
 }
 
 /// Create a file whose contents are BORROWED, not copied: bytes that live for
@@ -272,17 +331,9 @@ pub fn put(name: []const u8, data: []const u8) !void {
 /// `data` must outlive the store. A later `put` to the same name replaces the
 /// file with an ordinary heap copy and leaves the borrowed bytes alone.
 pub fn putStatic(name: []const u8, data: []const u8) !void {
-    for (files.items) |*f| {
-        if (!std.mem.eql(u8, f.name, name)) continue;
-        if (!f.static) alloc.free(f.data);
-        f.static = true;
-        f.data = data;
-        f.generation +%= 1;
-        f.crc_valid = false;
-        return;
-    }
-    const name_copy = try alloc.dupe(u8, name);
-    try files.append(.{ .name = name_copy, .data = data, .static = true });
+    const if_was = lockStore();
+    defer unlockStore(if_was);
+    try placeLocked(name, data, true);
 }
 
 /// Look up a file's contents by name, or null if no such file exists.

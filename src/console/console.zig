@@ -9,6 +9,11 @@
 const std = @import("std");
 const png = @import("modelcache").png;
 const idesk = @import("idesk"); // the desktop-control contract: the app catalogue lives there
+const scratch = @import("scratch.zig");
+
+/// Re-exported so a caller naming the buffers a console carries (the terminal
+/// that allocates one) shares this file's instance of the type.
+pub const Scratch = scratch.Scratch;
 
 /// The application kinds a shell command can ask the desktop to open. The list
 /// itself belongs to the contract (iface/idesk.zig) — the apps group names the
@@ -70,6 +75,11 @@ pub const Console = struct {
     /// one sanctioned window into it. The slice stays valid for the command's
     /// life (the editor is parked while its command runs).
     readHistoryFn: *const fn (ctx: *anyopaque, i: usize) ?[]const u8,
+    /// OPTIONAL: forget every committed line the editor recalls — `history -c`.
+    /// Null on a console with no editor behind it (a capture, the agent's
+    /// remote shell), where there is nothing to forget and the command's
+    /// silence is the truth.
+    clearHistoryFn: ?*const fn (ctx: *anyopaque) void = null,
     /// The hosting desktop's services and this console's window within it.
     desktop: Desktop,
     win: *anyopaque,
@@ -88,6 +98,12 @@ pub const Console = struct {
     /// The desktop's allocator: pixels handed over via `setBackground` and
     /// buffers a backgrounded fetch retains are owned by it.
     a: std.mem.Allocator,
+    /// The hosting terminal's command-line working space (scratch.zig): where
+    /// the shell stages a pipe, a redirection and a glob expansion. Carried on
+    /// the console because it is the TERMINAL's — every terminal runs its
+    /// commands at the same time as every other (APP-031), so one shared set
+    /// would cross-wire two windows' output.
+    scratch: *Scratch,
     /// Whether this console is CURRENTLY in an agent session (AGT-018), where
     /// every committed line is a turn for the agent rather than a shell command.
     /// A snapshot: `setAiMode` moves the hosting terminal in and out of it, so a
@@ -153,6 +169,11 @@ pub const Console = struct {
     /// the end.
     pub fn history(self: Console, i: usize) ?[]const u8 {
         return self.readHistoryFn(self.ctx, i);
+    }
+    /// Forget the committed-line history (`history -c`); a console with no
+    /// editor behind it ignores this — see clearHistoryFn.
+    pub fn clearHistory(self: Console) void {
+        if (self.clearHistoryFn) |f| f(self.ctx);
     }
     /// Open a new app window of `kind` (see Desktop.spawnAppFn).
     pub fn spawnApp(self: Console, kind: AppKind) anyerror!void {

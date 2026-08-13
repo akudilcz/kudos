@@ -1,15 +1,20 @@
-//! The shell's line grammar: output redirection and pipes, and the bounded
-//! buffer a captured stage lands in. PURE — no VFS, no console, no allocation;
-//! shell.zig resolves paths, runs commands against a `Sink`, and writes results.
+//! The shell's line grammar: `;` command lists, output redirection and pipes,
+//! and the bounded buffer a captured stage lands in. PURE — no VFS, no console,
+//! no allocation; shell.zig resolves paths, runs commands against a `Sink`, and
+//! writes results.
 //!
-//! GRAMMAR: the LAST space-delimited `>` (replace) or `>>` (append) token
+//! GRAMMAR: unquoted `;` splits the line into commands run left to right; in
+//! each, the LAST space-delimited `>` (replace) or `>>` (append) token
 //! redirects, and one path word follows it; space-delimited `|` tokens split
 //! the rest into pipeline stages. The rules exist so source code can be typed
-//! at a shell with no quoting:
-//!   - space-delimited, so `a>b` and `a|b` inside a line are text;
-//!   - LAST `>`, so `echo if (a > b) { > guard.zig` writes `if (a > b) {`.
-//! The cost: a line ending in a literal `>`, or carrying a spaced `|` as text,
-//! cannot be written this way, there being no quoting to escape either.
+//! at a shell with minimal quoting:
+//!   - space-delimited `>`/`|`, so `a>b` and `a|b` inside a line are text;
+//!   - LAST `>`, so `echo if (a > b) { > guard.zig` writes `if (a > b) {`;
+//!   - inside `'…'` or `"…"` every operator is text, which is what lets a line
+//!     of Zig CARRYING a semicolon be typed at all:
+//!     `echo 'const a = 1;' >> f.zig` — bash's own answer to the same clash.
+//! The cost: a line ending in a literal unquoted `>`, or carrying a spaced
+//! unquoted `|` as text, still cannot be written without quotes.
 //!
 //! Redirection is a SHELL facility. The per-core local commands (`prime`, `rt`,
 //! `run`, `shutdown`) are dispatched by the line editor before the shell sees the
@@ -44,14 +49,27 @@ pub const Parsed = struct {
 /// Split `line` at its redirection, or null when it has none.
 pub fn parse(line: []const u8) ?Parsed {
     const trimmed = std.mem.trim(u8, line, " \t");
-    // The LAST token wins, so the scan runs to the end.
+    // The LAST token wins, so the scan runs to the end. A token runs through
+    // quoted regions whole — a `>` inside quotes is never a redirect.
     var at: ?usize = null;
     var tok_len: usize = 0;
     var i: usize = 0;
     while (i < trimmed.len) {
         while (i < trimmed.len and isSpace(trimmed[i])) i += 1;
         const start = i;
-        while (i < trimmed.len and !isSpace(trimmed[i])) i += 1;
+        var q: u8 = 0;
+        while (i < trimmed.len) : (i += 1) {
+            const ch = trimmed[i];
+            if (q != 0) {
+                if (ch == q) q = 0;
+                continue;
+            }
+            if (ch == '\'' or ch == '"') {
+                q = ch;
+                continue;
+            }
+            if (isSpace(ch)) break;
+        }
         const tok = trimmed[start..i];
         if (isRedirect(tok)) {
             at = start;
@@ -86,8 +104,17 @@ pub const MAX_STAGES: usize = 8;
 pub fn splitPipes(line: []const u8, out: *[MAX_STAGES][]const u8) usize {
     var count: usize = 0;
     var start: usize = 0;
+    var q: u8 = 0;
     var i: usize = 0;
     while (i <= line.len) : (i += 1) {
+        if (i < line.len and q != 0) {
+            if (line[i] == q) q = 0;
+            continue;
+        }
+        if (i < line.len and (line[i] == '\'' or line[i] == '"')) {
+            q = line[i];
+            continue;
+        }
         const at_pipe = i < line.len and line[i] == '|' and
             (i == 0 or isSpace(line[i - 1])) and
             (i + 1 >= line.len or isSpace(line[i + 1]));
@@ -97,6 +124,43 @@ pub fn splitPipes(line: []const u8, out: *[MAX_STAGES][]const u8) usize {
             count += 1;
             start = i + 1;
         }
+    }
+    return count;
+}
+
+/// Most `;`-separated commands one line may carry — MAX_STAGES' shape, list-wise.
+pub const MAX_LIST: usize = 8;
+
+/// `line` split at its unquoted `;` separators into trimmed commands; empty
+/// items (a trailing `;`, or `;;`) are dropped — bash refuses a bare `;;`
+/// outside `case`, but a shell without `case` gains nothing from the refusal.
+/// `a;b` splits with no spaces, as in bash: protecting a literal `;` (a line
+/// of Zig being echoed into a file) is what the quotes are for. Null past
+/// MAX_LIST — a silently truncated list would drop commands.
+pub fn splitList(line: []const u8, out: *[MAX_LIST][]const u8) ?usize {
+    var count: usize = 0;
+    var start: usize = 0;
+    var q: u8 = 0;
+    var i: usize = 0;
+    while (i <= line.len) : (i += 1) {
+        if (i < line.len) {
+            const ch = line[i];
+            if (q != 0) {
+                if (ch == q) q = 0;
+                continue;
+            }
+            if (ch == '\'' or ch == '"') {
+                q = ch;
+                continue;
+            }
+            if (ch != ';') continue;
+        }
+        const seg = std.mem.trim(u8, line[start..i], " \t");
+        start = i + 1;
+        if (seg.len == 0) continue;
+        if (count == MAX_LIST) return null;
+        out[count] = seg;
+        count += 1;
     }
     return count;
 }

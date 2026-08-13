@@ -628,7 +628,7 @@ pub fn run(mb_info: u64) noreturn {
         // unscheduled, with keystrokes queued but never drained. smp.start()
         // brings the APs online; startBspScheduler never returns.
         smp.start();
-        smp.startBspScheduler(systemTask, commandWorkerTask);
+        smp.startBspScheduler(systemTask);
     }
 
     // Single-core kudos: GSP boot on the boot stack (runs the native session loop
@@ -680,51 +680,6 @@ fn systemTask() void {
     gpu.bootAtInit(g_native_boot);
     pump.systemLoop();
 }
-
-/// The command-worker task (SMP): runs any pending shell command for every
-/// terminal, yielding between scans so the system task keeps rendering. Because
-/// shell.execute itself yields during its waits (timer.sleep, net polls), a slow
-/// command on one terminal blocks neither the other terminals' commands nor the
-/// UI. Never returns.
-fn commandWorkerTask() void {
-    // Liveness must be observable (a dead worker silently orphans every
-    // terminal's commands): scans and completed commands are surfaced in the
-    // periodic dbg dump. The scan count is throttled to one publish per
-    // WORKER_PULSE_SCANS iterations — the loop spins far too fast to publish
-    // every pass.
-    var scans: u64 = 0;
-    var cmds: u64 = 0;
-    var last_pulse_ms: u64 = 0;
-    const self_task = sched.currentTask().?;
-    while (true) {
-        scans += 1;
-        // Self-check: this task's own struct must still describe it. Checking
-        // from the victim's own loop brackets any stray write into live Task
-        // memory to within one scan of the serialized trace.
-        if (self_task.name[0] != 'c' or @atomicLoad(sched.TaskState, &self_task.state, .monotonic) != .running) {
-            klog.puts("WORKER TASK OVERWRITTEN mid-run: name0=");
-            klog.putHex(self_task.name[0]);
-            klog.puts(" state=");
-            klog.putHex(@intFromEnum(@atomicLoad(sched.TaskState, &self_task.state, .monotonic)));
-            klog.puts("\n");
-            while (true) asm volatile ("pause");
-        }
-        if (pump.desktop.runPendingCommands()) {
-            cmds += 1;
-            debug.setNum(.ui, "worker.cmds", cmds);
-        }
-        const now_ms = timer.millis();
-        if (now_ms -% last_pulse_ms >= WORKER_PULSE_MS) {
-            last_pulse_ms = now_ms;
-            debug.setNum(.ui, "worker.scans", scans);
-        }
-        smp.yieldCpu();
-    }
-}
-
-/// Worker scan-counter publish period — coarse on purpose: the value exists to
-/// answer "is the worker still scanning at all", not to measure its rate.
-const WORKER_PULSE_MS: u64 = 5_000;
 
 /// The files the system boots with, baked into the kernel image and copied into the
 /// ramdisk at startup.

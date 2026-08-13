@@ -116,6 +116,15 @@ pub const Editor = struct {
         self.stash_len = 0;
     }
 
+    /// Forget EVERY committed line (`history -c`): the ring empties and the
+    /// walk resets, so Up-arrow recalls nothing until new commits arrive.
+    pub fn clearHistory(self: *Editor) void {
+        self.hist_count = 0;
+        self.last_commit_stored = false;
+        self.walk = 0;
+        self.stash_len = 0;
+    }
+
     /// The i-th history line, OLDEST first (what the `history` command
     /// numbers), or null past the end.
     pub fn historyAt(self: *const Editor, i: usize) ?[]const u8 {

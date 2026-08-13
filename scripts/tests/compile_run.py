@@ -247,9 +247,17 @@ def type_source(q, nd):
     line, as judged by a compiler.
     """
     lines = source_lines()
+    # Each line rides inside single quotes: the shell splits an UNQUOTED `;`
+    # into a command list (bash semantics), and a line of Zig ends with one.
+    # echo strips a whole-argument quote pair, so the file gets the bare line.
+    # The guard keeps the trick honest: a source line carrying its own single
+    # quote would end the pair early and dismember the line.
+    for i, line in enumerate(lines):
+        assert "'" not in line, \
+            f"{SOURCE} line {i + 1} contains a single quote — the echo quoting cannot carry it"
     # The first line replaces, the rest append — so a re-run overwrites the file
     # rather than doubling it.
-    cmds = [f"echo {line} {'>' if i == 0 else '>>'} {SOURCE}"
+    cmds = [f"echo '{line}' {'>' if i == 0 else '>>'} {SOURCE}"
             for i, line in enumerate(lines)]
     print(f"compile_run: typing {SOURCE} in, {len(cmds)} lines ...")
     seen = {}

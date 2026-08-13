@@ -186,11 +186,6 @@ pub const Desktop = struct {
         lifecycle.closeVm(self, id);
     }
 
-    /// Core 0's command worker (SMP): run any pending shell command.
-    pub fn runPendingCommands(self: *Desktop) bool {
-        return lifecycle.runPendingCommands(self);
-    }
-
     // ── boot layout (boot_layout.zig) ────────────────────────────────────────
 
     /// Spawn the boot tiles: SMP four terminals tiled 2x2 (two autostarted),

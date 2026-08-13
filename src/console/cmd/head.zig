@@ -1,27 +1,31 @@
-//! `head [-n N] [FILE]` — the first N lines (default 10) of a file or the pipe.
+//! `head [-n LINES | -c BYTES] [FILE]` — the first part (default 10 lines) of a
+//! file or the pipe.
 
 const std = @import("std");
 const console = @import("../console.zig");
+const opt = @import("../opt.zig");
 const patharg = @import("../patharg.zig");
 const vfs = @import("vfs");
 
 const DEFAULT_LINES: usize = 10;
 
+const USAGE = "usage: head [-n LINES | -c BYTES] [FILE]\n";
+
 pub fn run(c: console.Console, args: []const u8) void {
     var count: usize = DEFAULT_LINES;
-    var path: []const u8 = "";
-    var it = std.mem.tokenizeAny(u8, args, " \t");
-    while (it.next()) |word| {
-        if (std.mem.eql(u8, word, "-n")) {
-            const num = it.next() orelse "";
-            count = std.fmt.parseInt(usize, num, 10) catch {
-                c.write("usage: head [-n N] [FILE]\n");
-                return;
-            };
-        } else {
-            path = word;
-        }
-    }
+    var bytes: ?usize = null;
+    var sc = opt.Scan.init("n:c:", args);
+    while (sc.next()) |o| switch (o) {
+        .val => |v| switch (v.letter) {
+            'n' => count = std.fmt.parseInt(usize, v.arg, 10) catch return c.write(USAGE),
+            'c' => bytes = std.fmt.parseInt(usize, v.arg, 10) catch return c.write(USAGE),
+            else => return opt.refuse(c, "head", o, USAGE),
+        },
+        else => return opt.refuse(c, "head", o, USAGE),
+    };
+
+    var ops = opt.Operands.init("n:c:", args);
+    const path = ops.next() orelse "";
     var data: []const u8 = undefined;
     if (path.len > 0) {
         var buf: [vfs.MAX_PATH]u8 = undefined;
@@ -37,6 +41,12 @@ pub fn run(c: console.Console, args: []const u8) void {
             c.write("head: no input (pipe something in or name a file)\n");
             return;
         };
+    }
+    if (bytes) |n| {
+        const shown = data[0..@min(n, data.len)];
+        c.write(shown);
+        if (shown.len > 0 and shown[shown.len - 1] != '\n') c.put('\n');
+        return;
     }
     var lines = std.mem.splitScalar(u8, data, '\n');
     var n: usize = 0;

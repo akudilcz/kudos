@@ -87,3 +87,20 @@ end of a named file, keeping what the file already holds.
 
 **APP-030.** The Kudos system shall leave a redirected file (APP-028) unchanged
 when the command's output exceeds the capture budget, reporting the budget.
+
+**APP-031.** The Kudos system shall run the shell commands (APP-002) of different
+terminal sessions (APP-001) at the same time, so that no session waits for
+another session's command to finish.
+
+**APP-032.** The Kudos system shall report in the asking terminal session
+(APP-001) a shell command (APP-002) it declines to run because another session
+holds a resource the command needs, leaving the holding session's work
+undisturbed.
+
+**APP-033.** The Kudos system shall accept for each shell command (APP-002) that
+shares its name with a Linux command the option letters and operands of that
+command, with the same meaning.
+
+**APP-034.** The Kudos system shall refuse a shell command (APP-002) carrying an
+option it does not implement, naming the option and the command's usage, rather
+than running the command without it.

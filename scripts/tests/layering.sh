@@ -812,6 +812,51 @@ check "the software and GPU PBR twins agree on their constants" \
     "change BOTH src/drivers/gl/soft.zig and src/drivers/gl/shaders/f_pbr.frag — they are one lighting model in two languages" \
     shader_twin_drift
 
+# Scripts are consistent and self-describing (process.md §54). The split below is the whole
+# rule: a script you can RUN must fail loudly and say what it is for, and a script you
+# SOURCE must not reach into its caller's shell and change the options there. Executability
+# is the discriminator, so neither half needs an allowlist — the answer is a property of the
+# file, not a list someone maintains.
+script_discipline() {
+    local f
+    while IFS= read -r f; do
+        [ "$(sed -n '2p' "$f" | cut -c1)" = "#" ] ||
+            echo "$f: no usage header — line 2 must begin the comment block saying what it does"
+        if [ -x "$f" ]; then
+            head -1 "$f" | grep -q '^#!' || echo "$f: executable with no shebang"
+            grep -qE '^set -' "$f" ||
+                echo "$f: executable but sets no shell options (set -euo pipefail, or the -e-less form the gates use)"
+        else
+            grep -qE '^set -' "$f" &&
+                echo "$f: sourced library, yet it sets shell options — those leak into every caller"
+        fi
+    done < <(find scripts -name '*.sh')
+    return 0
+}
+check "every script carries a shebang and a usage header, and only runnable ones set shell options" \
+    "add the header, or drop the set- line from a library that is meant to be sourced" \
+    script_discipline
+
+# The repository root stays canonical (process.md §55): it holds the entry points someone new
+# needs and nothing else. The list below is that set, and it is deliberately short — a root
+# that accumulates is the first sign of scratch files outliving the work that made them. A
+# genuinely new entry point joins the list in the change that introduces it, never silently.
+ROOT_ALLOWED="README.md CLAUDE.md process.md build.zig linker.ld Makefile LICENSE NOTICE
+BUILD_NUMBER .gitignore .mcp.json .claude assets scripts specs src test"
+stray_root_entries() {
+    local e
+    while IFS= read -r e; do
+        case " $(echo $ROOT_ALLOWED) " in
+        *" $e "*) ;;
+        *) echo "$e: not a declared root entry point" ;;
+        esac
+    done < <(git ls-files | awk -F/ '{print $1}' | sort -u)
+    return 0
+}
+check "the repository root stays canonical" \
+    "move it into its group — or, if it really is an entry point someone new needs, add it to ROOT_ALLOWED above" \
+    stray_root_entries
+
 if [ "$fail" -ne 0 ]; then
     echo
     echo "layering: FAIL — the rules above are in CLAUDE.md, and they are not decorative."

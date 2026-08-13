@@ -33,6 +33,7 @@ const debug = @import("../../kernel/debug/debug.zig");
 const desktop_mod = @import("desktop.zig");
 const Desktop = desktop_mod.Desktop;
 const render = @import("render.zig");
+const cmdworker = @import("cmdworker.zig");
 
 const TERM_W: usize = 560;
 const TERM_H: usize = 340;
@@ -157,6 +158,10 @@ pub fn spawnTerm(d: *Desktop, x: i32, y: i32, w: usize, h: usize, title: ?[]cons
     unowned_session = null; // the Terminal owns the session from here
     errdefer t.close(d.a, null); // frees the grid, the struct AND the session
     try appendApp(d, .{ .term = t });
+    // This terminal's own command worker (APP-031). After the append: the worker
+    // finds its terminal through the app list, and nothing can post a command
+    // before the window exists anyway.
+    if (sess) |sp| cmdworker.ensure(d, sp.id);
     return win;
 }
 
@@ -289,6 +294,7 @@ pub fn restoreTerminalWindow(d: *Desktop, i: usize) void {
         d.apps.items[i] = .{ .term = t };
         d.structure_lock.releaseIrqRestore(if_was);
     }
+    cmdworker.ensure(d, sess.id); // the restored terminal's own command worker
     render.completeOpenFrame(d);
     v.close(d.a, if (d.gles_comp) |*gc| &gc.gctx else null);
     retitle(d, win, "term #{d}", .{sess.id});
@@ -585,26 +591,29 @@ pub fn closeTermId(d: *Desktop, id: u32) void {
     }
 }
 
-/// Core 0's command worker (SMP): run any pending shell command for each
-/// terminal. Called repeatedly by the command-worker task, which yields
-/// between scans. Because shell.execute yields during its waits, a slow
-/// command on one terminal does not block this scan reaching the others, nor
-/// the system task's rendering. Returns true if any command ran (so a render
-/// is warranted).
-pub fn runPendingCommands(d: *Desktop) bool {
-    // CLAIM one terminal with a pending command under the structure lock —
-    // reading the list AND publishing cmd_running in the same critical section
-    // the system task's closeWindow uses for its deferral-check-and-remove.
-    // Without the lock, the scan can dereference a Terminal the system task is
-    // freeing in parallel (both tasks float on their own cores); with it, a
-    // claimed terminal is guaranteed deferred by any close until the command
-    // finishes. The claim is a pointer + flag copy; shell.execute itself runs
-    // OUTSIDE the lock (it yields on slow commands).
+/// Run the pending shell command of the terminal holding session slot `id` —
+/// the body of that slot's command-worker task (cmdworker.zig), and the ONLY
+/// place a typed command line is executed on the SMP build. Returns true if a
+/// command ran (so a render is warranted).
+///
+/// One slot, not a scan: every terminal has a worker of its own, so a command
+/// here delays no other terminal (spec APP-031). The system task keeps
+/// rendering throughout — shell.execute yields during its waits.
+pub fn runPendingCommandFor(d: *Desktop, id: u32) bool {
+    // CLAIM this terminal's command under the structure lock — reading the list
+    // AND publishing cmd_running in the same critical section the system task's
+    // closeWindow uses for its deferral-check-and-remove. Without the lock, the
+    // lookup can dereference a Terminal the system task is freeing in parallel
+    // (both tasks float on their own cores); with it, a claimed terminal is
+    // guaranteed deferred by any close until the command finishes. The claim is
+    // a pointer + flag copy; shell.execute itself runs OUTSIDE the lock (it
+    // yields on slow commands).
     const claimed: ?*@import("../../apps/terminal.zig").Terminal = blk: {
         const if_was = d.structure_lock.acquireIrqSave();
         defer d.structure_lock.releaseIrqRestore(if_was);
         for (d.apps.items) |a| {
             if (a != .term) continue;
+            if (a.term.id != id) continue;
             if (a.term.claimPendingCommand()) break :blk a.term;
         }
         break :blk null;

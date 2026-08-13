@@ -19,6 +19,7 @@ const TlsClient = @import("tlsclient.zig");
 const tlsstream = @import("tlsstream.zig");
 const tcp = @import("tcp.zig");
 const roots = @import("roots.zig");
+const sched = @import("../../../kernel/sched/sched.zig");
 const timer = @import("../../../kernel/timer/timer.zig");
 const wallclock = @import("../../../kernel/timer/wallclock.zig");
 const entropy = @import("../../../kernel/cpu/entropy.zig");
@@ -63,7 +64,7 @@ const SOCKET_WRITE_LEN: usize = RECORD_LEN;
 /// Why a transport call failed. `std.Io` reports only ReadFailed/WriteFailed —
 /// the cause is recorded here, the way std's own stream adapters do it, so a
 /// stall is never confused with a reset or an orderly close.
-const TransportError = error{ TlsTcpStall, TlsTcpReset, TlsTcpSend, TlsSessionTooLong };
+const TransportError = error{ TlsTcpStall, TlsTcpReset, TlsTcpSend, TlsSessionTooLong, TlsCancelled };
 
 /// The ciphertext transport: kudos' one TCP connection presented as the
 /// Reader/Writer pair the TLS client drives. It moves BYTES ON THE WIRE; every
@@ -125,6 +126,12 @@ const Transport = struct {
                 return error.ReadFailed;
             }
             if (tcp.finished()) return error.EndOfStream;
+            // ^C: an https agent stream renews its stall budget as long as the
+            // peer trickles bytes — the requesting task's cancel ends it early.
+            if (sched.cancelled()) {
+                self.err = error.TlsCancelled;
+                return error.ReadFailed;
+            }
             switch (tlsstream.verdict(timer.millis(), self.deadline_ms, self.session_deadline_ms)) {
                 .keep_waiting => {},
                 .stalled => {
@@ -229,6 +236,9 @@ pub const Session = struct {
     /// stalled, reset, or failed to send. A session that spent a day being
     /// diagnosed as a network problem was a decrypt failure the whole time.
     fn fail(self: *Session, what: []const u8, e: anyerror) inet.FetchError {
+        // A cancel is the CALLER's act, not a TLS failure — report it as what
+        // it is, and skip the diagnosis a real fault deserves.
+        if (self.state.transport.err) |t| if (t == error.TlsCancelled) return error.Cancelled;
         var buf: [160]u8 = undefined;
         klog.puts(std.fmt.bufPrint(&buf, "tls: {s} failed: {s}{s}{s}\n", .{
             what,
@@ -239,6 +249,7 @@ pub const Session = struct {
                 error.TlsSessionTooLong => " (transport: session exceeded its total budget)",
                 error.TlsTcpReset => " (transport: connection reset)",
                 error.TlsTcpSend => " (transport: send failed)",
+                error.TlsCancelled => " (cancelled)",
             } else "",
         }) catch "tls: session failed\n");
         return error.TlsFailed;
@@ -358,8 +369,10 @@ pub fn open(host: []const u8) inet.FetchError!Session {
                 error.TlsSessionTooLong => " (transport: session exceeded its total budget)",
                 error.TlsTcpReset => " (transport: connection reset)",
                 error.TlsTcpSend => " (transport: send failed)",
+                error.TlsCancelled => " (cancelled)",
             } else "",
         }) catch "tls: handshake failed\n");
+        if (state.transport.err) |t| if (t == error.TlsCancelled) return error.Cancelled;
         return error.TlsFailed;
     };
     return .{ .state = state };

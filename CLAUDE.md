@@ -2,186 +2,135 @@
 
 **Rails, not descriptions. Where the tree disagrees, the tree is wrong. Never cite existing
 code as precedent for breaking a rule.** Rules and canonical homes only, never lists of
-instances — give the command that regenerates a list instead.
+instances — give the command that regenerates a list.
+
+Subsystem rails live in `.claude/rules/` and load when a matching file is opened: `layout.md`
+(`src/`, `test/`, `scripts/`), `rendering.md` (`gl/`, `gpu/`, `ui/`, `widgets/`), `tests.md`
+(`test/`, `*_test.zig`). `process.md` holds the review rubric; `specs/` holds requirements.
+
+## Working autonomously
+
+**At a fork in the road, choose and keep going.** These rails, `process.md` and `specs/` are
+the tie-breaker: if the standard already decides it, the decision is made — implement it and
+say which rule you applied. Do not stop to ask what the tree already answers, and do not
+deliver half the work while waiting on a reply. Where a question is genuinely open, pick the
+option you can defend, state the assumption, and finish the task under it.
+
+Interrupt only for what a wrong guess makes expensive: a change that is hard to reverse, one
+that alters the product's behaviour or a published contract, or one that spends real hardware
+or money. Everything else is a judgement call you are expected to make, and the record of it
+belongs in the commit message.
+
+## Commands
+
+Toolchain is **Zig 0.16.0** (`~/.local/bin/zig`). A pure-module test root may not relatively
+import above its root dir — that is what the `src/*_testroot.zig` umbrellas are for; never root
+a module below the deepest file its graph reaches.
+
+| Command | What it does |
+| --- | --- |
+| `make status` | the test register: what this tree has proven, what is stale (~1 s) |
+| `make check` | THE GATE (iterate): host + QEMU, runs only stale tracks |
+| `make check-fast` | host tracks only, still register-incremental |
+| `make check-hw` | THE GATE (final): also demands the native tracks on real hardware |
+| `make test T=<track>` | run one register track and record it (`FORCE=1` overrides) |
+| `make test-unit ONLY=<substr>` | narrow host run, records nothing |
+| `make watch ONLY=<substr>` | sub-second warm rebuild+rerun loop on every save |
+| `make gui` | local QEMU window; the ISO must be built `-Dsoft-display` or it renders black |
+| `make help` | the full target list, scraped from the Makefile so it cannot drift |
+
+Never re-run a track `make status` shows green against this tree — the record IS the evidence.
+Branch on `make`'s exit code, never on grepping its output for PASS: a grep succeeds on a red
+gate. The laptop has no RTX 4090 and no reference stick, so `qemu-boot-1`, boot-2/3-native, the
+model sweep and `check-hw` all run on lemon; everything else runs locally.
 
 ## Architecture: layers and coupling
 
-- The codebase is a stack of layered APIs: each layer speaks only to the public API of the
-  layer directly below it. Dependencies point one way; no cycles. A module imported upward
-  is misfiled — move it down the stack.
-- High cohesion, low coupling: one file, one concern. A module's public API is its whole
-  contract; callers never reach past it into internals or the layers beneath it — go through
-  the toolkit, not around it.
-- Peer groups that must not know each other talk through a narrow interface layer that holds
-  contracts only, no logic. The interface lets the HIGH layer call down; a low layer reaching
-  up is inverted.
-- The directory tree mirrors the layering: a small fixed set of top-level groups; one extra
-  nesting level only where the import graph proves separable layers, never deeper.
-  New subsystem = a real decision. New group = no.
+- Layered APIs: each layer speaks only to the public API of the one below. No cycles. A module
+  imported upward is misfiled — move it down.
+- One file, one concern. A module's public API is its whole contract; callers never reach past
+  it into internals — through the toolkit, not around it.
+- Peers that must not know each other meet in a narrow interface layer: contracts, no logic.
+  It lets the HIGH layer call down; a low layer reaching up is inverted.
+- The tree mirrors the layering: a small fixed set of top-level groups, one extra nesting level
+  only where the import graph proves separable layers. New subsystem = a real decision. New
+  group = no.
 - Name the thing, not its role: never `_impl`/`_utils`/`_helper`/`_manager`. Contracts, fakes
-  and tests each follow one project-wide naming pattern. Module-qualified types at every
-  site; local aliases are banned.
-
-## Layout: where a file goes, and what it may be called
-
-The rules here are checked by `scripts/tests/layering.sh`; run it to see what it
-enforces today and the current state, and read its comments for why each rule exists. A rule that only lives in this
-document is a rule that comes back.
-
-- **`src/` root holds module roots and NOTHING else**, each named `*_root.zig`. A Zig
-  module's import path is its own directory, so the files that must resolve imports
-  across every group — the kernel entry points and the host-test root — are forced to
-  sit at the top. Any other file there has not been forced up, it has escaped its
-  group. Ordinary files live in a group and reach across with relative imports.
-- **One host-test module root**, `src/test_root.zig`: one line per host-testable file,
-  namespaced by group. A suite reaches through it (`@import("test_root").gl.foo`).
-  Never a second root-level shim — the count is the thing that creeps.
-- **The apex is a group like any other.** Code that legitimately knows every group (the
-  steady-state loop) lives in `boot/`, not loose at the top. It is K1: a defect there
-  stops the machine.
-- **Top-level groups are a closed set**, listed once in the layering gate. Adding one is
-  an architecture decision: it fails the gate until it is declared AND given a K-level.
-- **`test/` mirrors `src/`'s groups**, plus `support/` for shared fakes. A test file is
-  `*_test`, `*_sim`, `*_conformance` or `*_shot` — a new kind is recorded in the gate,
-  not improvised. Nothing in `src/` wears a test suffix.
-- **Scripts are a small, role-organised set.** One script per role, with SUBCOMMANDS —
-  never a new file per variant, which is how 80 accumulate. A script nothing calls is
-  deleted, not kept "in case": `scripts/README.md` maps each to its role and caller.
+  and tests each follow one project-wide pattern. Module-qualified types; no local aliases.
 
 ## Interfaces
 
 A runtime abstraction (interface, vtable, injected dependency) only at a REAL seam — hardware,
-IO, time, network, randomness. Before adding one, in order: the file is misfiled
-(the most common case); the caller needs a VALUE, not a dependency —
-pass it in; the contract already exists — grep the interface layer; the importer is in the
-wrong group; only then add one — when a test must substitute the implementation or two groups
-must not see each other.
-
-## Rendering: GPU product, soft-display dev builds
-
-kudos is GPU-only OpenGL hardware acceleration: on the product image the desktop renders on
-the RTX 4090 through `gles → kgl → idraw` and nowhere else; the kernel never rasterises the
-desktop on the CPU when that GPU is present (spec ARCH-015). "The desktop is shown" means the
-**first present** (PERF-001), and from that instant it is required to hold a smooth 60 Hz. The firmware
-framebuffer is adopted for geometry only (no pixels) on the GPU path. QEMU runs GPU
-passthrough as its operating mode. `drivers/gl/soft.zig` is the software IDraw implementation
-with exactly two consumers: the host-test fixture that exercises the `gles`/`idraw` pipeline
-on a laptop, and `drivers/gl/softdisplay.zig`, which on a `-Dsoft-display` build (off by
-default, spec RND-012, RND-013) publishes it as the draw device when no GPU is coming and the
-rasteriser's in-place delivery into the firmware framebuffer IS the present. Only
-`softdisplay.zig` and `test/` may import `soft` (layering gate); with the flag off, no
-kernel path publishes the software rasteriser as the draw device.
+IO, time, network, randomness. Before adding one, in order: the file is misfiled (the usual
+cause); the caller needs a VALUE — pass it in; the contract exists — grep the interface layer;
+the importer is in the wrong group. Only then add one, and only for a test substitution or two
+groups that must not see each other.
 
 ## Resources & state
 
-- Effects live at the edges: anything expressible as a pure function is pulled out of the
-  IO/device/handler code that uses it. No global mutable state shared across groups.
-- Every acquired resource has a named owner and a release path, introduced in the same change;
-  acquisition failure is a value, never a sentinel. Error paths unwind partial state.
-- No allocation or blocking work on hot paths (interrupt, per-frame, per-request) —
-  set up at init.
+- Effects at the edges: anything expressible as a pure function comes out of the IO/device/
+  handler code. No global mutable state across groups.
+- Every acquired resource has a named owner and a release path in the same change; acquisition
+  failure is a value, never a sentinel; error paths unwind partial state.
+- No allocation or blocking work on hot paths (interrupt, per-frame, per-request) — set up at
+  init.
 
-## Constants & duplication
+## One source of truth
 
-- One fact, one home. Grep before writing a helper; import or extend, never re-derive.
-  A test never restates a constant — it imports the owner.
-- No magic numbers: a literal from an external spec is a named constant even when used once,
-  spelled exactly as the spec spells it, defined once atop the owning module. Timeouts and
-  sizes carry their unit in the name (`_MS`, `_KB`).
+- One fact, one home. Grep before writing a helper; import or extend, never re-derive. A test
+  imports a constant, never restates it.
+- **One behaviour, one function.** How an input is found, a path resolved, a refusal worded, a
+  walk bounded: written once, called everywhere. Two functions that must change together are
+  one function with a parameter — a copy is not wasted bytes but a fork that drifts, and the
+  drift surfaces as two tools disagreeing about the same input.
+- The **second** occurrence is the trigger: when a block is about to be copy-adapted it moves,
+  in that same change and with the first caller converted, to the layer both callers import.
+  Place a helper by what it is ABOUT, never in a role-bag; give it the narrowest arguments
+  that serve every caller (a value, not the context).
+- Before adding a module, grep its group for the noun it is named after: a near-duplicate
+  module is an inline copy one directory up.
+- No magic numbers: an external-spec literal is a named constant even when used once, spelled
+  as the spec spells it, atop the owning module. Units in the name (`_MS`, `_KB`).
 
 ## Comments & docs
 
-The code is a reference implementation — every line teaches or lies. Expand acronyms on first
-use; doc comments say WHAT and WHY in plain sentences. No provenance in source: no dates, war
-stories, "used to", review tags — state the invariant, not the incident;
-stories go in the commit message. Everything you name must exist — check first. Delete dead
-code, don't document it.
-
-## Tests
-
-**All test code lives in the test tree, never in the source tree** — no inline test blocks in
-production files; a test imports its module through the same public surface production callers
-use; helpers and fakes stay in the test file, never `pub` bait in the module. Logic
-expressible as a pure function lives in a host-testable module, never entangled with the IO
-edge — the host-test list IS the list of pure modules. A test that cannot fail is a comment —
-mutation-test every regression test (reintroduce the bug, confirm RED, restore).
+Every line teaches or lies. Expand acronyms on first use; doc comments say WHAT and WHY in
+plain sentences. No provenance: no dates, war stories, "used to", review tags — state the
+invariant, not the incident; stories go in the commit message. Everything you name must exist.
+Delete dead code, don't document it.
 
 ## Verification
 
-- **Write the whole batch, then verify it once.** A gate run costs tens of minutes, so the
-  unit of work is a BATCH of tasks, not a task: implement every task in the batch — source,
-  tests, docs, gate rows — and only then run the suite. Never interleave one change with one
-  run. A run that reports five failures at once is five fixes for the price of one wait; five
-  runs reporting one failure each is the same information for five times the cost.
-- Cheapest signal first: fast host/unit tests → integration/simulation → the real environment
-  LAST; never spend an expensive run on what a cheap one could answer.
-- Verification is incremental: `build/verified/` is the test register — a passing track
-  records the content digest of the paths it covers, and `make check` re-runs only stale
-  tracks. `make status` reads the register (~1 s); `make test T=<track>` runs and records
-  one track. Never re-run a track the register shows green against this tree — the record
-  IS the evidence.
-- Failures are never silent: a discarding path counts what it dropped; every wait states a
-  budget; rates are counters, not logs.
-- Long runs stream progress: any test/build/suite invocation must show liveness at least
-  every 5 seconds — stream the output, or background it and poll its log visibly. Never
-  launch a long run with its output swallowed behind a final `| tail`: an hour of silence
-  is indistinguishable from a hang and hides where a red run died.
+- **Write the whole batch, then verify it once.** A gate run costs tens of minutes: implement
+  every task — source, tests, docs, gate rows — then run. Five failures in one run is five
+  fixes for the price of one wait.
+- Cheapest signal first: host/unit → integration/simulation → the real environment LAST.
+- Incremental: `build/verified/` is the register — a passing track records the digest of the
+  paths it covers, `make check` re-runs only stale tracks, `make status` reads it (~1 s),
+  `make test T=<track>` records one. Never re-run a green track: the record IS the evidence.
+- Failures are never silent: a discarding path counts what it dropped, every wait states a
+  budget, rates are counters not logs.
+- Long runs stream progress at least every 5 s — stream the output, or background it and poll
+  the log. Never swallow one behind a final `| tail`: silence is indistinguishable from a hang.
 
 ## Scale
 
-At thousands of modules, only compiler-enforced structure and checks generated from one
-source of truth hold:
-
-- Layers and allowed edges live in one manifest the build wires modules from — an
-  illegal import fails to compile.
-- One conformance suite per contract; every implementation, real or fake, passes it.
-- The root rules file holds universals; each subsystem carries its own small rules file.
-- Public API surfaces are committed, generated snapshots — widening a contract shows in the
-  diff that did it.
-- New modules are scaffolded (module + test + wiring + doc stub): the easy path IS the rails.
-- Discipline runs in CI: mutation-test the pure-module list; check doc-cited names exist;
-  trend fan-in/fan-out; budget hot metrics as tests.
+At thousands of modules only compiler-enforced structure and generated checks hold: allowed
+edges in one manifest the build wires from, so an illegal import fails to compile; one
+conformance suite per contract, passed by every implementation, real or fake; universals here,
+a small rules file per subsystem; committed API snapshots, so a widened contract shows in the
+diff that did it; scaffolded new modules (module + test + wiring + doc stub) so the easy path
+IS the rails; CI discipline — mutation-test the pure-module list, check doc-cited names exist,
+trend fan-in/fan-out, budget hot metrics as tests.
 
 ## Deviations
 
-Fix on touch, never extend, never cite as precedent. A fixed deviation moves into a gate,
-not merely out of this file.
+Fix on touch, never extend, never cite as precedent. A fixed deviation moves into a gate, not
+merely out of this file.
 
 <!-- code-review-graph MCP tools -->
-## MCP Tools: code-review-graph
+## Exploring the tree
 
-**IMPORTANT: This project has a knowledge graph. ALWAYS use the
-code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
-the codebase.** The graph is faster, cheaper (fewer tokens), and gives
-you structural context (callers, dependents, test coverage) that file
-scanning cannot.
-
-### When to use graph tools FIRST
-
-- **Exploring code**: `semantic_search_nodes_tool` or `query_graph_tool` instead of Grep
-- **Understanding impact**: `get_impact_radius_tool` instead of manually tracing imports
-- **Code review**: `detect_changes_tool` + `get_review_context_tool` instead of reading entire files
-- **Finding relationships**: `query_graph_tool` with callers_of/callees_of/imports_of/tests_for
-- **Architecture questions**: `get_architecture_overview_tool` + `list_communities_tool`
-
-Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
-
-### Key Tools
-
-| Tool | Use when |
-| ------ | ---------- |
-| `detect_changes_tool` | Reviewing code changes — gives risk-scored analysis |
-| `get_review_context_tool` | Need source snippets for review — token-efficient |
-| `get_impact_radius_tool` | Understanding blast radius of a change |
-| `get_affected_flows_tool` | Finding which execution paths are impacted |
-| `query_graph_tool` | Tracing callers, callees, imports, tests, dependencies |
-| `semantic_search_nodes_tool` | Finding functions/classes by name or keyword |
-| `get_architecture_overview_tool` | Understanding high-level codebase structure |
-| `refactor_tool` | Planning renames, finding dead code |
-
-### Workflow
-
-1. The graph auto-updates on file changes (via hooks).
-2. Use `detect_changes_tool` for code review.
-3. Use `get_affected_flows_tool` to understand impact.
-4. Use `query_graph_tool` pattern="tests_for" to check coverage.
+This project carries a code-review-graph knowledge graph, auto-updated on file change. Reach
+for its MCP tools before Grep/Glob/Read: they answer callers, dependents, impact and coverage,
+which file scanning cannot. Fall back to Grep/Glob/Read only where the graph does not reach.

@@ -816,7 +816,12 @@ pub fn build(b: *std.Build) void {
         .{ .n = "testroot", .s = "src/test_root.zig", .t = "test/drivers/storage/ramdisk_test.zig" }, // in-RAM name→bytes store (shim: ramdisk @embedFiles ui assets)
         .{ .n = "vfs", .s = "src/drivers/storage/vfs.zig" }, // `/` namespace routing + pure path normalization
         .{ .n = "complete", .s = "src/console/complete.zig" }, // Tab filename completion over an injected directory enumeration
-        .{ .n = "redirect", .s = "src/console/redirect.zig" }, // `>`/`>>`/`|` grammar + the bounded capture a captured stage writes into
+        .{ .n = "redirect", .s = "src/console/redirect.zig" }, // `;`/`>`/`>>`/`|` grammar (quote-aware) + the bounded capture a captured stage writes into
+        .{ .n = "opt", .s = "src/console/opt.zig" }, // getopt-subset option scanning: clusters, values, --, quoted words
+        .{ .n = "bytesize", .s = "src/console/bytesize.zig" }, // the `-h` human-readable size wording (ls -h, free -h)
+        .{ .n = "pathname", .s = "src/console/pathname.zig" }, // basename/dirname: the two halves of a path, trailing slashes and the root
+        .{ .n = "ranges", .s = "src/console/ranges.zig" }, // the `N,M-K` position list `cut -f`/`-c` takes
+        .{ .n = "linediff", .s = "src/console/linediff.zig" }, // line comparison: the same/removed/added walk `diff` prints
         .{ .n = "glob", .s = "src/console/glob.zig" }, // `*`/`?` filename matching (bash defaults: no match passes the word through)
         .{ .n = "grants", .s = "src/console/grants.zig" }, // the capability grant table: which .kudos module may bind what, at which version
         .{ .n = "editline", .s = "src/console/editline.zig" }, // console line editor core: keystroke → line edits, recall, Tab → completion (shared by both terminal editors)
@@ -1104,6 +1109,7 @@ pub fn build(b: *std.Build) void {
     {
         const sroot = b.createModule(.{ .root_source_file = b.path("src/test_root.zig") });
         sroot.addImport("iramdisk", iramdisk_mod);
+        sroot.addOptions("buildinfo", pure_buildinfo); // ramdisk's store lock compiles out at smp=false
         // ramdisk.zig also reaches the ifilesys seam.
         const t = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("test/iface/iramdisk_conformance.zig"), .target = b.graph.host, .optimize = optimize }) });
         t.root_module.addImport("ramdisk_sim", ramdisk_sim_mod); // shared fixture (test/support/)
@@ -1119,6 +1125,7 @@ pub fn build(b: *std.Build) void {
         const sroot = b.createModule(.{ .root_source_file = b.path("src/test_root.zig") });
         sroot.addImport("iramdisk", iramdisk_mod);
         sroot.addImport("ifilesys", ifilesys_mod);
+        sroot.addOptions("buildinfo", pure_buildinfo); // ramdisk's store lock compiles out at smp=false
         const t = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("test/iface/ifilesys_conformance.zig"), .target = b.graph.host, .optimize = optimize }) });
         t.root_module.addImport("ifilesys", ifilesys_mod);
         t.root_module.addImport("testroot", sroot);

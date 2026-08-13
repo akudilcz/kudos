@@ -283,7 +283,15 @@ pub fn connect(ip: [4]u8, port: u16) bool {
                 net.dbg("TCP connect refused (RST)\n");
                 return false;
             },
-            .connecting => sched.waitYield(), // SMP: yield to the system task between polls
+            .connecting => {
+                // ^C: a handshake to a dead address otherwise pins its caller
+                // for the full deadline.
+                if (sched.cancelled()) {
+                    net.dbg("TCP connect cancelled\n");
+                    return false;
+                }
+                sched.waitYield(); // SMP: yield to the system task between polls
+            },
         }
     }
     net.dbg("TCP connect timeout\n");
@@ -382,6 +390,12 @@ pub fn send(data: []const u8) bool {
             net.dbg("tcp: send timed out\n");
             return false;
         }
+        // ^C: a send blocked on a peer that acks slowly (or a long body) ends
+        // when its caller is told to stop, not at the timeout.
+        if (sched.cancelled()) {
+            net.dbg("tcp: send cancelled\n");
+            return false;
+        }
         net.pump(); // collect ACKs (delivered into `sender` via handleTcp)
         net.serviceDuringWait(); // keep netdebug/KMR1 alive through a long send
         sched.waitYield();
@@ -395,6 +409,9 @@ pub fn send(data: []const u8) bool {
 /// the returned length to what it needs.
 pub fn pumpUntil(consumed: usize, deadline_ms: u64) usize {
     while (timer.millis() < deadline_ms and state == .established and !fin_recv) {
+        // ^C: without this, a cancel waits out the whole stall budget before
+        // the caller's own check ever runs again.
+        if (sched.cancelled()) break;
         const rb = recv_buf orelse break;
         if (rb.items.len > consumed) break;
         net.pump();
